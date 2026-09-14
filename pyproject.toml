@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hydrostate"
+version = "0.1.0"
+description = "Joint water fraction, soil moisture, and evapotranspiration retrieval with OlmoEarth"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "einops>=0.7",
+  "mmengine>=0.10.7,<0.12",
+  "numpy>=1.26,<3",
+  "numcodecs>=0.12",
+  "olmoearth-pretrain @ git+https://github.com/allenai/olmoearth_pretrain.git",
+  "olmoearth-pretrain-minimal==0.0.6",
+  "pandas>=2.2",
+  "pyarrow>=17",
+  "rslearn @ git+https://github.com/allenai/rslearn.git",
+  "torch>=2.7,<2.8",
+  "zarr>=2.18,<3",
+]
+
+[project.optional-dependencies]
+geo = [
+  "rasterio>=1.4",
+  "shapely>=2",
+]
+stations = [
+  "ismn>=1.4",
+]
+dev = [
+  "pytest>=8",
+  "ruff>=0.11",
+]
+
+[project.scripts]
+hydrostate-train = "hydrostate.cli:train_main"
+hydrostate-test = "hydrostate.cli:test_main"
+hydrostate-predict = "hydrostate.cli:predict_main"
+
+[tool.setuptools.packages.find]
+include = ["hydrostate*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
