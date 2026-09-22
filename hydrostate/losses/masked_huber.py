@@ -25,9 +25,8 @@ def _as_bchw(value: torch.Tensor) -> torch.Tensor:
 class MaskedHuberLoss(nn.Module):
     """Huber loss evaluated only where target labels are valid.
 
-    If a product target is coarser than the prediction, predictions are area
-    pooled to the target shape before comparison. This avoids pretending a
-    coarse product is a native 10 m label.
+    Spatial support must be aligned explicitly before calling this loss.
+    Tensor dimensions alone do not identify a product's physical footprint.
     """
 
     def __init__(self, delta: float = 1.0, loss_weight: float = 1.0) -> None:
@@ -41,14 +40,15 @@ class MaskedHuberLoss(nn.Module):
         prediction = _as_bchw(prediction)
         target = _as_bchw(target).to(dtype=prediction.dtype)
         valid = _as_bchw(valid).bool()
-        if prediction.shape[-2:] != target.shape[-2:]:
-            prediction = F.adaptive_avg_pool2d(prediction, target.shape[-2:])
-        if valid.shape[-2:] != target.shape[-2:]:
-            valid = F.adaptive_max_pool2d(valid.float(), target.shape[-2:]).bool()
+        if prediction.shape != target.shape or valid.shape != target.shape:
+            raise ValueError(
+                "Prediction, target and mask must have identical observational support"
+            )
         valid = valid.expand_as(target)
         count = valid.sum()
         if count == 0:
             # Retain a differentiable zero so distributed loss parsing is stable.
             return prediction.sum() * 0.0
-        error = F.huber_loss(prediction, target, reduction="none", delta=self.delta)
-        return self.loss_weight * error.masked_select(valid).mean()
+        return self.loss_weight * F.huber_loss(
+            prediction.masked_select(valid), target.masked_select(valid), delta=self.delta
+        )

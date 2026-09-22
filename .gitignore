@@ -16,9 +16,12 @@ venv/
 .env
 .env.*
 !.env.example
+client_secret*.json
+drive_token*.json
 
 # Generated data, model weights, and run outputs
 logs/
+nohup.out
 outputs/
 work_dirs/
 checkpoints/

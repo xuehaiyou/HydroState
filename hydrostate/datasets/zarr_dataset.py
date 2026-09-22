@@ -10,12 +10,26 @@ import numpy as np
 import pandas as pd
 import torch
 import zarr
-from torch.utils.data import Dataset
+from mmengine.registry import FUNCTIONS
+from torch.utils.data import Dataset, default_collate
 
 from hydrostate.registry import DATASETS
 
 MODALITY_KEYS = ("s1", "s2", "landsat")
 TARGET_KEYS = ("water", "soil_moisture", "et")
+
+
+@FUNCTIONS.register_module()
+def hydro_collate(batch):
+    """Pad only the varying number of complete PML cells in each window."""
+    count = max(item["data_samples"]["et_native_value"].shape[0] for item in batch)
+    for item in batch:
+        targets = item["data_samples"]
+        for key in ("et_native_weights", "et_native_value", "et_native_valid"):
+            value = targets[key]
+            padding = value.new_zeros((count - value.shape[0], *value.shape[1:]))
+            targets[key] = torch.cat((value, padding))
+    return default_collate(batch)
 
 
 class _ShardCache:
@@ -129,6 +143,16 @@ class HydroStateZarrDataset(Dataset):
                 valid_key = f"{key}_valid"
                 if valid_key in group:
                     targets[valid_key] = _tensor(group[valid_key][index], torch.bool)
+            if f"et_native/{index}" in group:
+                native = group[f"et_native/{index}"]
+                for key in ("weights", "value", "valid"):
+                    targets[f"et_native_{key}"] = _tensor(
+                        native[key][:], torch.bool if key == "valid" else torch.float32
+                    )
+            elif "et_valid" in targets and targets["et_valid"].any():
+                raise ValueError(
+                    "ET labels lack native weights; re-ingest legacy samples before training"
+                )
             for key in ("site_value", "site_valid", "site_footprint"):
                 if key in group:
                     dtype = torch.bool if key == "site_valid" else torch.float32
@@ -137,6 +161,15 @@ class HydroStateZarrDataset(Dataset):
         for key in TARGET_KEYS:
             targets.setdefault(key, torch.zeros((1, height, width), dtype=torch.float32))
             targets.setdefault(f"{key}_valid", torch.zeros((1, height, width), dtype=torch.bool))
+        targets.setdefault("et_native_weights", torch.zeros((1, height // 3, width // 3)))
+        targets.setdefault("et_native_value", torch.zeros(1))
+        targets.setdefault("et_native_valid", torch.zeros(1, dtype=torch.bool))
+        # Select before flipping: the center of an even-sized grid is ambiguous.
+        for suffix in ("", "_valid"):
+            value = targets["soil_moisture" + suffix]
+            targets["soil_moisture" + suffix] = value[
+                ..., height // 2 : height // 2 + 1, width // 2 : width // 2 + 1
+            ]
         return targets
 
     def _augment(self, sample: dict[str, Any]) -> None:
@@ -152,7 +185,14 @@ class HydroStateZarrDataset(Dataset):
         for container_name in ("inputs", "data_samples"):
             container = sample[container_name]
             for key, value in container.items():
-                if torch.is_tensor(value) and value.ndim >= 2 and value.shape[-2:] == (128, 128):
+                if (
+                    torch.is_tensor(value)
+                    and value.ndim >= 2
+                    and (
+                        key == "et_native_weights"
+                        or value.shape[-2:] == sample["inputs"]["s1"].shape[-2:]
+                    )
+                ):
                     container[key] = torch.flip(value, dims=dims)
 
     def __getitem__(self, index: int) -> dict[str, Any]:
@@ -163,8 +203,7 @@ class HydroStateZarrDataset(Dataset):
         # Strings have a stable default_collate representation; pandas timestamps,
         # missing values, and arbitrary Python objects do not.
         data_samples["metainfo"] = {
-            key: "" if pd.isna(row.get(key)) else str(row.get(key))
-            for key in self.META_COLUMNS
+            key: "" if pd.isna(row.get(key)) else str(row.get(key)) for key in self.META_COLUMNS
         }
         sample = {"inputs": inputs, "data_samples": data_samples}
         self._augment(sample)

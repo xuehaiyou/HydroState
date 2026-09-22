@@ -1,12 +1,12 @@
-data_root = "/fossfs/xiaozhen/HydroState"
-manifest = f"{data_root}/manifests/samples.parquet"
+data_root = "/fossfs/xiaozhen/HydroState/gee_v3"
+manifest = f"{data_root}/samples.parquet"
 
 train_dataloader = dict(
     batch_size=4,
     num_workers=8,
     persistent_workers=True,
     pin_memory=True,
-    collate_fn=dict(type="default_collate"),
+    collate_fn=dict(type="hydro_collate"),
     sampler=dict(type="HydroBalancedSampler", shuffle=True),
     dataset=dict(
         type="HydroStateZarrDataset",
@@ -23,7 +23,7 @@ val_dataloader = dict(
     num_workers=8,
     persistent_workers=True,
     pin_memory=True,
-    collate_fn=dict(type="default_collate"),
+    collate_fn=dict(type="hydro_collate"),
     sampler=dict(type="DefaultSampler", shuffle=False),
     dataset=dict(
         type="HydroStateZarrDataset",
@@ -39,7 +39,7 @@ test_dataloader = dict(
     num_workers=8,
     persistent_workers=True,
     pin_memory=True,
-    collate_fn=dict(type="default_collate"),
+    collate_fn=dict(type="hydro_collate"),
     sampler=dict(type="DefaultSampler", shuffle=False),
     dataset=dict(
         type="HydroStateZarrDataset",

@@ -14,9 +14,9 @@ class ArraySpec:
 @dataclass(frozen=True)
 class Schema:
     time_steps: int = 4
-    height: int = 128
-    width: int = 128
-    version: str = "1.0"
+    height: int = 120
+    width: int = 120
+    version: str = "3.0"
 
     @property
     def inputs(self) -> dict[str, ArraySpec]:

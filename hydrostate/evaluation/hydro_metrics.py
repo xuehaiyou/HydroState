@@ -6,31 +6,26 @@ import math
 
 import torch
 from mmengine.evaluator import BaseMetric
-from torch.nn import functional as F
 
-from hydrostate.registry import METRICS
 from hydrostate.models.hydrostate_model import TASKS
+from hydrostate.registry import METRICS
 
 
 @METRICS.register_module()
 class HydroStateMetric(BaseMetric):
     default_prefix = None
 
+    def __init__(self, task_scales=None, **kwargs):
+        super().__init__(**kwargs)
+        self.task_scales = task_scales or dict(water=1.0, soil_moisture=0.1, et=3.0)
+
     def process(self, data_batch, data_samples: list[dict]) -> None:
         for sample in data_samples:
             result: dict[str, float] = {}
             for task in TASKS:
-                prediction = sample[task].detach().float()
-                target = sample[f"target_{task}"].detach().float()
+                prediction = sample[f"supervised_{task}"].detach().double()
+                target = sample[f"target_{task}"].detach().double()
                 valid = sample[f"valid_{task}"].detach().bool()
-                if target.ndim == 2:
-                    target = target.unsqueeze(0)
-                if valid.ndim == 2:
-                    valid = valid.unsqueeze(0)
-                if prediction.shape[-2:] != target.shape[-2:]:
-                    prediction = F.adaptive_avg_pool2d(
-                        prediction.unsqueeze(0), target.shape[-2:]
-                    ).squeeze(0)
                 valid = valid.expand_as(target)
                 if not torch.any(valid):
                     continue
@@ -60,7 +55,11 @@ class HydroStateMetric(BaseMetric):
             rmse = math.sqrt(mse)
             bias = totals["sum_err"] / count
             total_variance = totals["sum_y2"] - totals["sum_y"] ** 2 / count
-            r2 = 1.0 - totals["sum_sq"] / total_variance if total_variance > 0 else float("nan")
+            r2 = (
+                1.0 - totals["sum_sq"] / total_variance
+                if count > 1 and total_variance > 1e-12 * max(totals["sum_y2"], 1.0)
+                else float("nan")
+            )
             metrics.update(
                 {
                     f"{task}_mae": mae,
@@ -69,9 +68,7 @@ class HydroStateMetric(BaseMetric):
                     f"{task}_r2": r2,
                 }
             )
-            rmse_values.append(rmse)
-        # Temporary checkpoint-selection score. Replace with normalized RMSE once
-        # label standard deviations have been recorded in the manifest.
+            rmse_values.append(rmse / self.task_scales[task])
+        # Normalize physical units with the same configurable scales as the loss.
         metrics["hydro_score"] = -sum(rmse_values) / len(rmse_values) if rmse_values else -math.inf
         return metrics
-

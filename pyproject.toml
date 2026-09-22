@@ -18,7 +18,8 @@ dependencies = [
   "pandas>=2.2",
   "pyarrow>=17",
   "rslearn @ git+https://github.com/allenai/rslearn.git",
-  "torch>=2.7,<2.8",
+  "torch>=2.9,<2.10",
+  "torchvision>=0.24,<0.25",
   "zarr>=2.18,<3",
 ]
 
@@ -26,6 +27,12 @@ dependencies = [
 geo = [
   "rasterio>=1.4",
   "shapely>=2",
+]
+gee = [
+  "earthengine-api>=1.5",
+  "google-api-python-client>=2",
+  "google-auth>=2",
+  "pyproj>=3.6",
 ]
 stations = [
   "ismn>=1.4",

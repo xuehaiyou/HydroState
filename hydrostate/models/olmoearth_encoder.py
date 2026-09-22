@@ -19,6 +19,18 @@ def _as_datetime(epoch_seconds: int) -> datetime:
     return datetime.fromtimestamp(epoch_seconds, tz=UTC).replace(tzinfo=None)
 
 
+
+def _broadcast_sdpa(attention, q, k, v, n, attn_mask=None, **kwargs):
+    """Equivalent to upstream SDPA without materializing a B×heads×N×N mask."""
+    if attn_mask is not None:
+        if attn_mask.ndim != 2:
+            raise ValueError("Expected upstream B×N key validity mask")
+        attn_mask = attn_mask[:, None, None, :]
+    return torch.nn.functional.scaled_dot_product_attention(
+        q, k, v, attn_mask=attn_mask, dropout_p=attention.attn_drop.p
+    )
+
+
 @MODELS.register_module()
 class OlmoEarthEncoder(nn.Module):
     """Load OlmoEarth v1.2 Base and return its pooled spatial feature map."""
@@ -30,6 +42,8 @@ class OlmoEarthEncoder(nn.Module):
         patch_size: int = 4,
         embedding_channels: int = 768,
         inputs_are_normalized: bool = True,
+        gradient_checkpointing: bool = False,
+        broadcast_attention_mask: bool = True,
     ) -> None:
         super().__init__()
         try:
@@ -60,6 +74,15 @@ class OlmoEarthEncoder(nn.Module):
             kwargs["model_id"] = resolved_id
             self.source = model_id
         self.backbone = OlmoEarth(**kwargs)
+        from functools import partial
+        if broadcast_attention_mask:
+            for module in self.backbone.model.modules():
+                if hasattr(module, "sdpa") and module.fast_attn and not module.use_flash_attn:
+                    module.sdpa = partial(_broadcast_sdpa, module)
+        if gradient_checkpointing:
+            from torch.utils.checkpoint import checkpoint
+            for block in self.backbone.model.blocks:
+                block.forward = partial(checkpoint, block.forward, use_reentrant=False)
         self.out_channels = embedding_channels
         self.patch_size = patch_size
 

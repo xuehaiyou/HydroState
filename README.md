@@ -26,10 +26,10 @@ conda activate hydrostate
 
 # Choose the PyTorch command that matches the cluster CUDA driver. For CUDA 12.8:
 pip install --index-url https://download.pytorch.org/whl/cu128 \
-  "torch>=2.7,<2.8" "torchvision>=0.22,<0.23"
+  torch==2.9.1 torchvision==0.24.1
 
 cd /home/xiaoz/HydroState
-pip install -e ".[geo,dev]"
+pip install -e ".[geo,gee,dev]"
 ```
 
 The editable install above obtains the current official OlmoEarth and rslearn
@@ -73,3 +73,13 @@ documented in `docs/DATA_PREPARATION.md`.
 The MMEngine training path, sampled-Zarr contract, coverage indexing and station
 ingestion are implemented. GEE sample-manifest generation and independent
 source-to-Zarr producers are the remaining data-pipeline stages.
+
+## Current global sampling workflow
+
+All imagery is now sampled from GEE; local source paths above describe the legacy
+workflow. Use `scripts/run_gee_sampling.sh` and see `docs/DATA_PREPARATION.md`
+for credentials and restart behavior. Inputs are 120×120 at 10 m and supervision
+is 40×40 at 30 m. Water uses 30 m fraction labels, ET uses area-weighted
+aggregation to complete native PML cells, and SMAP uses window-mean weak supervision.
+Three real samples passed GEE/Drive transfer and GPU forward checks. See
+[preparation instructions](docs/DATA_PREPARATION.md) for v3 sample conversion.
