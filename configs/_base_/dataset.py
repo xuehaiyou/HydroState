@@ -1,4 +1,4 @@
-data_root = "/fossfs/xiaozhen/HydroState/gee_v3"
+data_root = "/fossfs/xiaozhen/HydroState/samples_v1"
 manifest = f"{data_root}/samples.parquet"
 
 train_dataloader = dict(
@@ -52,4 +52,3 @@ test_dataloader = dict(
 
 val_evaluator = dict(type="HydroStateMetric")
 test_evaluator = dict(type="HydroStateMetric")
-
