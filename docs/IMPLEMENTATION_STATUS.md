@@ -64,7 +64,8 @@ uses an equivalent broadcast attention mask and optional gradient checkpointing.
   with reduced product loss weight. This remains weak supervision, not full SMAP
   footprint consistency. No cross-window association.
 - Training and evaluation share the same aggregation and input-coverage masks.
-  Losses and the combined metric use configurable physical reference scales.
+  At that stage losses and the combined metric used physical reference scales;
+  the training-statistics/NLL update below supersedes that loss recipe.
 - Schema v3 stores variable native-cell weights, padded by `hydro_collate`;
   spatial flips transform weights too. Legacy ET labels without weights fail
   explicitly. `--reingest-from` rebuilds shards from MD5-verified local TIFFs.
@@ -105,3 +106,45 @@ Pool metadata guards against incompatible reuse; locks prevent racing builders.
 Existing production directories were not moved: `candidates` and `samples_10000`
 are links into the currently running `samples` directory. No new sampling process
 was started by this update.
+
+
+## Training normalization and uncertainty weighting (2026-09-22)
+
+The current 1024-sample snapshot is staged under `/scr/u/xiaoz/HydroState/samples_v1`
+for L40S nodes, which cannot mount `/fossfs`. Train/validation/test counts are
+747/121/156. Training-only means and population standard deviations now replace
+the manual physical scales; effective counts are 1,157,072 water pixels,
+167 SMAP windows, and 2,735 PML cells. There are no valid station observations.
+
+The model now minimizes standardized Gaussian NLL with one learned scalar variance
+per task, replacing Huber and fixed task/site weights. Masking precedes likelihood
+arithmetic; empty tasks contribute zero. DDP normalizes by global valid counts.
+The frozen moments and training fingerprint are checkpoint buffers; learned log
+variances use the full base learning rate without weight decay. Metrics remain in
+physical units and model selection uses RMSE divided by fixed training std.
+
+SLURM jobs 4098289 (statistics), 4098315 (40 tests), and 4098316 (two L40S GPUs)
+completed successfully in the existing `hydrostate` environment. The GPU check ran
+64 microbatches / 8 optimizer updates at effective batch size 32, followed by all
+121 validation samples. Encoder, decoder, heads and variances updated and matched
+across ranks; moments stayed fixed and NLL checkpoint restoration passed.
+Formal 50-epoch training has not started. See [HPC_FINETUNING.md](HPC_FINETUNING.md)
+for statistics, the objective function, validation artifacts and reproducible commands.
+
+The two-L40S training configuration was subsequently changed, at the user's request,
+to batch size 16 per GPU with accumulation 1 (effective batch 32). Warmup is now
+125 iterations to retain approximately 125 optimizer updates of warmup; the smoke
+configuration follows the new batch size and still performs eight optimizer updates.
+The new batch size is an estimate and has not been measured on GPUs; the completed
+job above used batch size 2 with accumulation 8.
+
+## Automatic single-GPU / DDP launch (2026-09-23)
+
+Job 4098515 failed before training because SLURM allocated one GPU while the L40S
+wrapper forced two training processes. The wrapper no longer fixes the process
+count. The shared HPC launcher now detects CUDA-visible GPUs: one uses Python
+with `--launcher none`; multiple GPUs use torchrun with one DDP process per GPU.
+An optional explicit `HYDROSTATE_GPUS_PER_NODE` remains a consistency check.
+The current SLURM default requests one L40S; `--gres=gpu:nvidia_l40s:2` requests two.
+Batch size stays 16 per GPU with accumulation 1, giving effective batch 16 or 32.
+Launcher regression tests simulate GPU visibility without running GPU training.

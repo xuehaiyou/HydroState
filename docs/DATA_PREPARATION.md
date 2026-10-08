@@ -178,17 +178,21 @@ At training time the decoder/head outputs 40×40 at 30 m:
   unobserved contributing predictions. The target is the containing 8-day mean
   daily ET, not instantaneous ET at t.
 - SMAP: compare the mean of observed predictions with the nearest-neighbor label
-  at the original window center. This is low-weight window-scale weak supervision,
+  at the original window center. This is window-scale weak supervision,
   not full native SMAP support. No windows are linked.
 
 An output pixel is observed when all its nine 10 m subpixels have at least one
 valid sensor observation across the four slots. Water also requires this mask.
-Losses use Huber on scaled values: reference scales water=1, SM=0.1 m³/m³,
-ET=3 mm/day; task weights are 1, 0.25, 1. These are configurable initial
-hyperparameters, not dataset-estimated standard deviations or tuned optima.
-Evaluation uses the same spatial supports, in original physical units; its combined
-score uses the same reference scales. Keep model/evaluator scales consistent if changed.
-Station losses use the corresponding variable scale as well.
+The current loss uses frozen training-only target means and population standard
+deviations, calculated on these exact observed supports. Both physical predictions
+and targets are standardized before Gaussian NLL. Each task learns one scalar
+residual variance; the three task means are summed without manual task weights.
+Missing observations contribute neither residual nor variance terms. Optional
+station observations share their task's normalization and variance, with completely
+observed footprints required. They enter the same task mean without a site multiplier.
+Evaluation uses physical units; `hydro_score` averages RMSE divided by frozen training
+std, independent of learned variances. See [HPC fine-tuning](HPC_FINETUNING.md)
+for the formula, statistics generation, and the two-L40S execution path.
 
 To reuse existing verified downloads without exporting imagery again:
 

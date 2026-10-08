@@ -7,9 +7,8 @@ from typing import Any
 import torch
 from mmengine.model import BaseModel
 
+from hydrostate.normalization import TASKS
 from hydrostate.registry import MODELS
-
-TASKS = ("water", "soil_moisture", "et")
 
 
 def supervision_values(task, prediction, samples):
@@ -32,6 +31,23 @@ def supervision_values(task, prediction, samples):
     return pooled, samples["et_native_value"], valid
 
 
+def site_supervision_values(task, prediction, samples):
+    """Optional station observation on a completely observed, nonempty footprint."""
+    if not all(key in samples for key in ("site_value", "site_valid", "site_footprint")):
+        return None
+    footprint = samples["site_footprint"].float()
+    if footprint.ndim == 3:
+        footprint = footprint[:, None]
+    denominator = footprint.sum(dim=(-2, -1))
+    pooled = (prediction.float() * footprint).sum(dim=(-2, -1)) / denominator.clamp(min=1e-6)
+    index = TASKS.index(task)
+    target = samples["site_value"][:, index].reshape(-1, 1)
+    valid = samples["site_valid"][:, index].bool().reshape(-1, 1) & (denominator > 0)
+    if "prediction_valid" in samples:
+        valid = valid & ~((footprint > 0) & ~samples["prediction_valid"]).any(dim=(-2, -1))
+    return pooled, target, valid
+
+
 @MODELS.register_module()
 class HydroStateModel(BaseModel):
     """One OlmoEarth encoder, one shared decoder, and three retrieval heads."""
@@ -42,9 +58,7 @@ class HydroStateModel(BaseModel):
         decoder: dict[str, Any],
         heads: dict[str, dict[str, Any]],
         loss: dict[str, Any],
-        task_weights: dict[str, float] | None = None,
-        site_loss_weight: float = 3.0,
-        task_scales: dict[str, float] | None = None,
+        target_statistics: str | dict,
         output_scale: int = 3,
         data_preprocessor: dict[str, Any] | None = None,
         init_cfg: dict[str, Any] | None = None,
@@ -55,12 +69,7 @@ class HydroStateModel(BaseModel):
         self.encoder = MODELS.build(encoder)
         self.decoder = MODELS.build(decoder)
         self.heads = torch.nn.ModuleDict({name: MODELS.build(cfg) for name, cfg in heads.items()})
-        self.loss_module = MODELS.build(loss)
-        self.task_weights = task_weights or dict(water=1.0, soil_moisture=0.25, et=1.0)
-        self.task_scales = task_scales or dict(water=1.0, soil_moisture=0.1, et=3.0)
-        if set(self.task_scales) != set(TASKS) or any(v <= 0 for v in self.task_scales.values()):
-            raise ValueError("task_scales must specify a positive physical scale for each task")
-        self.site_loss_weight = site_loss_weight
+        self.loss_module = MODELS.build(dict(loss, target_statistics=target_statistics))
         self.output_scale = output_scale
 
     def _forward(self, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -78,28 +87,18 @@ class HydroStateModel(BaseModel):
         losses: dict[str, torch.Tensor] = {}
         for task in TASKS:
             prediction, target, valid = supervision_values(task, outputs[task], data_samples)
-            scale = self.task_scales[task]
-            task_loss = self.loss_module(prediction / scale, target / scale, valid)
-            losses[f"loss_{task}"] = self.task_weights[task] * task_loss
-
-        if all(key in data_samples for key in ("site_value", "site_valid", "site_footprint")):
-            footprint = data_samples["site_footprint"].float()
-            if footprint.ndim == 3:
-                footprint = footprint[:, None]
-            denominator = footprint.sum(dim=(-2, -1)).clamp(min=1e-6)
-            site_values = data_samples["site_value"].float()
-            site_valid = data_samples["site_valid"].bool()
-            for task_index, task in enumerate(TASKS):
-                pooled = (outputs[task] * footprint).sum(dim=(-2, -1)) / denominator
-                target = site_values[:, task_index].reshape(-1, 1)
-                valid = site_valid[:, task_index].reshape(-1, 1) & (footprint.sum(dim=(-2, -1)) > 0)
-                losses[f"loss_{task}_site"] = (
-                    self.site_loss_weight
-                    * self.task_weights[task]
-                    * self.loss_module(
-                        pooled / self.task_scales[task], target / self.task_scales[task], valid
-                    )
+            site = site_supervision_values(task, outputs[task], data_samples)
+            if site is not None:
+                prediction, target, valid = (
+                    torch.cat((product.flatten(), station.flatten()))
+                    for product, station in zip((prediction, target, valid), site)
                 )
+            task_loss, count = self.loss_module(task, prediction, target, valid)
+            losses[f"loss_{task}"] = task_loss
+            losses[f"valid_count_{task}"] = count
+            variance = self.loss_module.variance(task).detach()
+            losses[f"variance_{task}"] = variance
+            losses[f"precision_{task}"] = variance.reciprocal()
         return losses
 
     def predict(
@@ -121,6 +120,11 @@ class HydroStateModel(BaseModel):
                 for key, value in metainfo.items()
             }
             if data_samples is not None:
+                # Preserve spatial support for validation visualization. ET
+                # targets/predictions below are scalars on native footprints.
+                for key in ("prediction_valid", "et_native_weights"):
+                    if key in data_samples:
+                        item[key] = data_samples[key][index]
                 for task in TASKS:
                     pred, target, valid = supervised[task]
                     item[f"supervised_{task}"] = pred[index]

@@ -58,12 +58,12 @@ def test_smap_window_mean_uses_only_observed_predictions():
     assert loss.item() == 0 and torch.isfinite(pred.grad).all()
 
 
-def test_metrics_evaluate_native_support_and_singleton_r2():
+def test_metrics_evaluate_native_support_and_singleton_r2(target_statistics):
     import math
 
     from hydrostate.evaluation.hydro_metrics import HydroStateMetric
 
-    metric = HydroStateMetric()
+    metric = HydroStateMetric(target_statistics)
     sample = {}
     for task in ("water", "soil_moisture", "et"):
         sample[task] = torch.full((1, 40, 40), 100.0)  # Fine map is not the metric support.
@@ -74,3 +74,4 @@ def test_metrics_evaluate_native_support_and_singleton_r2():
     result = metric.compute_metrics(metric.results)
     assert result["et_rmse"] == 1.0
     assert math.isnan(result["soil_moisture_r2"])
+    assert math.isclose(result["hydro_score"], -(1 / 0.4 + 1 / 0.1 + 1 / 1.5) / 3)

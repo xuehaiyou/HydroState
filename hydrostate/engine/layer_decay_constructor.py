@@ -56,7 +56,7 @@ class OlmoEarthLayerDecayOptimWrapperConstructor(DefaultOptimWrapperConstructor)
     @staticmethod
     def _no_decay(name: str, parameter: torch.nn.Parameter) -> bool:
         lowered = name.lower()
-        return parameter.ndim == 1 or name.endswith(".bias") or any(
+        return parameter.ndim <= 1 or name.endswith(".bias") or any(
             key in lowered for key in ("norm", "pos_embed", "position_embedding")
         )
 

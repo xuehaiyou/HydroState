@@ -11,7 +11,7 @@ def test_decoder_and_head_shapes():
     assert torch.all((output >= 0) & (output <= 1))
 
 
-def test_model_outputs_30m_grid():
+def test_model_outputs_30m_grid(target_statistics):
     from hydrostate.models.hydrostate_model import HydroStateModel
     from hydrostate.registry import MODELS
 
@@ -25,7 +25,8 @@ def test_model_outputs_30m_grid():
         decoder=dict(type="SharedUNetDecoder", in_channels=4, channels=[4, 4, 4]),
         heads={name: dict(type="RegressionHead", in_channels=4, activation="sigmoid")
                for name in ["water", "soil_moisture", "et"]},
-        loss=dict(type="MaskedHuberLoss"),
+        loss=dict(type="UncertaintyWeightedNLL"),
+        target_statistics=target_statistics,
     )
     outputs = model(torch.randn(1, 4, 30, 30))
     assert all(value.shape == (1, 1, 40, 40) for value in outputs.values())
