@@ -22,6 +22,9 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from datetime import date, datetime, timedelta, timezone
+from hydrostate.data.sampling_manifest import (
+    SamplingConstraints, geographic_split, read_manifest, source_contract,
+)
 
 LOG = logging.getLogger(__name__)
 SIZE = 120
@@ -322,7 +325,10 @@ def plan(ee, args, root):
     years = range(args.start_year, args.end_year + 1)
     months = [f"{y}-{m:02}" for y in years for m in range(1, 13)]
     rows, used = [], set()
-    location_counts, occupied = {}, {}
+    previous_rows = [row for source in args.exclude_manifest
+                     for row in read_manifest(source, args.split_seed).to_dict('records')]
+    constraints = SamplingConstraints(previous_rows)
+    LOG.info("Excluding %s existing window/date samples", len(constraints.keys))
     selection_cache = root / "selections"
     selection_cache.mkdir(exist_ok=True)
     for fb, count in quota(args.samples, FREQUENCY_BINS).items():
@@ -340,12 +346,8 @@ def plan(ee, args, root):
                     if identity in used:
                         continue
                     used.add(identity)
-                    location = (crs, transform[2], transform[5])
-                    if location_counts.get(location, 0) >= args.max_dates_per_location:
-                        continue
-                    occupied_key = (month, crs)
-                    if any(abs(transform[2] - x) < 1200 and abs(transform[5] - y) < 1200
-                           for x, y in occupied.get(occupied_key, [])):
+                    if not constraints.allows(dict(crs=crs, transform=transform), month,
+                                              args.max_dates_per_location):
                         continue
                     year, m = map(int, month.split("-"))
                     day = rng.randint(1, calendar.monthrange(year, m)[1])
@@ -358,18 +360,15 @@ def plan(ee, args, root):
                     dy = min((lat + 90) % 5, 5 - (lat + 90) % 5) * 111320
                     if min(dx, dy) < 12000:
                         continue
-                    block = f"{int((lon + 180) // 5)}:{int((lat + 90) // 5)}"
-                    h = int(fingerprint([args.seed, block])[:8], 16) % 100
                     s = dict(lon=lon, lat=lat, crs=crs, transform=transform,
                              climate_class=code // 10, frequency_bin=fb,
-                             split="train" if h < 70 else "validation" if h < 85 else "test")
+                             split=geographic_split(dict(lon=lon, lat=lat), args.split_seed))
                     cache_file = selection_cache / (fingerprint(identity) + ".json")
                     if cache_file.exists():
                         saved = json.loads(cache_file.read_text())
                         if saved:
                             rows.append(saved)
-                            location_counts[location] = location_counts.get(location, 0) + 1
-                            occupied.setdefault(occupied_key, []).append((transform[2], transform[5]))
+                            constraints.add(saved)
                             accepted += 1
                         continue
                     dw = select_scene(ee, "dw", s, str(start), str(end), str(target), args.min_valid)
@@ -406,8 +405,7 @@ def plan(ee, args, root):
                     s["sample_id"] = fingerprint(s)[:24]
                     atomic_json(cache_file, s)
                     rows.append(s)
-                    location_counts[location] = location_counts.get(location, 0) + 1
-                    occupied.setdefault(occupied_key, []).append((transform[2], transform[5]))
+                    constraints.add(s)
                     accepted += 1
                     LOG.info("Planned %s/%s", len(rows), args.samples)
                 if accepted != required:
@@ -843,6 +841,9 @@ def main():
     p.add_argument("--end-year", type=int, default=2024)
     p.add_argument("--samples", type=int, default=10000)
     p.add_argument("--seed", type=int, default=42, help="Sample selection/date seed")
+    p.add_argument("--split-seed", type=int, help="Geographic split seed; defaults to --seed")
+    p.add_argument("--exclude-manifest", type=Path, action="append", default=[],
+                   help="Completed sample manifest to exclude; repeat for multiple prior runs")
     p.add_argument("--candidate-seed", type=int, default=42, help="Shared spatial pool seed")
     p.add_argument("--candidate-dir", type=Path, help="Shared spatial cache directory")
     p.add_argument("--climate-asset", default="users/xiaozhen6666666/cloud/Beck_KG_V1_present_0p0083")
@@ -856,6 +857,12 @@ def main():
     p.add_argument("--concurrency", type=int, default=2)
     p.add_argument("--poll-seconds", type=int, default=30)
     args = p.parse_args()
+    if args.split_seed is None:
+        args.split_seed = args.seed
+    args.exclude_manifest = [path.resolve() for path in args.exclude_manifest]
+    # Validate before any remote operations, including when loading an existing plan.
+    for source in args.exclude_manifest:
+        read_manifest(source, args.split_seed)
     if args.start_year > args.end_year or min(args.samples, args.batch_size, args.concurrency, args.candidates_per_class, args.max_dates_per_location, args.poll_seconds) < 1:
         p.error("Invalid years/counts")
     if not 0 < args.min_valid <= 1 or min(args.sm_days, args.latest_days) < 0:
@@ -873,7 +880,8 @@ def main():
     with (root / ".lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()
-                  if k not in ["reingest_from", "drive_token", "plan_only", "allow_shortfall", "poll_seconds", "concurrency", "batch_size"]}
+                  if k not in ["exclude_manifest", "reingest_from", "drive_token", "plan_only", "allow_shortfall", "poll_seconds", "concurrency", "batch_size"]}
+        config["exclude_manifest"] = source_contract(args.exclude_manifest)
         config["output"] = str(root)
         config["schema_version"] = "3.0"
         if args.reingest_from:
@@ -886,6 +894,8 @@ def main():
             # Resume pre-sharing runs without changing their sampling sequence.
             previous.setdefault("candidate_seed", previous["seed"])
             previous.setdefault("candidate_dir", str((root / "candidates").resolve()))
+            previous.setdefault("split_seed", previous["seed"])
+            previous.setdefault("exclude_manifest", [])
             if previous != config:
                 raise RuntimeError("Configuration changed: use a new output directory")
         atomic_json(cfg, config)
@@ -904,6 +914,8 @@ def main():
         ee.Initialize(project=args.project)
         LOG.info("Earth Engine project=%s; output=%s", args.project, root)
         rows = plan(ee, args, root)
+        if source_contract(args.exclude_manifest) != config["exclude_manifest"]:
+            raise RuntimeError("Exclusion manifests changed during planning; use a new output directory")
         LOG.info("Loaded sampling plan: %s samples", len(rows))
         if not args.plan_only:
             run(ee, args, root, rows)

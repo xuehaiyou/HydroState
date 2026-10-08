@@ -12,7 +12,8 @@ Use the project's Python 3.12 environment:
 pip install -e ".[geo,gee,dev]"
 earthengine authenticate
 export GEE_PROJECT=your-registered-project
-export OUTPUT_DIR=/mnt/d/Hydrostate/samples_10000
+export OUTPUT_DIR=/mnt/d/Hydrostate/samples/batch_seed43_n10000
+export SEED=43
 export CANDIDATE_DIR=/mnt/d/Hydrostate/candidates
 # Authorized-user OAuth JSON with Drive scope, not the Earth Engine token file.
 export DRIVE_TOKEN=/path/to/drive-oauth.json
@@ -35,9 +36,14 @@ the latest input must be within 3 days of the target DW observation.
 ## Reuse a shared candidate pool
 
 `scripts/run_gee_sampling.sh` defaults to `/mnt/d/Hydrostate/candidates` for the
-shared pool and `/mnt/d/Hydrostate/samples_${SAMPLES}` for each sample run.
+shared pool and `/mnt/d/Hydrostate/samples/batch_seed${SEED}_n${SAMPLES}` for each sample run.
+The defaults are 10,000 samples and selection seed 43, creating a separate dataset
+from the original seed-42 run in `/mnt/d/Hydrostate/samples`. Explicitly set
+`OUTPUT_DIR=/mnt/d/Hydrostate/samples SEED=42` to resume that original run.
 `CANDIDATE_SEED` (default 42) controls pool generation; `SEED` controls candidate
-ranking, target dates and geographic split assignment for each run. Changing
+ranking and target dates. `SPLIT_SEED` (shell default 42) independently controls
+geographic split assignment. The Python CLI defaults its split seed to `--seed`
+when `--split-seed` is omitted, preserving legacy behavior. Changing
 sample count, year range or `SEED` does not regenerate the shared spatial blocks.
 Changing the climate source, candidate seed, strategy or candidates per class
 requires a different pool directory. `pool_config.json` enforces this contract.
@@ -45,6 +51,7 @@ Each run keeps its own selections, sample plan, export state, downloads and Zarr
 
 ```bash
 # After the current global candidate generation finishes:
+bash scripts/run_gee_sampling.sh  # New independent 10,000-sample seed-43 run
 SAMPLES=30000 SEED=42 bash scripts/run_gee_sampling.sh
 SAMPLES=50000 SEED=123 bash scripts/run_gee_sampling.sh
 ```
@@ -58,11 +65,57 @@ refuse to supplement an incomplete pool while the original producer owns it;
 after all 12,960 block files exist, they can reuse it while the original run
 continues selecting/exporting its samples. New builders also use a shared lock.
 
-Different runs may overlap and are not guaranteed nested or disjoint. Changing
-`SEED` also changes geographic train/validation/test assignments; do not combine
-such runs into one experiment without reconciling splits. To compare dataset
-sizes while preserving block assignments, keep `SEED` fixed. Requested sample
+Different runs may overlap unless prior manifests are explicitly excluded.
+Keep `SPLIT_SEED=42` when combining with the original run; changing it changes
+geographic assignments and the merger rejects inconsistent splits. Requested
 counts still depend on candidate coverage, quality and per-location date limits.
+
+## Collect an additional batch and publish a combined Zarr dataset
+
+```bash
+bash scripts/run_gee_expansion.sh
+```
+
+This workflow collects 10,000 **additional** samples with `SEED=43` and
+`SPLIT_SEED=42`. It reads the completed original manifest at
+`/mnt/d/Hydrostate/samples/samples.parquet` and excludes existing window/month
+neighborhoods while respecting the combined maximum of four dates per location.
+It uses the shared candidate pool and writes the new batch to
+`/mnt/d/Hydrostate/samples/batch_seed43_n10000`. Zarr schema v3 is unchanged.
+The old data stay at their original location; later batches use their own
+`batch_seed<seed>_n<count>` subdirectories under `samples`.
+
+After sampling finishes, the workflow validates both manifests, geographic splits,
+window/date duplicates, spacing, array shapes/dtypes, completion markers and
+preprocessing metadata. It copies retained Zarr stores, without re-encoding,
+into `/mnt/d/Hydrostate/samples/merged_v1/zarr` and publishes relative paths in
+`/mnt/d/Hydrostate/samples/merged_v1/samples.parquet`. `merge_report.json` records
+source hashes, duplicates removed and split/climate/frequency/month counts.
+This is a self-contained directory for training or HPC transfer. Copies require
+additional disk space. The directory is published only after validation and copy
+complete; existing output versions are never overwritten.
+
+Repeat the same expansion command to resume an interrupted sampling run.
+Exclusion manifests are pinned by content hash; do not change them while a batch
+is running. If sampling has completed but merge failed, run only the merger:
+
+```bash
+/home/xiaoz/miniconda3/envs/hydrostate/bin/python -m hydrostate.data.merge_samples \
+  --source /mnt/d/Hydrostate/samples/samples.parquet \
+  --source /mnt/d/Hydrostate/samples/batch_seed43_n10000/samples.parquet \
+  --split-seed 42 --copy-zarr --output /mnt/d/Hydrostate/samples/merged_v1
+```
+
+To collect a subsequent batch after `merged_v1` is published, exclude that entire
+combined manifest and publish a new version:
+
+```bash
+SEED=44 OLD_MANIFEST=/mnt/d/Hydrostate/samples/merged_v1/samples.parquet \
+MERGED_DIR=/mnt/d/Hydrostate/samples/merged_v2 bash scripts/run_gee_expansion.sh
+```
+
+For training, set the manifest to `merged_v1/samples.parquet` and data root to
+`merged_v1`; train/validation/test loaders select their respective `split` rows.
 
 ## Sampling
 

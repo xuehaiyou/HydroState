@@ -84,3 +84,23 @@ manifest = /fossfs/xiaozhen/HydroState/samples_v1/manifests/gee_20260922_n1024/s
 
 项目原有指南见 [HPC_FINETUNING.md](HPC_FINETUNING.md)。当前远端 PyTorch 为 2.7.1，
 与本地项目声明的 2.9 系列不同；正式微调之前仍需核实运行环境并完成短训练检查。
+
+**大量小文件：从已有 rsync 进度切换到分批归档上传**
+
+先停止同一目标目录的旧上传进程，避免并发写入。然后运行：
+
+```bash
+cd /home/xiaoz/HydroState
+/home/xiaoz/miniconda3/envs/hydrostate/bin/python -u \
+  tools/data/sync_hpc_archives.py outputs/hpc_transfer/merged_v1_n20000 \
+  --source /mnt/d/Hydrostate/samples/merged_v1
+```
+
+默认每批检查 500 个 Zarr 存储目录（约 250 条样本），比较文件大小和修改时间，
+跳过远端一致文件，将剩余文件打成未压缩 tar。归档通过 rsync 续传，远端验证
+SHA-256 后逐文件原子替换，解压成功写入批次完成记录，再清理该批临时归档。
+最终调用原有远端校验工具，通过后才发布 samples.parquet。Zarr 格式不变。
+
+中断后原样重跑该命令；保留本地 snapshot 目录内的 archive-cache-*、远端
+.archive-transfer 和 .rsync-partial。已完成的批次直接跳过。不要在传输期间
+修改本地源数据或同时运行旧上传命令。文件扫描和远端解压仍有小文件开销。

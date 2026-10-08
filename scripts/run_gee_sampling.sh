@@ -7,8 +7,10 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # Reuse the same output directory and sampling parameters to resume interrupted work.
 GEE_PROJECT="${GEE_PROJECT:-cropland-477906}"
 SAMPLES="${SAMPLES:-10000}"
-OUTPUT_DIR="${OUTPUT_DIR:-/mnt/d/Hydrostate/samples}"
-CANDIDATE_DIR="${CANDIDATE_DIR:-${OUTPUT_DIR}/candidates}"
+SEED="${SEED:-43}"
+OUTPUT_DIR="${OUTPUT_DIR:-/mnt/d/Hydrostate/samples/batch_seed${SEED}_n${SAMPLES}}"
+# Reuse the spatial pool; SEED changes candidate ranking, dates and data splits.
+CANDIDATE_DIR="${CANDIDATE_DIR:-/mnt/d/Hydrostate/candidates}"
 DRIVE_TOKEN="${DRIVE_TOKEN:-$PWD/drive_token.json}"
 PYTHON="${PYTHON:-/home/xiaoz/miniconda3/envs/hydrostate/bin/python}"
 
@@ -17,7 +19,8 @@ args=(--project "$GEE_PROJECT"
       --candidate-dir "$CANDIDATE_DIR" --candidate-seed "${CANDIDATE_SEED:-42}"
       --drive-token "$DRIVE_TOKEN"
       --start-year "${START_YEAR:-2019}" --end-year "${END_YEAR:-2024}"
-      --samples "$SAMPLES" --seed "${SEED:-42}"
+      --samples "$SAMPLES" --seed "$SEED"
+      --split-seed "${SPLIT_SEED:-42}"
       --batch-size "${BATCH_SIZE:-32}" --concurrency "${CONCURRENCY:-2}"
       --candidates-per-class "${CANDIDATES_PER_CLASS:-16}"
       --poll-seconds "${POLL_SECONDS:-30}")
