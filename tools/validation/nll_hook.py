@@ -16,11 +16,20 @@ class NLLVerificationHook(Hook):
     def before_train(self, runner):
         model = runner.model.module if hasattr(runner.model, "module") else runner.model
         self.tracked = {}
-        for category, prefix in (
+        categories = [
             ("encoder", "encoder.backbone.model.blocks.11."),
             ("decoder", "decoder."),
             *((f"{task}_head", f"heads.{task}.") for task in TASKS),
-        ):
+        ]
+        if hasattr(model.decoder, "branches"):
+            categories.extend((f"{t}_branch", f"decoder.branches.{t}.") for t in TASKS)
+        if hasattr(model, "auxiliary_heads"):
+            categories.extend(
+                (f"{t}_auxiliary", f"auxiliary_heads.{t}.") for t in model.auxiliary_heads
+            )
+        if hasattr(model, "interaction") and model.interaction.mode != "none":
+            categories.append(("interaction", "interaction.messages."))
+        for category, prefix in categories:
             name, parameter = next(
                 (name, parameter)
                 for name, parameter in model.named_parameters()

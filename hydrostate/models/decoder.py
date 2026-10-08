@@ -49,9 +49,14 @@ class SharedUNetDecoder(nn.Module):
         self.out_channels = channels[-1]
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
+        return self.forward_stages(features)[-1]
+
+    def forward_stages(self, features: torch.Tensor) -> tuple[torch.Tensor, ...]:
+        """Expose each shared stage without changing baseline parameters."""
         x = self.stem(features)
+        stages = [x]
         for block in self.blocks:
             x = F.interpolate(x, scale_factor=2, mode="bilinear", align_corners=False)
             x = block(x)
-        return x
-
+            stages.append(x)
+        return tuple(stages)

@@ -12,7 +12,7 @@ from torch.utils.data import Sampler
 from mmengine.dist import get_dist_info
 
 from hydrostate.datasets.zarr_dataset import HydroStateZarrDataset
-from hydrostate.losses.uncertainty_nll import UncertaintyWeightedNLL
+from hydrostate.losses.uncertainty_nll import UncertaintyWeightedNLL, masked_standardized_mse_sum
 from hydrostate.models.hydrostate_model import HydroStateModel
 from hydrostate.models.olmoearth_encoder import OlmoEarthEncoder, INPUT_KEYS, MODALITIES
 from hydrostate.normalization import TASKS
@@ -80,13 +80,18 @@ class CausalOlmoEarthEncoder(OlmoEarthEncoder):
             groups[temporal_signature(t, v, self.backbone.timestamp_error_tolerance.total_seconds(), order)].append(i)
         outputs, indices = [], []
         for members in groups.values():
-            selected = {k: v[members] for k, v in inputs.items()}
+            # Prepared index offsets refer to the full batch. Rebuild metadata
+            # for each group from its CPU controls instead of slicing offsets.
+            selected = {k: v[members] for k, v in inputs.items()
+                        if not k.startswith('_temporal_')}
             outputs.append(super().forward(selected))
             indices.extend(members)
         features = torch.cat(outputs)[torch.argsort(torch.tensor(indices, device=outputs[0].device))]
         if self.time_condition != 'none':
-            available = inputs['sensor_valid'].float()
-            delta = (inputs['observation_time'] - inputs['sm_target_time'][:, None, None]).float() / (86400 * 63)
+            available = inputs['sensor_valid'].to(device=features.device, dtype=torch.float32)
+            times_tensor = inputs['observation_time'].to(features.device)
+            target_time = inputs['sm_target_time'].to(features.device)
+            delta = (times_tensor - target_time[:, None, None]).float() / (86400 * 63)
             delta = delta.clamp(-2, 2) * available
             if self.time_condition == 'zero':
                 delta = delta * 0
@@ -107,12 +112,13 @@ class CausalNLL(UncertaintyWeightedNLL):
                 value.data.fill_(math.log(0.5))
                 value.requires_grad_(False)
 
-    def forward(self, task, prediction, target, valid):
-        result, count = super().forward(task, prediction, target, valid)
+    def local_sum(self, task, prediction, target, valid):
         if self.objective == 'mse':
-            # variance=.5 gives standardized MSE plus .5*log(pi).
-            result = result - (count > 0).to(result.dtype) * (0.5 * math.log(math.pi))
-        return result, count
+            # Preserve the MSE objective in both standalone and combined-head
+            # normalization paths (there is no Gaussian constant in this mode).
+            return masked_standardized_mse_sum(
+                prediction, target, valid, self.target_std[TASKS.index(task)])
+        return super().local_sum(task, prediction, target, valid)
 
 
 @MODELS.register_module()

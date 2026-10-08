@@ -9,6 +9,8 @@ from mmengine.model import BaseDataPreprocessor
 
 from hydrostate.registry import MODELS
 
+from .temporal_metadata import prepare_temporal_metadata
+
 
 def aggregate_targets(targets: dict[str, Any], factor: int = 3) -> None:
     """Aggregate water labels; preserve native ET weights and scalar SMAP labels."""
@@ -41,10 +43,26 @@ class HydroDataPreprocessor(BaseDataPreprocessor):
     """
 
     def forward(self, data: dict[str, Any], training: bool = False) -> dict[str, Any]:
+        # Keep control metadata on CPU. Pack all gather indices into a single
+        # tensor so cast_data transfers them once alongside the image tensors.
+        inputs = dict(data["inputs"])
+        metadata = None
+        temporal = {
+            key: inputs.pop(key).detach().to(device="cpu", dtype=dtype)
+            for key, dtype in (("sensor_valid", torch.bool), ("observation_time", torch.long))
+            if key in inputs
+        }
+        if "observation_time" in temporal:
+            metadata, inputs["_temporal_indices"] = prepare_temporal_metadata(
+                temporal["sensor_valid"], temporal["observation_time"]
+            )
+        data = dict(data, inputs=inputs)
         data = self.cast_data(data)
+        data["inputs"].update(temporal)
+        if metadata is not None:
+            data["inputs"]["_temporal_metadata"] = metadata
         for key in ("s1", "s2", "landsat"):
             data["inputs"][key] = data["inputs"][key].float()
-        data["inputs"]["sensor_valid"] = data["inputs"]["sensor_valid"].bool()
         for key, value in data["data_samples"].items():
             if key.endswith("_valid") and torch.is_tensor(value):
                 data["data_samples"][key] = value.bool()

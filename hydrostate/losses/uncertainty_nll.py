@@ -12,6 +12,58 @@ from hydrostate.normalization import TASKS, load_target_statistics
 from hydrostate.registry import MODELS
 
 
+def global_observation_means(local_sums, counts, count_indices):
+    """Reduce head sums and unique task counts in one DDP collective.
+
+    Final and auxiliary heads index the same denominator. Gradients compensate
+    for DDP averaging; reported losses are global valid-observation means.
+    """
+    totals = torch.cat((torch.stack([value.detach() for value in local_sums]),
+                        counts.to(local_sums[0])))
+    world_size = 1
+    if dist.is_available() and dist.is_initialized():
+        world_size = dist.get_world_size()
+        dist.all_reduce(totals)
+    global_counts = totals[len(local_sums):]
+    denominator = global_counts.clamp(min=1).index_select(0, count_indices)
+    global_mean = totals[:len(local_sums)] / denominator
+    values = []
+    for index, local_sum in enumerate(local_sums):
+        objective = world_size * local_sum / denominator[index]
+        values.append(objective + (global_mean[index] - objective.detach()))
+    # Do not stack differentiable sums: an auxiliary-only backward must not
+    # materialize zero gradients on final heads or learned final-loss variances.
+    return values, global_counts
+
+
+def global_observation_mean(local_sum, count):
+    """Scalar compatibility wrapper, with no host read of a CUDA count."""
+    count = torch.as_tensor(count, device=local_sum.device, dtype=local_sum.dtype)
+    values, counts = global_observation_means(
+        [local_sum], count.reshape(1),
+        torch.zeros(1, dtype=torch.long, device=local_sum.device),
+    )
+    return values[0], counts[0]
+
+
+def _masked_inputs(prediction, target, valid):
+    prediction, target, valid = torch.broadcast_tensors(prediction, target, valid.bool())
+    # Sanitize before arithmetic: multiplying a NaN loss by zero is insufficient.
+    return prediction.float().masked_fill(~valid, 0), target.float().masked_fill(~valid, 0), valid
+
+
+def masked_standardized_mse_sum(prediction, target, valid, std):
+    prediction, target, valid = _masked_inputs(prediction, target, valid)
+    return ((prediction - target) / std).square().masked_fill(~valid, 0).sum()
+
+
+def masked_standardized_mse(prediction, target, valid, std):
+    """Fixed-scale auxiliary objective, including empty/NaN and DDP handling."""
+    prediction, target, valid = torch.broadcast_tensors(prediction, target, valid.bool())
+    local_sum = masked_standardized_mse_sum(prediction, target, valid, std)
+    return global_observation_mean(local_sum, valid.sum())
+
+
 @MODELS.register_module()
 class UncertaintyWeightedNLL(nn.Module):
     """Standardize physical observations, then average each task's Gaussian NLL.
@@ -46,35 +98,27 @@ class UncertaintyWeightedNLL(nn.Module):
         return self.log_variances[task].float().clamp(min=math.log(self.min_variance)).exp()
 
     def forward(self, task, prediction, target, valid):
-        index = TASKS.index(task)
         prediction, target, valid = torch.broadcast_tensors(prediction, target, valid.bool())
-        # Select before arithmetic: NaNs in invalid labels must not poison gradients.
-        prediction = prediction.float().masked_select(valid)
-        target = target.float().masked_select(valid)
+        return global_observation_mean(self.local_sum(task, prediction, target, valid), valid.sum())
+
+    def local_sum(self, task, prediction, target, valid):
+        """Fixed-shape NLL sum; leave shared normalization to the caller."""
+        index = TASKS.index(task)
+        prediction, target, valid = _masked_inputs(prediction, target, valid)
         mean, std = self.target_mean[index], self.target_std[index]
         standardized_prediction = (prediction - mean) / std
         standardized_target = (target - mean) / std
         variance = self.variance(task)
-        local_sum = torch.nn.functional.gaussian_nll_loss(
-            standardized_prediction,
-            standardized_target,
-            variance.expand_as(prediction),
-            full=True,
-            eps=self.min_variance,
-            reduction="sum",
-        )
-        # Empty selections still connect both the head and log variance to autograd.
-        totals = torch.stack((local_sum.detach(), local_sum.new_tensor(prediction.numel())))
-        world_size = 1
-        if dist.is_available() and dist.is_initialized():
-            world_size = dist.get_world_size()
-            dist.all_reduce(totals)
-        denominator = totals[1].clamp(min=1)
-        objective = world_size * local_sum / denominator
-        global_mean = totals[0] / denominator
-        # Log the same true global mean on every rank, preserving local gradients.
-        objective = objective + (global_mean - objective.detach())
-        return objective, totals[1]
+        # Match GaussianNLLLoss's clamp, ignored by autograd. The exponential
+        # already ensures positivity, avoiding a Python/CUDA validity check.
+        variance = variance.clone()
+        with torch.no_grad():
+            variance.clamp_(min=self.min_variance)
+        value = 0.5 * (
+            variance.log() + (standardized_prediction - standardized_target).square() / variance
+        ) + 0.5 * math.log(2 * math.pi)
+        # Also mask the normalizing constant and variance penalty for missing data.
+        return value.masked_fill(~valid, 0).sum()
 
     def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
         for name in ("target_mean", "target_std", "training_fingerprint"):

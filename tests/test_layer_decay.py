@@ -12,6 +12,8 @@ from hydrostate.engine.layer_decay_constructor import olmoearth_layer_id
         ("encoder.backbone.model.blocks.11.attn.weight", 12),
         ("decoder.stem.0.weight", 13),
         ("heads.water.layers.0.weight", 13),
+        ("auxiliary_heads.water.layers.0.weight", 13),
+        ("interaction.messages.water_to_et.weight", 13),
         ("loss_module.log_variances.water", 13),
     ],
 )

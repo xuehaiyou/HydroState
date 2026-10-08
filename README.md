@@ -65,6 +65,14 @@ See `docs/DATA_SCHEMA.md` for the manifest and Zarr contract. Dataset creation
 is deliberately separate from training so input shards remain immutable and a
 new label family can be added without duplicating satellite imagery.
 
+Architecture variants, including progressive task-specific attention/adapters,
+auxiliary supervision and gated task interaction, are configured through
+`configs/hydrostate_staged.py`; the half-width version uses
+`configs/hydrostate_staged_light.py` (256 → 128 → 64 channels).
+See [model architectures](docs/MODEL_ARCHITECTURES.md)
+for equations, ablations and configuration switches. Existing configs retain the
+original shared-decoder baseline.
+
 Local coverage indexing, station ingestion, and ready-to-submit SLURM jobs are
 documented in `docs/DATA_PREPARATION.md`.
 

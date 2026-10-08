@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import torch
 from mmengine.model import BaseModel
 
+from hydrostate.losses.uncertainty_nll import (
+    global_observation_means,
+    masked_standardized_mse_sum,
+)
 from hydrostate.normalization import TASKS
 from hydrostate.registry import MODELS
 
@@ -48,6 +53,91 @@ def site_supervision_values(task, prediction, samples):
     return pooled, target, valid
 
 
+def combined_supervision_values(task, prediction, samples):
+    """Use identical product and optional station support for every head."""
+    product = supervision_values(task, prediction, samples)
+    site = site_supervision_values(task, prediction, samples)
+    if site is None:
+        return product
+    return tuple(torch.cat((p.flatten(), s.flatten())) for p, s in zip(product, site))
+
+
+@dataclass
+class PreparedTaskSupervision:
+    """Prediction-independent support shared by the two heads for one task."""
+
+    task: str
+    target: torch.Tensor
+    valid: torch.Tensor
+    support: torch.Tensor
+    count: torch.Tensor
+    weights: torch.Tensor | None = None
+    denominator: torch.Tensor | None = None
+    site_footprint: torch.Tensor | None = None
+    site_denominator: torch.Tensor | None = None
+
+    def project(self, prediction):
+        prediction = prediction.float()
+        if self.task == "water":
+            pooled = prediction
+        elif self.task == "soil_moisture":
+            pooled = prediction.masked_fill(~self.support, 0).sum(dim=(-2, -1), keepdim=True)
+            pooled = pooled / self.denominator
+        else:
+            pooled = (prediction * self.weights).sum(dim=(-2, -1))
+        if self.site_footprint is not None:
+            site = (prediction * self.site_footprint).sum(dim=(-2, -1)) / self.site_denominator
+            pooled = torch.cat((pooled.flatten(), site.flatten()))
+        return pooled
+
+
+def prepare_supervision(outputs, samples):
+    """Compute support, completeness and counts once per batch, never across batches."""
+    reference = next(iter(outputs.values()))
+    support = samples.get("prediction_valid")
+    if support is None:
+        support = torch.ones_like(reference, dtype=torch.bool)
+    footprint = site_denominator = site_complete = None
+    if all(key in samples for key in ("site_value", "site_valid", "site_footprint")):
+        footprint = samples["site_footprint"].float()
+        if footprint.ndim == 3:
+            footprint = footprint[:, None]
+        site_count = footprint.sum(dim=(-2, -1))
+        site_denominator = site_count.clamp(min=1e-6)
+        site_complete = (site_count > 0) & ~((footprint > 0) & ~support).any(dim=(-2, -1))
+    prepared = {}
+    for task, prediction in outputs.items():
+        weights = denominator = None
+        if task == "water":
+            target, valid = samples[task], samples[f"{task}_valid"] & support
+            shape = prediction.shape
+        elif task == "soil_moisture":
+            count = support.sum(dim=(-2, -1), keepdim=True)
+            denominator = count.clamp(min=1)
+            target, valid = samples[task], samples[f"{task}_valid"] & (count > 0)
+            shape = count.shape
+        else:
+            if "et_native_weights" not in samples:
+                raise ValueError("ET supervision requires native pixel area weights")
+            weights = samples["et_native_weights"].float()
+            complete = ~((weights > 0) & ~support).any(dim=(-2, -1))
+            valid = samples["et_native_valid"] & complete & (weights.sum(dim=(-2, -1)) > 0)
+            target, shape = samples["et_native_value"], weights.shape[:-2]
+        if footprint is not None:
+            index = TASKS.index(task)
+            site_valid = samples["site_valid"][:, index].bool().reshape(-1, 1) & site_complete
+            target = torch.cat((target.flatten(), samples["site_value"][:, index].reshape(-1)))
+            valid = torch.cat((valid.flatten(), site_valid.flatten()))
+        else:
+            shape = torch.broadcast_shapes(shape, target.shape, valid.shape)
+            target, valid = target.expand(shape), valid.expand(shape)
+        prepared[task] = PreparedTaskSupervision(
+            task, target, valid, support, valid.sum(), weights, denominator,
+            footprint, site_denominator,
+        )
+    return prepared
+
+
 @MODELS.register_module()
 class HydroStateModel(BaseModel):
     """One OlmoEarth encoder, one shared decoder, and three retrieval heads."""
@@ -84,21 +174,41 @@ class HydroStateModel(BaseModel):
         self, inputs: dict[str, torch.Tensor], data_samples: dict[str, Any]
     ) -> dict[str, torch.Tensor]:
         outputs = self._forward(inputs)
+        return self._loss_from_outputs(outputs, data_samples)
+
+    def _loss_from_outputs(self, outputs, data_samples, auxiliary=None, auxiliary_weights=None):
+        prepared = prepare_supervision(outputs, data_samples)
+        names, sums, count_indices = [], [], []
+        for index, task in enumerate(TASKS):
+            plan = prepared[task]
+            names.append(f"loss_{task}")
+            sums.append(self.loss_module.local_sum(
+                task, plan.project(outputs[task]), plan.target, plan.valid
+            ))
+            count_indices.append(index)
+        for task, prediction in (auxiliary or {}).items():
+            index = TASKS.index(task)
+            plan = prepared[task]
+            names.append(f"loss_aux_{task}")
+            sums.append(masked_standardized_mse_sum(
+                plan.project(prediction), plan.target, plan.valid,
+                self.loss_module.target_std[index],
+            ))
+            count_indices.append(index)
+        values, counts = global_observation_means(
+            sums, torch.stack([prepared[task].count for task in TASKS]),
+            torch.tensor(count_indices, dtype=torch.long, device=sums[0].device),
+        )
+        objectives = dict(zip(names, values))
         losses: dict[str, torch.Tensor] = {}
-        for task in TASKS:
-            prediction, target, valid = supervision_values(task, outputs[task], data_samples)
-            site = site_supervision_values(task, outputs[task], data_samples)
-            if site is not None:
-                prediction, target, valid = (
-                    torch.cat((product.flatten(), station.flatten()))
-                    for product, station in zip((prediction, target, valid), site)
-                )
-            task_loss, count = self.loss_module(task, prediction, target, valid)
-            losses[f"loss_{task}"] = task_loss
-            losses[f"valid_count_{task}"] = count
+        for index, task in enumerate(TASKS):
+            losses[f"loss_{task}"] = objectives[f"loss_{task}"]
+            losses[f"valid_count_{task}"] = counts[index]
             variance = self.loss_module.variance(task).detach()
             losses[f"variance_{task}"] = variance
             losses[f"precision_{task}"] = variance.reciprocal()
+        for task in auxiliary or {}:
+            losses[f"loss_aux_{task}"] = auxiliary_weights[task] * objectives[f"loss_aux_{task}"]
         return losses
 
     def predict(

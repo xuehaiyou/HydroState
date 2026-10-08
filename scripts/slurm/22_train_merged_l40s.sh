@@ -13,7 +13,7 @@
 #SBATCH --output=/home/xiaoz/HydroState/logs/%x-%j.out
 #SBATCH --error=/home/xiaoz/HydroState/logs/%x-%j.err
 set -euo pipefail
-cd /home/xiaoz/HydroState
+cd "${HYDROSTATE_CODE_ROOT:-/home/xiaoz/HydroState}"
 export HYDROSTATE_DATA_ROOT=/scr/u/xiaoz/HydroState/samples_merged_v1
 export HYDROSTATE_MANIFEST="$HYDROSTATE_DATA_ROOT/manifests/merged_v1_n20000/samples.parquet"
 export HYDROSTATE_TARGET_STATS="${HYDROSTATE_MANIFEST%/*}/target_stats.json"
