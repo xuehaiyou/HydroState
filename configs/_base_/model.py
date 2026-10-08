@@ -22,10 +22,8 @@ model = dict(
         soil_moisture=dict(type="RegressionHead", in_channels=128, activation="sigmoid"),
         et=dict(type="RegressionHead", in_channels=128, activation="softplus"),
     ),
-    loss=dict(type="MaskedHuberLoss", delta=1.0),
-    task_weights=dict(water=1.0, soil_moisture=0.25, et=1.0),
-    # Physical reference scales, not measured dataset standard deviations.
-    task_scales=dict(water=1.0, soil_moisture=0.1, et=3.0),
-    site_loss_weight=3.0,
+    loss=dict(type="UncertaintyWeightedNLL", min_variance=1e-6),
+    # The CLI resolves this to target_stats.json beside the training manifest,
+    # verifies the training fingerprint and embeds its contents in the run config.
+    target_statistics="{{$HYDROSTATE_TARGET_STATS:__manifest__}}",
 )
-

@@ -34,30 +34,51 @@ test -s "$HYDROSTATE_MODEL_PATH/weights.pth"
 
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 export PYTHONUNBUFFERED=1
-gpu_count="${HYDROSTATE_GPUS_PER_NODE:-4}"
 precision="${HYDROSTATE_PRECISION:-bfloat16}"
 
-python - "$gpu_count" "$precision" <<'PY'
+# CUDA visibility reflects the GPUs granted to this job, not all GPUs on the node.
+# Keep diagnostics on stderr so stdout contains only the detected count.
+gpu_count="$(python - "${HYDROSTATE_GPUS_PER_NODE:-auto}" "$precision" <<'PY'
 import sys
 import torch
 
-requested = int(sys.argv[1])
-assert requested > 0
-assert torch.cuda.is_available(), "CUDA is unavailable in this GPU job"
-assert torch.cuda.device_count() == requested, (
-    f"Allocated {torch.cuda.device_count()} GPUs, requested {requested}; "
-    "match --gres and HYDROSTATE_GPUS_PER_NODE"
-)
-for index in range(requested):
+count = torch.cuda.device_count()
+if not torch.cuda.is_available() or count < 1:
+    raise RuntimeError("No CUDA GPU is visible in this job; request a GPU with --gres")
+if sys.argv[1] != "auto":
+    try:
+        requested = int(sys.argv[1])
+    except ValueError as error:
+        raise ValueError("HYDROSTATE_GPUS_PER_NODE must be 'auto' or a positive integer") from error
+    if requested < 1:
+        raise ValueError("HYDROSTATE_GPUS_PER_NODE must be 'auto' or a positive integer")
+    if count != requested:
+        raise RuntimeError(
+            f"Visible {count} GPUs, explicitly requested {requested}; "
+            "unset HYDROSTATE_GPUS_PER_NODE to detect automatically, or match --gres"
+        )
+for index in range(count):
     with torch.cuda.device(index):
-        print(index, torch.cuda.get_device_name(index), torch.cuda.get_device_properties(index).total_memory)
+        print(index, torch.cuda.get_device_name(index),
+              torch.cuda.get_device_properties(index).total_memory, file=sys.stderr)
         if sys.argv[2] == "bfloat16":
-            assert torch.cuda.is_bf16_supported(including_emulation=False), (
-                "GPU lacks native BF16; set HYDROSTATE_PRECISION=float16 and rerun the smoke test"
-            )
-print("PyTorch:", torch.__version__, "CUDA runtime:", torch.version.cuda)
+            if not torch.cuda.is_bf16_supported(including_emulation=False):
+                raise RuntimeError(
+                    "GPU lacks native BF16; set HYDROSTATE_PRECISION=float16 and rerun the smoke test"
+                )
+print("PyTorch:", torch.__version__, "CUDA runtime:", torch.version.cuda, file=sys.stderr)
+print(count)
 PY
+)"
 
+config="${HYDROSTATE_CONFIG:-configs/hydrostate_hpc.py}"
+if [[ "$gpu_count" == 1 ]]; then
+    printf 'Detected 1 visible GPU; launching single-GPU training.\n'
+    exec python tools/train.py "$config" \
+        --launcher none --cfg-options "optim_wrapper.dtype=$precision" "$@"
+fi
+
+printf 'Detected %s visible GPUs; launching DDP with %s processes.\n' "$gpu_count" "$gpu_count"
 exec torchrun --standalone --nnodes=1 --nproc_per_node="$gpu_count" \
-    tools/train.py "${HYDROSTATE_CONFIG:-configs/hydrostate_hpc.py}" \
+    tools/train.py "$config" \
     --launcher pytorch --cfg-options "optim_wrapper.dtype=$precision" "$@"

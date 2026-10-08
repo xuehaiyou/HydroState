@@ -7,7 +7,7 @@ import math
 import torch
 from mmengine.evaluator import BaseMetric
 
-from hydrostate.models.hydrostate_model import TASKS
+from hydrostate.normalization import TASKS, load_target_statistics
 from hydrostate.registry import METRICS
 
 
@@ -15,9 +15,10 @@ from hydrostate.registry import METRICS
 class HydroStateMetric(BaseMetric):
     default_prefix = None
 
-    def __init__(self, task_scales=None, **kwargs):
+    def __init__(self, target_statistics, **kwargs):
         super().__init__(**kwargs)
-        self.task_scales = task_scales or dict(water=1.0, soil_moisture=0.1, et=3.0)
+        statistics = load_target_statistics(target_statistics)
+        self.task_scales = {task: statistics["tasks"][task]["std"] for task in TASKS}
 
     def process(self, data_batch, data_samples: list[dict]) -> None:
         for sample in data_samples:
@@ -69,6 +70,6 @@ class HydroStateMetric(BaseMetric):
                 }
             )
             rmse_values.append(rmse / self.task_scales[task])
-        # Normalize physical units with the same configurable scales as the loss.
+        # Keep model selection fixed: use training std, never learned task variance.
         metrics["hydro_score"] = -sum(rmse_values) / len(rmse_values) if rmse_values else -math.inf
         return metrics
