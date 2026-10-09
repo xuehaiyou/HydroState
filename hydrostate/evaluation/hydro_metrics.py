@@ -23,6 +23,14 @@ class HydroStateMetric(BaseMetric):
     def process(self, data_batch, data_samples: list[dict]) -> None:
         for sample in data_samples:
             result: dict[str, float] = {}
+            if "soil_moisture_prediction_valid" in sample:
+                support = sample.get("prediction_valid")
+                sm_valid = sample["soil_moisture_prediction_valid"].detach().bool()
+                if support is None:
+                    support = torch.ones_like(sm_valid)
+                result["sm_coupling/enabled"] = 1.0
+                result["sm_coupling/output_valid"] = float((sm_valid & support).sum())
+                result["sm_coupling/input_valid"] = float(support.sum())
             for task in TASKS:
                 prediction = sample[f"supervised_{task}"].detach().double()
                 target = sample[f"target_{task}"].detach().double()
@@ -72,4 +80,13 @@ class HydroStateMetric(BaseMetric):
             rmse_values.append(rmse / self.task_scales[task])
         # Keep model selection fixed: use training std, never learned task variance.
         metrics["hydro_score"] = -sum(rmse_values) / len(rmse_values) if rmse_values else -math.inf
+        if any(item.get("sm_coupling/enabled", 0) for item in results):
+            metrics["soil_moisture_observation_count"] = sum(
+                item.get("soil_moisture/count", 0.0) for item in results
+            )
+            observed = sum(item.get("sm_coupling/input_valid", 0.0) for item in results)
+            predicted = sum(item.get("sm_coupling/output_valid", 0.0) for item in results)
+            metrics["soil_moisture_prediction_coverage"] = (
+                predicted / observed if observed else float("nan")
+            )
         return metrics

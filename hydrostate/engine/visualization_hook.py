@@ -43,7 +43,10 @@ def comparison_maps(sample, task):
     The scalar SM panels deliberately stay 1 x 1. ET uses the same footprint
     projection for both the already-pooled predictions and native targets.
     """
-    prediction = _masked(sample[task], sample["prediction_valid"])[0]
+    support = sample["prediction_valid"]
+    if task == "soil_moisture" and "soil_moisture_prediction_valid" in sample:
+        support = support & sample["soil_moisture_prediction_valid"]
+    prediction = _masked(sample[task], support)[0]
     supervised, target, valid = (
         sample[f"{prefix}_{task}"] for prefix in ("supervised", "target", "valid")
     )
@@ -109,7 +112,8 @@ class HydroVisualizationHook(Hook):
             return
         for sample in outputs:
             sample_id = str(sample["metainfo"]["sample_id"])
-            # Validity depends on labels/input coverage, never model quality.
+            # Default supervision support uses labels/input coverage. Explicit
+            # predicted-WF support can change selection as the model evolves.
             count = sum(bool(sample[f"valid_{task}"].any()) for task in TASKS)
             key = (-count, sample_id)
             if sample_id in self._candidates:
@@ -174,6 +178,11 @@ class HydroVisualizationHook(Hook):
             f"{self._label} | {meta['sample_id']}\n{meta.get('target_time', '')} | validation",
             fontsize=13,
         )
+        sm_source = sample.get("soil_moisture_supervision_source")
+        sm_mean_title = (
+            f"SM land mean - {sm_source} WF weights" if sm_source
+            else "SM prediction - valid-window mean"
+        )
         titles = (
             (
                 "WF prediction - 30 m",
@@ -181,8 +190,8 @@ class HydroVisualizationHook(Hook):
                 "WF ground truth - 30 m",
             ),
             (
-                "SM prediction - 30 m",
-                "SM prediction - valid-window mean",
+                "SM on land - predicted WF mask" if sm_source else "SM prediction - 30 m",
+                sm_mean_title,
                 "SM ground truth - SMAP center scalar",
             ),
             (

@@ -75,6 +75,7 @@ def test_shared_stages_preserve_baseline_output_and_checkpoint():
     ("hydrostate_staged_independent", [512, 256, 128]),
     ("hydrostate_staged_softmax", [512, 256, 128]),
     ("hydrostate_staged_light", [256, 128, 64]),
+    ("hydrostate_staged_light_land_sm", [256, 128, 64]),
 ])
 def test_real_config_build_and_full_resolution(config_name, channels, target_statistics):
     cfg = Config.fromfile(f"configs/{config_name}.py")
@@ -238,6 +239,21 @@ def test_all_missing_labels_produce_zero_finite_gradients(target_statistics):
     total.backward()
     for parameter in model.parameters():
         assert parameter.grad is not None and (parameter.grad == 0).all()
+
+
+@pytest.mark.parametrize("source", ["observed", "predicted"])
+def test_land_sm_coupling_full_backward_and_checkpoint_compatibility(target_statistics, source):
+    original = make_model(target_statistics)
+    model = make_model(target_statistics, water_soil_coupling=dict(supervision_source=source))
+    model.load_state_dict(original.state_dict(), strict=True)
+    data = samples()
+    data["water"][..., :2, :2] = 1
+    losses = model(torch.randn(2, 8, 3, 3), data, mode="loss")
+    total = sum(v for k, v in losses.items() if k.startswith("loss_"))
+    total.backward()
+    assert torch.isfinite(total)
+    for name, parameter in model.named_parameters():
+        assert parameter.grad is not None and torch.isfinite(parameter.grad).all(), name
 
 
 def test_new_modules_receive_full_learning_rate(target_statistics):

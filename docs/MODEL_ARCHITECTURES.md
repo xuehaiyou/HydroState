@@ -12,6 +12,7 @@
 | `configs/hydrostate_l40s.py` | 原共享解码器 + 三个最终头 |
 | `configs/hydrostate_staged.py` | 三阶段 CBAM + bottleneck Adapter + 辅助头 + Sigmoid 门控 |
 | `configs/hydrostate_staged_light.py` | 同一完整 Sigmoid 结构，通道缩窄为 256→128→64 |
+| `configs/hydrostate_staged_light_land_sm.py` | 轻量版 + WF 约束 SM 适用域和陆地面积加权监督 |
 | `configs/hydrostate_staged_independent.py` | 同上，关闭跨任务交互 |
 | `configs/hydrostate_staged_softmax.py` | 同上，改为 Softmax 门控 |
 
@@ -114,6 +115,74 @@ CBAM、Adapter、辅助监督及输出激活保持原设置；保留算子合并
 使用现有 HPC bash 启动链时，将 `HYDROSTATE_CONFIG` 设为此配置；既有宽版配置及
 冻结训练快照保持原样。交互消融仍可用 `--cfg-options model.interaction.mode=none`
 或 `model.interaction.mode=softmax` 选择。
+
+## WF 约束 SM 的适用域和监督
+
+`configs/hydrostate_staged_light_land_sm.py` 是独立的轻量版实验配置，启用
+`model.water_soil_coupling`。原轻量版配置保持原数学定义，便于回溯和对照。
+新增约束不增加学习参数，不改变 WF↔ET 或三任务的特征交换。
+
+SM 定义为像元中适用土壤部分的体积含水量：混合像元保留 SM 本身，不能把
+`(1-WF)*SM` 作为最终 SM；纯水区域输出 NoData。没有其他土地覆盖数据时，
+非水体只是土壤适用面积的近似，不能据此声称已排除所有建筑、裸岩和冰雪。
+
+默认配置：
+
+```python
+model = dict(water_soil_coupling=dict(
+    enabled=True,
+    supervision_source="observed",  # 也支持 "predicted"
+    min_land_fraction=0.01,
+    min_window_land_fraction=0.01,
+))
+```
+
+- `observed`：训练和验证均采用有效的 30 m WF 标签计算权重。观测输入范围内
+  若有缺测、非有限或超出 [0,1] 的 WF，该窗口不参加 SM 产品监督，不能将
+  未知水陆范围重新归一化后假装覆盖完整。站点只检查自身足迹的完整性。
+- `predicted`：训练和验证采用最终 WF 预测的 `detach()` 权重，辅助 SM 头
+  复用同一份权重。只切断 SM 损失经面积权重回到 WF 输出的路径，原来的
+  特征交互及共享主干仍可传递梯度。该模式的有效观测范围可能随预测变化，
+  不建议用它代替默认的固定观测支持来作主要精度对比。
+- 两个模式的 **30 m 输出掩膜始终来自预测 WF**，包括带标签的验证阶段。
+  不把 WF 真值用于推理掩膜。`min_land_fraction=0.01` 表示陆地比例必须大于
+  1% 才输出 SM；这是可调工程阈值，不是经过验证的科学阈值。
+- 对通过像元阈值的有效陆地，窗口内使用
+  `sum((1-WF)*SM) / sum(1-WF)`。保留下来的陆地面积还须达到输入有效面积的
+  `min_window_land_fraction`；纯水/陆地不足的窗口或站点跳过 SM 损失。
+  最终头与辅助头共用一次准备的权重、分母和有效计数，归约采用 FP32。
+- 可选 `soil_moisture_domain_valid` 必须已对齐到输出网格 B×1×H×W，用于排除
+  已知不适用的非土壤区域；本配置不自动引入或推测新的土地覆盖数据。
+
+`mode='tensor'` 和内部训练前向保持有限、未掩膜的三任务张量。`predict` 在
+SM 无效位置写入 NaN，并附带 `soil_moisture_prediction_valid` 和
+`soil_moisture_land_fraction`；原始张量不被原地修改。区域文件导出尚未实现，
+后续导出器应把这一掩膜写为 NoData。验证先聚合未掩膜的 SM，再生成预测图，
+因此默认观测支持上的误差不会因错误的预测水体掩膜而隐藏。
+
+验证图明确区分预测 WF 掩膜与监督 WF 权重；默认模式下，细尺度预测图为空
+但观测尺度指标仍有效是可能的，表示 WF 误判而不是标签泄漏。
+新增指标 `soil_moisture_observation_count` 记录验证的有效产品观测数，
+`soil_moisture_prediction_coverage` 记录输入有效像元中有 SM 输出的比例；
+覆盖率不是置信度或精度指标。训练的 `valid_count_soil_moisture` 仍包含可选站点。
+
+此配置沿用已有训练集均值/标准差作为**固定参考归一化尺度**，不把它们宣称为
+新的陆地筛选样本分布统计。WF-SM 筛选改变了有效观测集合，对照实验应在共同
+有效支持上重算指标，并同时报告覆盖/观测数，不能直接比较旧日志的 hydro_score。
+它仍使用 1.2 km 窗口与中心 SMAP 标签的空间近似，**没有实现完整 SMAP 足迹聚合**。
+站点标签也没有因本修改自动补充。
+
+启动入口：
+
+```bash
+python tools/train.py configs/hydrostate_staged_light_land_sm.py
+# 恢复原轻量版 SM 定义的消融：
+python tools/train.py configs/hydrostate_staged_light_land_sm.py --cfg-options \
+  model.water_soil_coupling.enabled=False
+```
+
+参数形状和 state_dict 键保持兼容，可加载原轻量版权重；监督数学定义已改变，
+应在独立 work_dir 开始新实验，不应把新旧日志合并为同一个连续训练结果。
 
 ## 一次同步门控交互
 

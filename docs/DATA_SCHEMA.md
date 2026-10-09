@@ -76,6 +76,15 @@ SMAP window-mean supervision remains a spatial approximation, not a full SMAP
 footprint average. Legacy labels with valid ET but no native weights fail explicitly;
 re-ingest verified GeoTIFFs into a new directory with `--reingest-from`.
 
+The optional `hydrostate_staged_light_land_sm.py` configuration replaces SM's
+unweighted window mean with a land-area-weighted mean using detached WF. By
+default it uses valid observed WF labels in both training and evaluation; unknown
+WF inside input-observed support excludes that window from SM supervision.
+Prediction maps always use predicted WF for their NoData mask. This changes SM's
+support without changing stored labels, and does not resolve the SMAP footprint
+approximation. See `MODEL_ARCHITECTURES.md` for thresholds, optional soil-domain
+mask, fixed normalization scales, and the prediction/validation distinction.
+
 Station supervision uses fixed arrays `site_value`, `site_valid`, and
 `site_footprint`. Task order is water fraction, soil moisture, ET.
 
