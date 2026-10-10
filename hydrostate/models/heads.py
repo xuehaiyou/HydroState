@@ -16,12 +16,14 @@ class RegressionHead(nn.Module):
         in_channels: int = 128,
         out_channels: int = 1,
         activation: str = "identity",
+        hidden_channels: int | None = None,
     ) -> None:
         super().__init__()
+        hidden_channels = in_channels if hidden_channels is None else hidden_channels
         self.layers = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, 3, padding=1),
+            nn.Conv2d(in_channels, hidden_channels, 3, padding=1),
             nn.GELU(),
-            nn.Conv2d(in_channels, out_channels, 1),
+            nn.Conv2d(hidden_channels, out_channels, 1),
         )
         self.activation = activation
 

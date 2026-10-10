@@ -35,6 +35,22 @@ def olmoearth_layer_id(name: str, num_layers: int) -> int:
     return num_layers + 1
 
 
+def official_olmoearth_layer_id(name: str, num_layers: int) -> int:
+    """Official rslearn get_layer_id mapping, with our encoder parameter prefix."""
+    prefix = "encoder.backbone.model."
+    if not name.startswith(prefix):
+        return num_layers
+    relative = name[len(prefix):]
+    if relative.startswith("blocks."):
+        index = int(relative.split(".")[1])
+        if not 0 <= index < num_layers:
+            raise ValueError("Encoder block exceeds configured num_layers")
+        return index
+    if relative.startswith(("patch_embeddings", "composite_encodings")):
+        return 0
+    return num_layers
+
+
 @OPTIM_WRAPPER_CONSTRUCTORS.register_module()
 class OlmoEarthLayerDecayOptimWrapperConstructor(DefaultOptimWrapperConstructor):
     """Build AdamW groups using OlmoEarth's recommended LLRD settings."""
@@ -44,6 +60,9 @@ class OlmoEarthLayerDecayOptimWrapperConstructor(DefaultOptimWrapperConstructor)
             raise ValueError("paramwise_cfg with num_layers and layer_decay_rate is required")
         self.num_layers = int(paramwise_cfg.get("num_layers", 12))
         self.layer_decay_rate = float(paramwise_cfg.get("layer_decay_rate", 0.65))
+        self.recipe = paramwise_cfg.get("recipe", "legacy")
+        if self.recipe not in ("legacy", "official"):
+            raise ValueError("recipe must be legacy or official")
         if self.num_layers <= 0:
             raise ValueError("num_layers must be positive")
         if not 0 < self.layer_decay_rate <= 1:
@@ -65,11 +84,17 @@ class OlmoEarthLayerDecayOptimWrapperConstructor(DefaultOptimWrapperConstructor)
         for name, parameter in module.named_parameters():
             if not parameter.requires_grad:
                 continue
-            layer_id = olmoearth_layer_id(name, self.num_layers)
-            no_decay = self._no_decay(name, parameter)
+            mapping = (
+                official_olmoearth_layer_id if self.recipe == "official" else olmoearth_layer_id
+            )
+            layer_id = mapping(name, self.num_layers)
+            # Official AdamW does not exempt encoder bias/norm tensors. Our
+            # learned observation variances remain unregularized in either recipe.
+            no_decay = (name.startswith("loss_module.") if self.recipe == "official"
+                        else self._no_decay(name, parameter))
             grouped[(layer_id, no_decay)].append(parameter)
 
-        max_layer_id = self.num_layers + 1
+        max_layer_id = self.num_layers + (self.recipe == "legacy")
         for (layer_id, no_decay), parameters in sorted(grouped.items()):
             lr_scale = self.layer_decay_rate ** (max_layer_id - layer_id)
             group = {

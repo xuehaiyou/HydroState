@@ -210,7 +210,8 @@ class TaskGatedInteraction(nn.Module):
     softmax weights sum to one over the two incoming sources at each pixel.
     """
 
-    def __init__(self, channels=128, mode="sigmoid", residual_scale=0.1, merge_ops=True):
+    def __init__(self, channels=128, mode="sigmoid", residual_scale=0.1, merge_ops=True,
+                 learnable_scale=False):
         super().__init__()
         if mode not in ("none", "sigmoid", "softmax"):
             raise ValueError(f"Unknown interaction mode: {mode}")
@@ -221,6 +222,9 @@ class TaskGatedInteraction(nn.Module):
         self.merge_ops = merge_ops
         self.messages = nn.ModuleDict()
         self.gates = nn.ModuleDict()
+        self.task_scales = nn.ParameterDict({
+            task: nn.Parameter(torch.tensor(float(residual_scale))) for task in TASKS
+        }) if learnable_scale and mode != "none" else nn.ParameterDict()
         if mode != "none":
             for target in TASKS:
                 for source in TASKS:
@@ -258,5 +262,6 @@ class TaskGatedInteraction(nn.Module):
                 update = weights[:, 0] * messages[0] + weights[:, 1] * messages[1]
             else:
                 update = (weights * torch.stack(messages, dim=1)).sum(dim=1)
-            outputs[target] = features[target] + self.residual_scale * update
+            scale = self.task_scales[target] if target in self.task_scales else self.residual_scale
+            outputs[target] = features[target] + scale * update
         return outputs

@@ -15,10 +15,126 @@
 | `configs/hydrostate_staged_light_land_sm.py` | 轻量版 + WF 约束 SM 适用域和陆地面积加权监督 |
 | `configs/hydrostate_staged_independent.py` | 同上，关闭跨任务交互 |
 | `configs/hydrostate_staged_softmax.py` | 同上，改为 Softmax 门控 |
+| `configs/hydrostate_multilevel.py` | 编码器第 4/8/12 层融合 + 轻量共享解码器 + 30 m Adapter + 可学习强度 Sigmoid 门控 + 陆地条件 SM |
+| `configs/hydrostate_multilevel_independent.py` | 多层融合版，保留任务 Adapter，关闭交互 |
+| `configs/hydrostate_multilevel_shared.py` | 多层融合版，关闭 Adapter 与交互，直接使用共享特征预测 |
 
 所有新增配置继承 L40S 的数据和优化设置。每个预设有独立默认 work_dir；若设置了
 `HYDROSTATE_WORK_DIR`，需要为每次实验分别设置目录。编码器使用原 OlmoEarth 预训练
 初始化；新的分支、门控、辅助头和最终头按 PyTorch 默认方式初始化。
+例外是新增多层融合版的 Adapter：最后一层零初始化，初始为恒等映射；
+其交互残差强度为各任务独立的可训练标量，初值 0.1，且没有辅助头。
+
+## 多层融合版（新增）
+
+```text
+S1/S2/Landsat 多时相、时间戳、有效性掩膜
+  → 可训练 Patch Embedding + 官方位置/时间/模态编码
+  → OlmoEarth v1.2 Base 的第 4 / 8 / 12 个 Transformer block
+  → 每层依有效掩膜聚合时相和 bandset，再对该位置可用模态取平均
+  → 三个 768×30×30 特征（浅→深）
+  → 深层投影 + 卷积：256×30×30
+  → 降维上采样 + 中层投影跳接 + 卷积：128×60×60
+  → 降维上采样 + 浅层投影跳接 + 卷积：64×120×120
+  → AvgPool(3, stride=3)：64×40×40
+  → 三个独立残差 Adapter：64→16→16→64
+  → 一次同步 Sigmoid 门控交互，三个独立可学习残差强度
+  → 三个预测头：Conv3×3(64→32) → GELU → Conv1×1(32→1)
+  → Sigmoid WF / Sigmoid SM_land / Softplus ET
+```
+
+`MultiLevelOlmoEarthEncoder` 在一次编码中读取中间结果，不重复运行三个编码器。
+`out_indices=[3,7,11]` 为从零开始的层索引，必须递增并包含最后一个 block；
+当前融合解码器要求三个输出层。各层使用同一个预训练最终 LayerNorm 归一化。
+该实现复用官方 patch embedding、时空编码、Transformer 和 token 恢复方法，
+支持 RoPE 与梯度检查点；使用 PyTorch SDPA，不支持外部 packed flash-attn 路径。
+没有增加 torch.compile。
+
+缺失时相先从 attention 序列中移除，batch 补齐位置在训练和验证时均作为无效 key
+屏蔽。池化时先计算有效时相/bandset 均值，再计算实际可用模态均值；
+缺失整种模态不会作为零值拉低特征。旧单层编码器的池化行为保持不变，
+所以多层版相对旧版的变化还包括这一缺测处理，不能将所有性能变化归因于跳接。
+
+共享解码器每个融合阶段使用两层 3×3 Conv + GroupNorm + GELU。
+跳接为投影后相加；主路径先 1×1 降维再上采样，控制高分辨率计算成本。
+Adapter 为 `Conv1×1 → GELU → Conv3×3 → GELU → Conv1×1`，
+最后投影的 weight/bias 均零初始化；每个 64→16→16→64 Adapter 有 4,448 个参数。
+第一步只有末层投影收到非零更新，后续梯度会进入前两层。
+
+交互使用本文下方已有的同步消息公式，区别是固定的 `residual_scale`
+变为三个独立的可训练 `alpha_t`（初值 0.1，无硬截断，允许学到零或负修正）。
+每条边仍有独立 1×1 消息投影和接收方/发送方拼接得到的空间标量 gate。
+`mode=none` 时不创建消息、gate 或残差强度参数。
+
+### 权重更新与调度
+
+新增配置使用 `optim_wrapper.paramwise_cfg.recipe="official"`。
+层编号与 rslearn 的 `LayerDecayAdamW.get_layer_id` 对齐：
+
+- patch embeddings 和 composite encodings 为第 0 组；
+- 第 i 个 block（从零开始）为第 i 组；
+- encoder 最终 norm、其他 encoder 参数与全部下游模块为第 12 组。
+
+`lr_i = 1e-4 × 0.65^(12-i)`：输入投影和第一个 block 为约 5.688e-7，
+最后一个 block 为 6.5e-5，最终 norm 和下游模块为 1e-4。
+不增加冻结预热或局部解冻；固定编码的原有 requires_grad=False 保留。
+仅用于预训练 instance-level 目标、下游不执行的 `project_and_aggregate` 不参与优化。
+输入 patch embedding 按预训练模型的可训练状态更新；v1.2 Base 默认可训练。
+预训练目标分支不接入模型。
+
+official 模式沿用 AdamW 的统一 weight decay（当前 0.05），不额外豁免
+encoder bias/norm；只有 HydroState 自己的观测噪声参数保持无 weight decay。
+这项 HydroState 扩展与官方没有观测噪声参数的模型明确区分。
+旧配置默认为 `recipe="legacy"`，保持原来的分组、weight decay 豁免和调度行为，
+不会改变既有实验或恢复训练。
+
+新增配置保留 125 次迭代 warmup、50 epoch 训练和 BF16，batch size 16。
+余弦下限使用 `eta_min_ratio=0.01`，保持各组比例；不能使用高于输入投影
+初始学习率的统一绝对下限。这里不承诺最佳 batch size 或性能提升。
+
+官方来源：
+[微调建议](https://github.com/allenai/rslearn/blob/master/docs/foundation_models/OlmoEarth.md#fine-tuning-optimizer)、
+[参数分组实现](https://github.com/allenai/rslearn/blob/master/rslearn/models/olmoearth_pretrain/optimizer.py)。
+
+### 配置切换与监督边界
+
+```bash
+python tools/train.py configs/hydrostate_multilevel.py
+python tools/train.py configs/hydrostate_multilevel_independent.py
+python tools/train.py configs/hydrostate_multilevel_shared.py
+```
+
+使用已有的 `HYDROSTATE_MANIFEST`、`HYDROSTATE_MODEL_PATH`、`HYDROSTATE_TARGET_STATS`
+配置数据和权重。也可直接覆盖 `model.encoder.out_indices`、
+`model.adapter.bottleneck_channels`、`model.adapter.enabled`、
+`model.interaction.mode`（none/sigmoid/softmax）、
+`model.interaction.learnable_scale`、`model.interaction.residual_scale`。
+新旧架构 checkpoint 不兼容；架构切换时使用预训练编码器开始新实验，
+不要直接恢复另一种架构的完整训练 checkpoint。
+
+三个新预设使用完全相同的优化器、标签支持和数据，适合比较 Adapter/交互贡献。
+与旧模型比较时，要另外控制学习率分组、缺测池化、batch size 和监督口径的差异。
+
+WF–SM 规则复用既有 `WaterSoilCoupling`：观测 WF 决定训练/验证聚合权重，
+预测 WF 决定导出的 SM NoData；混合像元预测陆地部分 SM，纯水体不强制 SM=0。
+ET 继续使用完整原生 PML 单元面积权重和既有标签时段。
+没有新增 WF–ET 单调性约束，也没有将 ET 拆成没有独立监督的两个分量。
+
+**重要数据边界：此提交实现上述网络和微调方案，没有凭空补齐 SMAP 足迹数据。**
+现有 Zarr/manifest 只有窗口中心 SMAP 标量，因此新预设仍使用窗口陆地加权均值的
+弱监督近似。完整足迹方案还需要观测 ID、日期、空间响应权重、覆盖检查以及按同一
+观测分组的窗口采样；现有接口不具备这些信息，不能把 batch 内任意窗口拼成一个
+SMAP 观测。当前粗尺度验证也不能证明 30 m SM 的细尺度精度。
+
+### 验证
+
+`tests/test_multilevel_model.py` 使用真实的官方小型 Encoder/Transformer 验证末层
+结果、输入投影梯度、三个特征深度、checkpoint 重算、缺失模态与补齐时相的
+batch 不变性，并验证三种预设的 40×40 输出、loss/predict 与 checkpoint 恢复。
+`tests/test_layer_decay.py` 对照官方参数映射并检查余弦调度保持层间比例。
+另外使用本地官方 v1.2 Base 权重，在 RTX 4060 上完成一次 120×120 三模态、
+BF16 前向/反向/AdamW 更新与预测，确认输入 patch embedding 和编码器各深度
+收到有效梯度。该检查使用合成标签，不是精度评估，也未提交 HPC 作业。
 
 ```bash
 python tools/train.py configs/hydrostate_staged.py

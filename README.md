@@ -69,6 +69,14 @@ Architecture variants, including progressive task-specific attention/adapters,
 auxiliary supervision and gated task interaction, are configured through
 `configs/hydrostate_staged.py`; the half-width version uses
 `configs/hydrostate_staged_light.py` (256 → 128 → 64 channels).
+The multilevel architecture uses `configs/hydrostate_multilevel.py`: OlmoEarth
+blocks 4/8/12, a shared 256 → 128 → 64 fusion decoder, zero-initialized task
+adapters on the 30 m grid, and one learned-strength sigmoid interaction.
+`hydrostate_multilevel_independent.py` disables interaction;
+`hydrostate_multilevel_shared.py` also disables adapters. These presets use the
+official layer-wise learning-rate mapping, including trainable input embeddings,
+and retain land-conditional SM supervision. Existing windows still provide
+window-mean SMAP weak supervision, not complete SMAP-footprint supervision.
 See [model architectures](docs/MODEL_ARCHITECTURES.md)
 for equations, ablations and configuration switches. Existing configs retain the
 original shared-decoder baseline.

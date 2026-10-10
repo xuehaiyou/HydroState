@@ -101,7 +101,7 @@ class OlmoEarthEncoder(nn.Module):
             times.append((timestamp, timestamp))
         return times
 
-    def forward(self, inputs: dict[str, Any]) -> torch.Tensor:
+    def _make_context(self, inputs: dict[str, Any]):
         from rslearn.train.model_context import ModelContext, RasterImage
 
         metadata = inputs.get("_temporal_metadata")
@@ -135,8 +135,10 @@ class OlmoEarthEncoder(nn.Module):
                 raise ValueError(f"sample {batch_index} has no valid satellite modality")
             context_inputs.append(sample)
 
-        context = ModelContext(inputs=context_inputs, metadatas=[])
-        output = self.backbone(context)
+        return ModelContext(inputs=context_inputs, metadatas=[])
+
+    def forward(self, inputs: dict[str, Any]) -> torch.Tensor:
+        output = self.backbone(self._make_context(inputs))
         features = output.feature_maps[0]
         if features.shape[1] != self.out_channels:
             raise RuntimeError(
