@@ -20,7 +20,7 @@ export HYDROSTATE_TARGET_STATS="${HYDROSTATE_TARGET_STATS:-${HYDROSTATE_MANIFEST
 export HYDROSTATE_LABEL_PACK="${HYDROSTATE_LABEL_PACK:-labels/ecosystem_v1}"
 export HYDROSTATE_LST_PACK="${HYDROSTATE_LST_PACK:-labels/lst_observation_v1}"
 export HYDROSTATE_MODEL_PATH="${HYDROSTATE_MODEL_PATH:-/scr/u/xiaoz/HydroState/pretrained/OlmoEarth-v1_2-Base}"
-export HYDROSTATE_CONFIG=configs/hydrostate_ecosystem_temporal_hpc.py
+export HYDROSTATE_CONFIG="${HYDROSTATE_CONFIG:-configs/hydrostate_ecosystem_temporal_hpc.py}"
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2
 export PYTHONUNBUFFERED=1

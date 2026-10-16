@@ -419,3 +419,36 @@ smoke `4243167` 已取消。正式设置保持 batch=16、累积=1、BF16、50 e
 未完成保存/全量验证；此次直接开始正式训练是用户明确选择，并非完整 smoke 已通过。
 最新决策记录见本地 `outputs/staged_submission_20261008_173337/jobs.json` 和远端快照内
 `training_release.json`。上述提交脚本仍默认采用 smoke 依赖，本次是已有 Slurm 作业的调整。
+## Multilevel retrieval with target-time queries
+
+`configs/hydrostate_ecosystem_multilevel_temporal_hpc.py` extends the multilevel
+spatial architecture to all sixteen ecosystem tasks. Its
+`MultiLevelTemporalOlmoEarthEncoder` extracts blocks 4, 8 and 12 in a single
+backbone pass and retains exact acquisition times and per-pixel masks at every
+depth. A shared `TargetTimeQuery` pools each depth for a requested instant or
+interval before `MultiLevelFusionDecoder` combines the resulting spatial maps.
+The shared decoder retains channels 256/128/64 and shallow-to-deep skip features.
+
+Each variable has an independent 64→16→16→64 residual `OutputTaskAdapter` and a
+64→32→1 regression head on the 40×40 output grid. Sigmoid-gated directed task
+interactions and their learned strengths are retained. For a recipient queried
+at time t, all source adapters receive features queried at t too. Only the
+requested recipient edges are evaluated; changing one output's requested date
+does not change the other outputs through interaction messages. The nine
+land-cover fractions share one query and are jointly softmax-normalized, leaving
+eight query groups for sixteen outputs. Decoder, query and encoder weights are
+shared across these groups; their computation is still performed per query.
+
+The data, loss supports and frozen target statistics match the single-depth
+ecosystem temporal run. WF/SM land-mask coupling is disabled because WF and SM
+can request different dates; re-enabling it would require an aligned WF support
+at the SM query time. The original multilevel optimizer's official layer-decay
+recipe and relative cosine floor are retained. Thus comparison with the existing
+single-depth temporal run also includes the optimizer recipe, adapters and task
+interactions, and is not an isolated test of encoder depth alone.
+
+Run `bash scripts/slurm/28_submit_multilevel_temporal.sh` on the HPC login node
+after synchronizing the committed code and generating ecosystem statistics.
+This submits an independent 50-epoch job and reuses ordinary directory Zarr
+labels. The script records the commit and source hashes and keeps outputs under
+`/scr/u/xiaoz/HydroState/work_dirs/ecosystem_multilevel_temporal_JOBID`.

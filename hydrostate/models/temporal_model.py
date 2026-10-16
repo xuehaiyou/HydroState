@@ -31,6 +31,10 @@ class TemporalOlmoEarthEncoder(OlmoEarthEncoder):
         core.project_and_aggregate.requires_grad_(False)
 
     def forward(self, inputs):
+        return self.forward_levels(inputs, (len(self.backbone.model.blocks) - 1,))[0]
+
+    def forward_levels(self, inputs, out_indices):
+        """Align observations once and retain their tokens at selected encoder depths."""
         from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.utils.datatypes import MaskValue
 
         context = self._make_context(inputs)
@@ -70,8 +74,15 @@ class TemporalOlmoEarthEncoder(OlmoEarthEncoder):
             sample = sample._replace(**{modality + "_mask": mask})
 
         core = self.backbone.model
-        tokens, masks = multilevel_features(
-            core, sample, self.patch_size, (len(core.blocks) - 1,), retain_tokens=True)[0]
+        levels = multilevel_features(
+            core, sample, self.patch_size, out_indices, retain_tokens=True)
+        return tuple(self._restore_observations(tokens, masks, present, gather, inputs, device)
+                     for tokens, masks in levels)
+
+    @staticmethod
+    def _restore_observations(tokens, masks, present, gather, inputs, device):
+        from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.utils.datatypes import MaskValue
+
         features, validity, observations = [], [], []
         for modality in present:
             mi = MODALITIES.index(modality)

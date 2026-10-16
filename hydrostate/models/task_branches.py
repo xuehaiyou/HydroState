@@ -237,21 +237,27 @@ class TaskGatedInteraction(nn.Module):
                     self.messages[key] = nn.Conv2d(channels, channels, 1, bias=False)
                     self.gates[key] = nn.Conv2d(2 * channels, 1, 1)
 
-    def forward(self, features):
+    def forward(self, features, targets=None):
         if set(features) != set(self.tasks):
             raise ValueError("Interaction features disagree with configured tasks")
+        targets = self.tasks if targets is None else tuple(targets)
+        if (not targets or len(set(targets)) != len(targets)
+                or not set(targets).issubset(self.tasks)):
+            raise ValueError("Interaction targets must be unique configured tasks")
         if self.mode == "none" or len(self.tasks) == 1:
-            return dict(features)
+            return {task: features[task] for task in targets}
         projected = {}
         if self.merge_ops:
             for source in self.tasks:
-                keys = [f"{source}_to_{target}" for target in self.tasks if target != source]
+                keys = [f"{source}_to_{target}" for target in targets if target != source]
+                if not keys:
+                    continue
                 # Each directed edge retains an independent projection.
                 weight = torch.cat([self.messages[key].weight for key in keys], dim=0)
                 values = F.conv2d(features[source], weight).chunk(len(keys), dim=1)
                 projected.update(zip(keys, values))
         outputs = {}
-        for target in self.tasks:
+        for target in targets:
             messages, logits = [], []
             for source in self.tasks:
                 if source == target:

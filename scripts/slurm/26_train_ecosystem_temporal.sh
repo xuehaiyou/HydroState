@@ -15,7 +15,7 @@
 #SBATCH --error=/scr/u/xiaoz/HydroState/logs/%x-%j.err
 set -euo pipefail
 source "${HYDROSTATE_CODE_ROOT:-/home/xiaoz/HydroState}/scripts/slurm/ecosystem_env.sh"
-export HYDROSTATE_WORK_DIR="${HYDROSTATE_WORK_DIR:-/scr/u/xiaoz/HydroState/work_dirs/ecosystem_temporal_${SLURM_JOB_ID}}"
+export HYDROSTATE_WORK_DIR="${HYDROSTATE_WORK_DIR:-/scr/u/xiaoz/HydroState/work_dirs/${HYDROSTATE_RUN_PREFIX:-ecosystem_temporal}_${SLURM_JOB_ID}}"
 export HYDROSTATE_PRECISION=bfloat16
 export HYDROSTATE_GPUS_PER_NODE=1
 test -s "$HYDROSTATE_TARGET_STATS"

@@ -480,6 +480,28 @@ Checksums are generated on the login node, so compute nodes do not need Git.
 The cluster currently rejects comma-separated partition lists at submission;
 select one partition per submission.
 
+For the multilevel model with temporal queries and independent task adapters,
+use `configs/hydrostate_ecosystem_multilevel_temporal_hpc.py` and submit another
+training job after the ecosystem statistics have been generated:
+
+```bash
+cd /home/xiaoz/HydroState
+git pull --ff-only origin main
+bash scripts/slurm/28_submit_multilevel_temporal.sh
+```
+
+This reuses the same samples, packs and frozen statistics, without cancelling
+existing jobs. It reads encoder blocks 4/8/12 in one pass, queries each depth at
+the requested time, and uses the original multilevel fusion decoder, 16
+independent output adapters and sigmoid task interactions. Interaction source
+features are evaluated at the recipient's query time. The nine cover classes
+share a query and are constrained to sum to one. WF/SM mask coupling stays off
+because their output dates can differ; supervision matches the existing
+16-variable temporal run. The optimizer follows the original multilevel model's
+official layer-decay recipe and relative cosine floor, with batch 2 and
+accumulation 8. Outputs go to
+`/scr/u/xiaoz/HydroState/work_dirs/ecosystem_multilevel_temporal_JOBID`.
+
 ### Original GEE export transfers
 
 One Float32 multiband GeoTIFF per sample; timestamps are stored separately in
