@@ -8,8 +8,9 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
-from hydrostate.normalization import TASKS, load_target_statistics
+from hydrostate.normalization import load_target_statistics
 from hydrostate.registry import MODELS
+from hydrostate.tasks import resolve_tasks
 
 
 def global_observation_means(local_sums, counts, count_indices):
@@ -73,15 +74,16 @@ class UncertaintyWeightedNLL(nn.Module):
     local gradients by world size compensates for DDP's gradient averaging.
     """
 
-    def __init__(self, target_statistics: str | dict, min_variance: float = 1e-6):
+    def __init__(self, target_statistics: str | dict, min_variance: float = 1e-6, tasks=None):
         super().__init__()
         if not math.isfinite(min_variance) or not 0 < min_variance < 1:
             raise ValueError("min_variance must be finite and in (0, 1)")
         self.min_variance = min_variance
-        self.target_statistics = load_target_statistics(target_statistics)
+        self.tasks = tuple(resolve_tasks(tasks))
+        self.target_statistics = load_target_statistics(target_statistics, tasks)
         values = self.target_statistics["tasks"]
-        self.register_buffer("target_mean", torch.tensor([values[t]["mean"] for t in TASKS]))
-        self.register_buffer("target_std", torch.tensor([values[t]["std"] for t in TASKS]))
+        self.register_buffer("target_mean", torch.tensor([values[t]["mean"] for t in self.tasks]))
+        self.register_buffer("target_std", torch.tensor([values[t]["std"] for t in self.tasks]))
         self.register_buffer(
             "training_fingerprint",
             torch.tensor(
@@ -90,7 +92,7 @@ class UncertaintyWeightedNLL(nn.Module):
             ),
         )
         self.log_variances = nn.ParameterDict(
-            {task: nn.Parameter(torch.zeros(())) for task in TASKS}
+            {task: nn.Parameter(torch.zeros(())) for task in self.tasks}
         )
 
     def variance(self, task):
@@ -103,7 +105,7 @@ class UncertaintyWeightedNLL(nn.Module):
 
     def local_sum(self, task, prediction, target, valid):
         """Fixed-shape NLL sum; leave shared normalization to the caller."""
-        index = TASKS.index(task)
+        index = self.tasks.index(task)
         prediction, target, valid = _masked_inputs(prediction, target, valid)
         mean, std = self.target_mean[index], self.target_std[index]
         standardized_prediction = (prediction - mean) / std

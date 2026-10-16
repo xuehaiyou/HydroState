@@ -5,7 +5,6 @@ from __future__ import annotations
 from torch import nn
 from torch.nn import functional as F
 
-from hydrostate.normalization import TASKS
 from hydrostate.registry import MODELS
 
 from .decoder import ConvBlock
@@ -79,10 +78,11 @@ class MultiLevelHydroStateModel(HydroStateModel):
             raise ValueError("MultiLevelHydroStateModel requires MultiLevelFusionDecoder")
         channels = self.decoder.out_channels
         self.adapters = nn.ModuleDict({
-            task: OutputTaskAdapter(channels=channels, **dict(adapter or {})) for task in TASKS
+            task: OutputTaskAdapter(channels=channels, **dict(adapter or {})) for task in self.tasks
         })
         cfg = dict(interaction or {})
         cfg.setdefault("type", "TaskGatedInteraction")
+        cfg.setdefault("tasks", self.task_specs)
         cfg.setdefault("channels", channels)
         cfg.setdefault("learnable_scale", True)
         if cfg["channels"] != channels:
@@ -90,9 +90,10 @@ class MultiLevelHydroStateModel(HydroStateModel):
         self.interaction = MODELS.build(cfg)
 
     def _forward(self, inputs):
-        decoded = self.decoder(self.encoder(inputs))
+        decoded = self.decoder(self._encode_inputs(inputs))
         if any(size % self.output_scale for size in decoded.shape[-2:]):
             raise ValueError("Decoded grid must be divisible by output_scale")
         shared = F.avg_pool2d(decoded, self.output_scale)
-        features = self.interaction({task: self.adapters[task](shared) for task in TASKS})
-        return {task: self.heads[task](features[task]) for task in TASKS}
+        features = self.interaction({task: self.adapters[task](shared) for task in self.tasks})
+        return self._constrain_outputs(
+            {task: self.heads[task](features[task]) for task in self.tasks})

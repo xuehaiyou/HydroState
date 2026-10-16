@@ -8,8 +8,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from hydrostate.normalization import TASKS
 from hydrostate.registry import MODELS
+from hydrostate.tasks import resolve_tasks
 
 from .decoder import SharedUNetDecoder
 
@@ -133,8 +133,10 @@ class StagedTaskDecoder(SharedUNetDecoder):
         attention=None,
         adapter=None,
         merge_ops=True,
+        tasks=None,
     ):
         super().__init__(in_channels=in_channels, channels=channels, scale_factor=scale_factor)
+        self.tasks = tuple(resolve_tasks(tasks))
         self.merge_ops = merge_ops
         attention = dict(kind="cbam", reduction=16) if attention is None else dict(attention)
         attention.setdefault("merge_ops", merge_ops)
@@ -144,7 +146,7 @@ class StagedTaskDecoder(SharedUNetDecoder):
                 TaskStage(c, channels[i - 1] if i else None, fusion, attention, adapter)
                 for i, c in enumerate(channels)
             ])
-            for task in TASKS
+            for task in self.tasks
         })
 
     def forward(self, features):
@@ -162,7 +164,7 @@ class StagedTaskDecoder(SharedUNetDecoder):
     def _forward_merged(self, shared):
         previous = None
         for index, shared_feature in enumerate(shared):
-            stages = [self.branches[task][index] for task in TASKS]
+            stages = [self.branches[task][index] for task in self.tasks]
             if previous is None:
                 inputs = [shared_feature] * len(stages)
             else:
@@ -198,36 +200,37 @@ class StagedTaskDecoder(SharedUNetDecoder):
                 else:
                     value = layer(value)  # GELU is elementwise and has no parameters.
             previous = (residual + value).chunk(len(stages), dim=1)
-        return dict(zip(TASKS, previous))
+        return dict(zip(self.tasks, previous))
 
 
 @MODELS.register_module()
 class TaskGatedInteraction(nn.Module):
-    """One simultaneous round of six directed messages at the output grid.
+    """One simultaneous round of directed messages at the output grid.
 
     Each edge has a 1x1 value projection and a scalar spatial gate computed
     from concatenated recipient/source features. Sigmoid messages are averaged;
-    softmax weights sum to one over the two incoming sources at each pixel.
+    softmax weights sum to one over the other tasks at each pixel.
     """
 
     def __init__(self, channels=128, mode="sigmoid", residual_scale=0.1, merge_ops=True,
-                 learnable_scale=False):
+                 learnable_scale=False, tasks=None):
         super().__init__()
         if mode not in ("none", "sigmoid", "softmax"):
             raise ValueError(f"Unknown interaction mode: {mode}")
         if not math.isfinite(residual_scale) or residual_scale < 0:
             raise ValueError("residual_scale must be finite and nonnegative")
+        self.tasks = tuple(resolve_tasks(tasks))
         self.mode = mode
         self.residual_scale = residual_scale
         self.merge_ops = merge_ops
         self.messages = nn.ModuleDict()
         self.gates = nn.ModuleDict()
         self.task_scales = nn.ParameterDict({
-            task: nn.Parameter(torch.tensor(float(residual_scale))) for task in TASKS
-        }) if learnable_scale and mode != "none" else nn.ParameterDict()
+            task: nn.Parameter(torch.tensor(float(residual_scale))) for task in self.tasks
+        }) if learnable_scale and mode != "none" and len(self.tasks) > 1 else nn.ParameterDict()
         if mode != "none":
-            for target in TASKS:
-                for source in TASKS:
+            for target in self.tasks:
+                for source in self.tasks:
                     if source == target:
                         continue
                     key = f"{source}_to_{target}"
@@ -235,20 +238,22 @@ class TaskGatedInteraction(nn.Module):
                     self.gates[key] = nn.Conv2d(2 * channels, 1, 1)
 
     def forward(self, features):
-        if self.mode == "none":
+        if set(features) != set(self.tasks):
+            raise ValueError("Interaction features disagree with configured tasks")
+        if self.mode == "none" or len(self.tasks) == 1:
             return dict(features)
         projected = {}
         if self.merge_ops:
-            for source in TASKS:
-                keys = [f"{source}_to_{target}" for target in TASKS if target != source]
-                # Each source still has two distinct outgoing weight matrices.
+            for source in self.tasks:
+                keys = [f"{source}_to_{target}" for target in self.tasks if target != source]
+                # Each directed edge retains an independent projection.
                 weight = torch.cat([self.messages[key].weight for key in keys], dim=0)
                 values = F.conv2d(features[source], weight).chunk(len(keys), dim=1)
                 projected.update(zip(keys, values))
         outputs = {}
-        for target in TASKS:
+        for target in self.tasks:
             messages, logits = [], []
-            for source in TASKS:
+            for source in self.tasks:
                 if source == target:
                     continue
                 key = f"{source}_to_{target}"
@@ -256,10 +261,11 @@ class TaskGatedInteraction(nn.Module):
                     projected[key] if self.merge_ops else self.messages[key](features[source])
                 )
                 logits.append(self.gates[key](torch.cat((features[target], features[source]), 1)))
-            logits = torch.stack(logits, dim=1)  # B,2,1,H,W
-            weights = logits.softmax(dim=1) if self.mode == "softmax" else logits.sigmoid() / 2
+            logits = torch.stack(logits, dim=1)  # B,(tasks-1),1,H,W
+            weights = (logits.softmax(dim=1) if self.mode == "softmax"
+                       else logits.sigmoid() / len(messages))
             if self.merge_ops:
-                update = weights[:, 0] * messages[0] + weights[:, 1] * messages[1]
+                update = sum(weights[:, i] * message for i, message in enumerate(messages))
             else:
                 update = (weights * torch.stack(messages, dim=1)).sum(dim=1)
             scale = self.task_scales[target] if target in self.task_scales else self.residual_scale

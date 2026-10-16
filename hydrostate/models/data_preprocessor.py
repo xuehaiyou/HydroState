@@ -8,22 +8,26 @@ import torch
 from mmengine.model import BaseDataPreprocessor
 
 from hydrostate.registry import MODELS
+from hydrostate.tasks import resolve_tasks
 
 from .temporal_metadata import prepare_temporal_metadata
 
 
-def aggregate_targets(targets: dict[str, Any], factor: int = 3) -> None:
+def aggregate_targets(targets: dict[str, Any], factor: int = 3, tasks=None) -> None:
     """Aggregate water labels; preserve native ET weights and scalar SMAP labels."""
     import torch.nn.functional as F
 
-    water = targets["water"]
-    if water.shape[-1] % factor or water.shape[-2] % factor:
-        raise ValueError("Label dimensions must be divisible by aggregation factor")
-    targets["water"] = F.avg_pool2d(water.float(), factor)
-    targets["water_valid"] = F.avg_pool2d(targets["water_valid"].float(), factor).eq(1)
+    for name, spec in resolve_tasks(tasks).items():
+        if spec.support != "pixel" or spec.grid != "input":
+            continue
+        value, valid = targets[name], targets[f"{name}_valid"]
+        if value.shape[-1] % factor or value.shape[-2] % factor:
+            raise ValueError("Label dimensions must be divisible by aggregation factor")
+        targets[name] = F.avg_pool2d(value.float().masked_fill(~valid, 0), factor)
+        targets[f"{name}_valid"] = F.avg_pool2d(valid.float(), factor).eq(1)
     # Legacy scalar selection is allowed for SMAP, never for native ET weights.
-    sm = targets["soil_moisture"]
-    if sm.shape[-2:] != (1, 1):
+    sm = targets.get("soil_moisture")
+    if sm is not None and sm.shape[-2:] != (1, 1):
         h, w = sm.shape[-2:]
         for key in ("soil_moisture", "soil_moisture_valid"):
             targets[key] = targets[key][..., h // 2 : h // 2 + 1, w // 2 : w // 2 + 1]
@@ -41,6 +45,13 @@ class HydroDataPreprocessor(BaseDataPreprocessor):
     intentional: the training hot path should not repeat preprocessing, and the
     same preprocessing version is recorded in every shard's attributes.
     """
+
+    def __init__(self, tasks=None, output_scale=3, **kwargs):
+        super().__init__(**kwargs)
+        if type(output_scale) is not int or output_scale < 1:
+            raise ValueError("output_scale must be a positive integer")
+        self.tasks = resolve_tasks(tasks)
+        self.output_scale = output_scale
 
     def forward(self, data: dict[str, Any], training: bool = False) -> dict[str, Any]:
         # Keep control metadata on CPU. Pack all gather indices into a single
@@ -77,7 +88,7 @@ class HydroDataPreprocessor(BaseDataPreprocessor):
         else:
             raise ValueError("Per-pixel sensor masks are required for spatial supervision")
         data["data_samples"]["prediction_valid"] = torch.nn.functional.avg_pool2d(
-            observed.float(), 3
+            observed.float(), self.output_scale
         ).eq(1)
-        aggregate_targets(data["data_samples"])
+        aggregate_targets(data["data_samples"], self.output_scale, self.tasks)
         return data

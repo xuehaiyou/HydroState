@@ -7,18 +7,20 @@ import math
 import torch
 from mmengine.evaluator import BaseMetric
 
-from hydrostate.normalization import TASKS, load_target_statistics
+from hydrostate.normalization import load_target_statistics
 from hydrostate.registry import METRICS
+from hydrostate.tasks import resolve_tasks
 
 
 @METRICS.register_module()
 class HydroStateMetric(BaseMetric):
     default_prefix = None
 
-    def __init__(self, target_statistics, **kwargs):
+    def __init__(self, target_statistics, tasks=None, **kwargs):
         super().__init__(**kwargs)
-        statistics = load_target_statistics(target_statistics)
-        self.task_scales = {task: statistics["tasks"][task]["std"] for task in TASKS}
+        self.tasks = tuple(resolve_tasks(tasks))
+        statistics = load_target_statistics(target_statistics, tasks)
+        self.task_scales = {task: statistics["tasks"][task]["std"] for task in self.tasks}
 
     def process(self, data_batch, data_samples: list[dict]) -> None:
         for sample in data_samples:
@@ -31,7 +33,7 @@ class HydroStateMetric(BaseMetric):
                 result["sm_coupling/enabled"] = 1.0
                 result["sm_coupling/output_valid"] = float((sm_valid & support).sum())
                 result["sm_coupling/input_valid"] = float(support.sum())
-            for task in TASKS:
+            for task in self.tasks:
                 prediction = sample[f"supervised_{task}"].detach().double()
                 target = sample[f"target_{task}"].detach().double()
                 valid = sample[f"valid_{task}"].detach().bool()
@@ -51,7 +53,7 @@ class HydroStateMetric(BaseMetric):
     def compute_metrics(self, results: list[dict]) -> dict[str, float]:
         metrics: dict[str, float] = {}
         rmse_values = []
-        for task in TASKS:
+        for task in self.tasks:
             totals = {
                 key: sum(item.get(f"{task}/{key}", 0.0) for item in results)
                 for key in ("count", "sum_abs", "sum_sq", "sum_err", "sum_y", "sum_y2")

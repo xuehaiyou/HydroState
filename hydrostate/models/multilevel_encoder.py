@@ -31,7 +31,8 @@ def pool_modalities(tokens, masks):
     return result.permute(0, 3, 1, 2).contiguous()
 
 
-def multilevel_features(core, sample, patch_size, out_indices, input_res=10):
+def multilevel_features(core, sample, patch_size, out_indices, input_res=10,
+                        retain_tokens=False):
     """Return normalized BCHW features, ordered shallow to deep.
 
     Always retain a key-validity mask, also in eval, so padded observations
@@ -75,7 +76,8 @@ def multilevel_features(core, sample, patch_size, out_indices, input_res=10):
         spatial = core.pop_register_tokens(tokens)[0] if core.has_register_tokens else tokens
         restored, _ = core.add_removed_tokens(core.norm(spatial), indices, valid)
         modality_tokens = core.split_and_expand_per_modality(restored, shapes)
-        features.append(pool_modalities(modality_tokens, masks).to(tokens.dtype))
+        features.append((modality_tokens, masks) if retain_tokens else
+                        pool_modalities(modality_tokens, masks).to(tokens.dtype))
     return tuple(features)
 
 

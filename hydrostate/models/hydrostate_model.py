@@ -12,38 +12,44 @@ from hydrostate.losses.uncertainty_nll import (
     global_observation_means,
     masked_standardized_mse_sum,
 )
-from hydrostate.normalization import TASKS
 from hydrostate.registry import MODELS
+from hydrostate.tasks import resolve_tasks, task_config
 
 from .water_soil_coupling import WaterSoilCoupling, weighted_sm_mean
 
 
-def supervision_values(task, prediction, samples, sm_support=None):
+def supervision_values(task, prediction, samples, sm_support=None, tasks=None):
     """Return predictions and labels on the same observational support."""
     prediction = prediction.float()  # Stable reductions under BF16 inference/training.
     support = samples.get("prediction_valid", torch.ones_like(prediction, dtype=torch.bool))
-    if task == "water":
+    spec = resolve_tasks(tasks)[task]
+    if spec.support == "pixel":
+        if samples[task].shape != prediction.shape:
+            raise ValueError(f"Pixel task {task} must match the model output grid")
         return prediction, samples[task], samples[f"{task}_valid"] & support
-    if task == "soil_moisture":
-        if sm_support is not None:
+    if spec.support == "window_mean":
+        if task == "soil_moisture" and sm_support is not None:
             return (sm_support.project(prediction), samples[task],
                     samples[f"{task}_valid"] & sm_support.valid)
         count = support.sum(dim=(-2, -1), keepdim=True)
         pooled = prediction.masked_fill(~support, 0).sum(dim=(-2, -1), keepdim=True)
         pooled = pooled / count.clamp(min=1)
         return pooled, samples[task], samples[f"{task}_valid"] & (count > 0)
-    if "et_native_weights" not in samples:
-        raise ValueError("ET supervision requires native pixel area weights")
-    weights = samples["et_native_weights"].float()
+    if f"{task}_native_weights" not in samples:
+        raise ValueError(f"{task} supervision requires native pixel area weights")
+    weights = samples[f"{task}_native_weights"].float()
     pooled = (prediction * weights).sum(dim=(-2, -1))
     complete = ~((weights > 0) & ~support).any(dim=(-2, -1))
-    valid = samples["et_native_valid"] & complete & (weights.sum(dim=(-2, -1)) > 0)
-    return pooled, samples["et_native_value"], valid
+    valid = samples[f"{task}_native_valid"] & complete & (weights.sum(dim=(-2, -1)) > 0)
+    return pooled, samples[f"{task}_native_value"], valid
 
 
-def site_supervision_values(task, prediction, samples, sm_support=None):
+def site_supervision_values(task, prediction, samples, sm_support=None, tasks=None):
     """Optional station observation on a completely observed, nonempty footprint."""
-    if not all(key in samples for key in ("site_value", "site_valid", "site_footprint")):
+    index = resolve_tasks(tasks)[task].station_index
+    if index is None or not all(
+        key in samples for key in ("site_value", "site_valid", "site_footprint")
+    ):
         return None
     footprint = samples["site_footprint"].float()
     if footprint.ndim == 3:
@@ -51,13 +57,11 @@ def site_supervision_values(task, prediction, samples, sm_support=None):
     if task == "soil_moisture" and sm_support is not None:
         weights, denominator, complete = sm_support.station_support(footprint)
         pooled = weighted_sm_mean(prediction, weights, denominator[..., None, None])
-        index = TASKS.index(task)
         target = samples["site_value"][:, index].reshape(-1, 1)
         valid = samples["site_valid"][:, index].bool().reshape(-1, 1) & complete
         return pooled.flatten(1), target, valid
     denominator = footprint.sum(dim=(-2, -1))
     pooled = (prediction.float() * footprint).sum(dim=(-2, -1)) / denominator.clamp(min=1e-6)
-    index = TASKS.index(task)
     target = samples["site_value"][:, index].reshape(-1, 1)
     valid = samples["site_valid"][:, index].bool().reshape(-1, 1) & (denominator > 0)
     if "prediction_valid" in samples:
@@ -65,10 +69,10 @@ def site_supervision_values(task, prediction, samples, sm_support=None):
     return pooled, target, valid
 
 
-def combined_supervision_values(task, prediction, samples, sm_support=None):
+def combined_supervision_values(task, prediction, samples, sm_support=None, tasks=None):
     """Use identical product and optional station support for every head."""
-    product = supervision_values(task, prediction, samples, sm_support)
-    site = site_supervision_values(task, prediction, samples, sm_support)
+    product = supervision_values(task, prediction, samples, sm_support, tasks)
+    site = site_supervision_values(task, prediction, samples, sm_support, tasks)
     if site is None:
         return product
     return tuple(torch.cat((p.flatten(), s.flatten())) for p, s in zip(product, site))
@@ -87,12 +91,14 @@ class PreparedTaskSupervision:
     denominator: torch.Tensor | None = None
     site_footprint: torch.Tensor | None = None
     site_denominator: torch.Tensor | None = None
+    kind: str | None = None
 
     def project(self, prediction):
         prediction = prediction.float()
-        if self.task == "water":
+        kind = self.kind or resolve_tasks()[self.task].support
+        if kind == "pixel":
             pooled = prediction
-        elif self.task == "soil_moisture":
+        elif kind == "window_mean":
             if self.weights is not None:
                 pooled = weighted_sm_mean(prediction, self.weights, self.denominator)
             else:
@@ -110,8 +116,9 @@ class PreparedTaskSupervision:
         return pooled
 
 
-def prepare_supervision(outputs, samples, sm_support=None):
+def prepare_supervision(outputs, samples, sm_support=None, tasks=None):
     """Compute support, completeness and counts once per batch, never across batches."""
+    specs = resolve_tasks(tasks)
     reference = next(iter(outputs.values()))
     support = samples.get("prediction_valid")
     if support is None:
@@ -126,34 +133,38 @@ def prepare_supervision(outputs, samples, sm_support=None):
         site_complete = (site_count > 0) & ~((footprint > 0) & ~support).any(dim=(-2, -1))
     prepared = {}
     for task, prediction in outputs.items():
+        spec = specs[task]
         weights = denominator = None
-        task_footprint, task_site_denominator = footprint, site_denominator
+        task_footprint = footprint if spec.station_index is not None else None
+        task_site_denominator = site_denominator if task_footprint is not None else None
         task_site_complete = site_complete
-        if task == "water":
+        if spec.support == "pixel":
+            if samples[task].shape != prediction.shape:
+                raise ValueError(f"Pixel task {task} must match the model output grid")
             target, valid = samples[task], samples[f"{task}_valid"] & support
             shape = prediction.shape
-        elif task == "soil_moisture":
-            if sm_support is None:
+        elif spec.support == "window_mean":
+            if sm_support is None or task != "soil_moisture":
                 count = support.sum(dim=(-2, -1), keepdim=True)
                 denominator = count.clamp(min=1)
                 valid = samples[f"{task}_valid"] & (count > 0)
             else:
                 weights, denominator = sm_support.weights, sm_support.denominator
                 valid = samples[f"{task}_valid"] & sm_support.valid
-                if footprint is not None:
+                if task_footprint is not None:
                     task_footprint, task_site_denominator, task_site_complete = (
                         sm_support.station_support(footprint)
                     )
             target, shape = samples[task], denominator.shape
         else:
-            if "et_native_weights" not in samples:
-                raise ValueError("ET supervision requires native pixel area weights")
-            weights = samples["et_native_weights"].float()
+            if f"{task}_native_weights" not in samples:
+                raise ValueError(f"{task} supervision requires native pixel area weights")
+            weights = samples[f"{task}_native_weights"].float()
             complete = ~((weights > 0) & ~support).any(dim=(-2, -1))
-            valid = samples["et_native_valid"] & complete & (weights.sum(dim=(-2, -1)) > 0)
-            target, shape = samples["et_native_value"], weights.shape[:-2]
-        if footprint is not None:
-            index = TASKS.index(task)
+            valid = samples[f"{task}_native_valid"] & complete & (weights.sum(dim=(-2, -1)) > 0)
+            target, shape = samples[f"{task}_native_value"], weights.shape[:-2]
+        if task_footprint is not None:
+            index = spec.station_index
             site_valid = samples["site_valid"][:, index].bool().reshape(-1, 1) & task_site_complete
             target = torch.cat((target.flatten(), samples["site_value"][:, index].reshape(-1)))
             valid = torch.cat((valid.flatten(), site_valid.flatten()))
@@ -162,7 +173,7 @@ def prepare_supervision(outputs, samples, sm_support=None):
             target, valid = target.expand(shape), valid.expand(shape)
         prepared[task] = PreparedTaskSupervision(
             task, target, valid, support, valid.sum(), weights, denominator,
-            task_footprint, task_site_denominator,
+            task_footprint, task_site_denominator, spec.support,
         )
     return prepared
 
@@ -182,26 +193,79 @@ class HydroStateModel(BaseModel):
         data_preprocessor: dict[str, Any] | None = None,
         init_cfg: dict[str, Any] | None = None,
         water_soil_coupling: dict[str, Any] | None = None,
+        tasks: dict | None = None,
+        input_fusion: dict | None = None,
+        fraction_groups: list[list[str]] | None = None,
     ) -> None:
+        self.task_specs = resolve_tasks(tasks)
+        self.tasks = tuple(self.task_specs)
+        if data_preprocessor is not None:
+            data_preprocessor = dict(data_preprocessor)
+            if str(data_preprocessor.get("type", "")).endswith("HydroDataPreprocessor"):
+                if (data_preprocessor.get("tasks") is not None
+                        and resolve_tasks(data_preprocessor["tasks"]) != self.task_specs):
+                    raise ValueError("Preprocessor tasks disagree with model tasks")
+                if data_preprocessor.get("output_scale", output_scale) != output_scale:
+                    raise ValueError("Preprocessor output_scale disagrees with model")
+                data_preprocessor.setdefault("tasks", task_config(self.task_specs))
+                data_preprocessor.setdefault("output_scale", output_scale)
         super().__init__(data_preprocessor=data_preprocessor, init_cfg=init_cfg)
-        if set(heads) != set(TASKS):
-            raise ValueError(f"heads must be exactly {TASKS}, got {tuple(heads)}")
+        if set(heads) != set(self.tasks):
+            raise ValueError(f"heads must be exactly {self.tasks}, got {tuple(heads)}")
+        self.fraction_groups = fraction_groups or []
+        grouped = set()
+        for group in self.fraction_groups:
+            if (len(group) < 2 or len(set(group)) != len(group)
+                    or grouped.intersection(group) or not set(group).issubset(heads)):
+                raise ValueError("Fraction groups require disjoint groups of configured heads")
+            if any(self.task_specs[name].support != "pixel"
+                   or heads[name].get("activation", "identity") != "identity"
+                   or heads[name].get("out_channels", 1) != 1 for name in group):
+                raise ValueError("Fraction groups require pixel tasks with identity/logit heads")
+            grouped.update(group)
+        decoder = dict(decoder)
+        if str(decoder.get("type", "")).endswith("StagedTaskDecoder"):
+            if (decoder.get("tasks") is not None
+                    and resolve_tasks(decoder["tasks"]) != self.task_specs):
+                raise ValueError("Decoder tasks disagree with model tasks")
+            decoder.setdefault("tasks", task_config(self.task_specs))
         self.encoder = MODELS.build(encoder)
         self.decoder = MODELS.build(decoder)
+        self.input_fusion = MODELS.build(input_fusion) if input_fusion else None
         self.heads = torch.nn.ModuleDict({name: MODELS.build(cfg) for name, cfg in heads.items()})
-        self.loss_module = MODELS.build(dict(loss, target_statistics=target_statistics))
+        self.loss_module = MODELS.build(dict(
+            loss, target_statistics=target_statistics, tasks=task_config(self.task_specs)))
+        if type(output_scale) is not int or output_scale < 1:
+            raise ValueError("output_scale must be a positive integer")
         self.output_scale = output_scale
         self.water_soil_coupling = (
             WaterSoilCoupling(**water_soil_coupling) if water_soil_coupling is not None else None
         )
+        if self.water_soil_coupling is not None and not {"water", "soil_moisture"}.issubset(heads):
+            raise ValueError("Water-soil coupling requires water and soil_moisture tasks")
+
+    def _encode_inputs(self, inputs):
+        features = self.encoder(inputs)
+        return self.input_fusion(features, inputs) if self.input_fusion is not None else features
 
     def _forward(self, inputs: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        features = self.encoder(inputs)
+        features = self._encode_inputs(inputs)
         decoded = self.decoder(features)
         if decoded.shape[-1] % self.output_scale or decoded.shape[-2] % self.output_scale:
             raise ValueError("Decoded grid must be divisible by output_scale")
         decoded = torch.nn.functional.avg_pool2d(decoded, self.output_scale)
-        return {name: self.heads[name](decoded) for name in TASKS}
+        return self._constrain_outputs({name: self.heads[name](decoded) for name in self.tasks})
+
+    def _constrain_outputs(self, outputs):
+        """A joint softmax makes exhaustive land-cover fractions sum to one."""
+        for group in getattr(self, "fraction_groups", []):
+            if not set(group).intersection(outputs):
+                continue
+            if not set(group).issubset(outputs):
+                raise ValueError("Auxiliary supervision must include an entire fraction group")
+            fractions = torch.cat([outputs[name] for name in group], dim=1).softmax(dim=1)
+            outputs.update(zip(group, fractions.split(1, dim=1)))
+        return outputs
 
     def loss(
         self, inputs: dict[str, torch.Tensor], data_samples: dict[str, Any]
@@ -210,14 +274,16 @@ class HydroStateModel(BaseModel):
         return self._loss_from_outputs(outputs, data_samples)
 
     def _loss_from_outputs(self, outputs, data_samples, auxiliary=None, auxiliary_weights=None):
+        task_specs = getattr(self, "task_specs", None)
+        tasks = tuple(resolve_tasks(task_specs))
         coupling = getattr(self, "water_soil_coupling", None)
         sm_support = (
             coupling.prepare(outputs, data_samples, supervision=True)
             if coupling is not None and coupling.enabled else None
         )
-        prepared = prepare_supervision(outputs, data_samples, sm_support)
+        prepared = prepare_supervision(outputs, data_samples, sm_support, task_specs)
         names, sums, count_indices = [], [], []
-        for index, task in enumerate(TASKS):
+        for index, task in enumerate(tasks):
             plan = prepared[task]
             names.append(f"loss_{task}")
             sums.append(self.loss_module.local_sum(
@@ -225,7 +291,7 @@ class HydroStateModel(BaseModel):
             ))
             count_indices.append(index)
         for task, prediction in (auxiliary or {}).items():
-            index = TASKS.index(task)
+            index = tasks.index(task)
             plan = prepared[task]
             names.append(f"loss_aux_{task}")
             sums.append(masked_standardized_mse_sum(
@@ -234,12 +300,12 @@ class HydroStateModel(BaseModel):
             ))
             count_indices.append(index)
         values, counts = global_observation_means(
-            sums, torch.stack([prepared[task].count for task in TASKS]),
+            sums, torch.stack([prepared[task].count for task in tasks]),
             torch.tensor(count_indices, dtype=torch.long, device=sums[0].device),
         )
         objectives = dict(zip(names, values))
         losses: dict[str, torch.Tensor] = {}
-        for index, task in enumerate(TASKS):
+        for index, task in enumerate(tasks):
             losses[f"loss_{task}"] = objectives[f"loss_{task}"]
             losses[f"valid_count_{task}"] = counts[index]
             variance = self.loss_module.variance(task).detach()
@@ -252,6 +318,8 @@ class HydroStateModel(BaseModel):
     def predict(
         self, inputs: dict[str, torch.Tensor], data_samples: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
+        task_specs = getattr(self, "task_specs", None)
+        tasks = tuple(resolve_tasks(task_specs))
         outputs = self._forward(inputs)
         coupling = getattr(self, "water_soil_coupling", None)
         sm_prediction_support = sm_supervision_support = None
@@ -267,12 +335,13 @@ class HydroStateModel(BaseModel):
             {}
             if data_samples is None
             else {
-                task: supervision_values(task, outputs[task], data_samples, sm_supervision_support)
-                for task in TASKS
+                task: supervision_values(
+                    task, outputs[task], data_samples, sm_supervision_support, task_specs)
+                for task in tasks
             }
         )
         for index in range(batch_size):
-            item = {task: outputs[task][index] for task in TASKS}
+            item = {task: outputs[task][index] for task in tasks}
             if sm_prediction_support is not None:
                 sm_valid = sm_prediction_support.pixel_valid[index]
                 item["soil_moisture"] = item["soil_moisture"].masked_fill(~sm_valid, float("nan"))
@@ -290,10 +359,10 @@ class HydroStateModel(BaseModel):
             if data_samples is not None:
                 # Preserve spatial support for validation visualization. ET
                 # targets/predictions below are scalars on native footprints.
-                for key in ("prediction_valid", "et_native_weights"):
+                for key in ("prediction_valid", *(f"{task}_native_weights" for task in tasks)):
                     if key in data_samples:
                         item[key] = data_samples[key][index]
-                for task in TASKS:
+                for task in tasks:
                     pred, target, valid = supervised[task]
                     item[f"supervised_{task}"] = pred[index]
                     item[f"target_{task}"] = target[index]

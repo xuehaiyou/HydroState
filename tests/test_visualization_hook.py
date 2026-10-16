@@ -142,6 +142,22 @@ def test_disabled_or_skipped_hook_does_no_work(tmp_path, kwargs):
     assert not (tmp_path / "visualizations").exists()
 
 
+def test_query_times_are_moved_to_cpu_and_saved_per_variable(tmp_path, monkeypatch):
+    sample = _prediction()
+    sample["target_time"] = {task: torch.tensor([1600000000, 1600000000]) for task in TASKS}
+    sample["target_time"]["et"][1] += 8 * 86400
+    cpu = _cpu_sample(sample)
+    assert isinstance(cpu["target_time"]["et"], np.ndarray)
+    hook = HydroVisualizationHook(num_samples=1)
+    runner = _runner(tmp_path)
+    monkeypatch.setattr(hook, "_draw", lambda sample, path: None)
+    hook.before_val_epoch(runner)
+    hook.after_val_iter(runner, 0, outputs=[sample])
+    hook.after_val_epoch(runner)
+    report = json.loads((tmp_path / "visualizations/epoch_001/samples.json").read_text())
+    assert report[0]["target_time"]["et"] == [1600000000, 1600000000 + 8 * 86400]
+
+
 def test_l40s_config_and_smoke_preserve_hook(monkeypatch):
     monkeypatch.setenv("HYDROSTATE_VIS_NUM_SAMPLES", "7")
     root = Path(__file__).resolve().parents[1]

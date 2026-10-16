@@ -12,8 +12,8 @@ from mmengine.dist import all_gather_object
 from mmengine.hooks import Hook
 from mmengine.runner import IterBasedTrainLoop
 
-from hydrostate.normalization import TASKS
 from hydrostate.registry import HOOKS
+from hydrostate.tasks import resolve_tasks
 
 
 def _masked(values, valid):
@@ -50,8 +50,8 @@ def comparison_maps(sample, task):
     supervised, target, valid = (
         sample[f"{prefix}_{task}"] for prefix in ("supervised", "target", "valid")
     )
-    if task == "et":
-        weights = sample["et_native_weights"]
+    if f"{task}_native_weights" in sample:
+        weights = sample[f"{task}_native_weights"]
         return (
             prediction,
             _native_map(supervised, weights, valid),
@@ -68,6 +68,8 @@ def _cpu_sample(sample):
             if value.is_floating_point():
                 value = value.float()  # NumPy does not support torch.bfloat16.
             result[key] = value.cpu().numpy()
+        elif isinstance(value, dict):
+            result[key] = _cpu_sample(value)
         else:
             result[key] = value
     return result
@@ -83,7 +85,8 @@ class HydroVisualizationHook(Hook):
     retained; inference is reused from validation and only rank zero writes.
     """
 
-    def __init__(self, num_samples=4, interval=1, out_dir="visualizations", et_vmax=10.0):
+    def __init__(self, num_samples=4, interval=1, out_dir="visualizations", et_vmax=10.0,
+                 tasks=None, task_styles=None):
         if not isinstance(num_samples, int) or num_samples < 0:
             raise ValueError("num_samples must be a nonnegative integer (0 disables plotting)")
         if not isinstance(interval, int) or interval < 1:
@@ -94,6 +97,8 @@ class HydroVisualizationHook(Hook):
         self.interval = interval
         self.out_dir = out_dir
         self.et_vmax = et_vmax
+        self.tasks = tuple(resolve_tasks(tasks))
+        self.task_styles = task_styles or {}
         self._active = False
         self._candidates = {}
 
@@ -114,7 +119,7 @@ class HydroVisualizationHook(Hook):
             sample_id = str(sample["metainfo"]["sample_id"])
             # Default supervision support uses labels/input coverage. Explicit
             # predicted-WF support can change selection as the model evolves.
-            count = sum(bool(sample[f"valid_{task}"].any()) for task in TASKS)
+            count = sum(bool(sample[f"valid_{task}"].any()) for task in self.tasks)
             key = (-count, sample_id)
             if sample_id in self._candidates:
                 continue  # Distributed samplers can pad with duplicate samples.
@@ -150,7 +155,10 @@ class HydroVisualizationHook(Hook):
                     sample_id=key[1],
                     file=filename,
                     metainfo=sample["metainfo"],
-                    valid_counts={task: int(sample[f"valid_{task}"].sum()) for task in TASKS},
+                    **({"target_time": {name: bounds.tolist() for name, bounds in
+                                        sample["target_time"].items()}}
+                       if "target_time" in sample else {}),
+                    valid_counts={task: int(sample[f"valid_{task}"].sum()) for task in self.tasks},
                 )
             )
         (directory / "samples.json").write_text(
@@ -162,7 +170,7 @@ class HydroVisualizationHook(Hook):
                 self.num_samples,
                 len(selected),
             )
-        runner.logger.info("Saved %d WF/SM/ET comparisons to %s", len(selected), directory)
+        runner.logger.info("Saved %d task comparisons to %s", len(selected), directory)
 
     def _draw(self, sample, path):
         # Agg works on headless SLURM nodes without changing global pyplot state.
@@ -170,9 +178,9 @@ class HydroVisualizationHook(Hook):
         from matplotlib.backends.backend_agg import FigureCanvasAgg
         from matplotlib.figure import Figure
 
-        figure = Figure(figsize=(12, 11), layout="constrained")
+        figure = Figure(figsize=(12, 11 * len(self.tasks) / 3), layout="constrained")
         FigureCanvasAgg(figure)
-        axes = figure.subplots(3, 3)
+        axes = figure.subplots(len(self.tasks), 3, squeeze=False)
         meta = sample["metainfo"]
         figure.suptitle(
             f"{self._label} | {meta['sample_id']}\n{meta.get('target_time', '')} | validation",
@@ -200,25 +208,44 @@ class HydroVisualizationHook(Hook):
                 "ET ground truth - native cells",
             ),
         )
-        for row, (task, unit, palette, vmax) in enumerate(
-            zip(
-                TASKS,
-                ("fraction", "m³/m³", "mm/day"),
-                ("Blues", "YlGnBu", "YlOrRd"),
-                (1.0, 1.0, self.et_vmax),
-            )
-        ):
+        styles = {
+            "water": dict(unit="fraction", palette="Blues", vmin=0, vmax=1, titles=titles[0]),
+            "soil_moisture": dict(unit="m³/m³", palette="YlGnBu", vmin=0, vmax=1,
+                                  titles=titles[1]),
+            "et": dict(unit="mm/day", palette="YlOrRd", vmin=0, vmax=self.et_vmax,
+                       titles=titles[2]),
+        }
+        for row, task in enumerate(self.tasks):
+            maps = comparison_maps(sample, task)
+            finite = np.concatenate([value[np.isfinite(value)] for value in maps])
+            style = dict(unit=task, palette="viridis",
+                         vmin=float(finite.min()) if finite.size else 0,
+                         vmax=float(finite.max()) if finite.size else 1,
+                         titles=(f"{task} prediction", f"{task} at observation support",
+                                 f"{task} ground truth"))
+            style.update(styles.get(task, {}))
+            style.update(self.task_styles.get(task, {}))
+            unit, palette, vmax = style["unit"], style["palette"], style["vmax"]
             cmap = colormaps[palette].with_extremes(bad="#d9d9d9")
-            for column, values in enumerate(comparison_maps(sample, task)):
+            for column, values in enumerate(maps):
                 axis = axes[row, column]
                 artist = axis.imshow(
                     np.ma.masked_invalid(values),
                     cmap=cmap,
-                    vmin=0,
+                    vmin=style["vmin"],
                     vmax=vmax,
                     interpolation="nearest",
                 )
-                axis.set_title(titles[row][column], fontsize=10)
+                title = style["titles"][column]
+                if task in sample.get("target_time", {}):
+                    from datetime import UTC, datetime
+
+                    start, end = sample["target_time"][task]
+                    stamp = datetime.fromtimestamp(int(start), UTC).isoformat()
+                    if start != end:
+                        stamp = f"[{stamp},\n{datetime.fromtimestamp(int(end), UTC).isoformat()})"
+                    title += "\n" + stamp
+                axis.set_title(title, fontsize=10)
                 axis.set_xticks([])
                 axis.set_yticks([])
                 if not np.isfinite(values).any():
@@ -230,7 +257,7 @@ class HydroVisualizationHook(Hook):
                         va="center",
                         transform=axis.transAxes,
                     )
-                elif task == "soil_moisture" and column > 0:
+                elif values.size == 1 and column > 0:
                     axis.text(
                         0.5,
                         0.5,
@@ -242,7 +269,7 @@ class HydroVisualizationHook(Hook):
                     )
             figure.colorbar(artist, ax=list(axes[row]), label=unit, shrink=0.8, extend="max")
         figure.supxlabel(
-            "Gray: invalid/unobserved. Fixed color limits across epochs.\n"
+            "Gray: invalid/unobserved. Custom tasks use per-sample limits unless configured.\n"
             "SM scalar panels are not spatial maps. ET native panels use footprint projection; "
             "boundary pixels are blended.",
             fontsize=9,

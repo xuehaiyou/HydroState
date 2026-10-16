@@ -21,7 +21,8 @@ def olmoearth_layer_id(name: str, num_layers: int) -> int:
     and final encoder norms use ``num_layers``. The shared decoder and heads
     use depth ``num_layers + 1`` and therefore the unscaled base LR.
     """
-    if name.startswith(("decoder.", "heads.", "auxiliary_heads.", "interaction.", "loss_module.")):
+    if name.startswith(("decoder.", "heads.", "auxiliary_heads.", "interaction.",
+                        "loss_module.", "input_fusion.")):
         return num_layers + 1
     match = _BLOCK_PATTERN.search(name)
     if match:

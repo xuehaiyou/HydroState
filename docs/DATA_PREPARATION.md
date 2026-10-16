@@ -4,7 +4,242 @@ The active pipeline is `hydrostate/data/gee_sampling.py`, launched through
 `scripts/run_gee_sampling.sh`. It reads all satellite imagery and product labels
 from GEE. The former local coverage and station tools remain optional legacy tools.
 
+## Add variables to existing samples
+
+Use immutable input/label packs to extend an existing sample library. This does
+not rerun sample selection or redownload the satellite inputs. A source-specific
+producer first obtains arrays on the existing windows and observation times, from
+GEE, local rasters, or another provider. The new importer consumes already aligned
+arrays; it does not add automatic downloads for arbitrary GEE collection names.
+
+For example, a terrain pack specification `terrain.json` is:
+
+```json
+{
+  "kind": "input",
+  "source": "Your elevation product, release and resampling recipe",
+  "version": "1",
+  "variables": {
+    "elevation": {
+      "shape": [1, 120, 120],
+      "dtype": "float32",
+      "units": "m",
+      "temporal": "static",
+      "grid": "input"
+    }
+  }
+}
+```
+
+Prepare a Parquet records file with `sample_id` and `npz_path` columns. Each NPZ
+contains `elevation` and `elevation_valid` arrays of the specified shape; paths
+are relative to the records file. A sequence input also needs `<variable>_time`
+as an integer UTC-epoch-seconds vector. IDs are copied from `samples.parquet`.
+
+```bash
+python tools/data/build_variable_pack.py \
+  --manifest /path/to/dataset/samples.parquet \
+  --records /path/to/aligned/terrain_records.parquet \
+  --spec /path/to/terrain.json \
+  --output /path/to/dataset/inputs/terrain_v1
+```
+
+To add temperature regression labels at the model's 30 m output grid, use
+`kind="label"` and a variable specification such as
+`"temperature": {"shape": [1,40,40], "units": "K", "grid": "output"}`.
+The NPZ keys are `temperature` and `temperature_valid`. Spatial/time matching,
+quality masks and unit conversion remain the producer's responsibility. Do not
+turn coarse native products into fine-resolution truth by interpolation.
+
+Producers can avoid intermediate NPZ files by calling the streaming writer directly:
+
+```python
+from hydrostate.storage import VariablePackWriter
+
+with VariablePackWriter(
+    "dataset/inputs/terrain_v1", "dataset/samples.parquet",
+    kind="input", source="product and processing recipe", version="1",
+    variables={"elevation": dict(shape=[1, 120, 120], units="m",
+                                  temporal="static", grid="input")},
+) as writer:
+    # aligned_records yields existing sample IDs and arrays; missing pixels have false masks.
+    for sample_id, elevation, valid in aligned_records:
+        writer.write(sample_id, {"elevation": elevation, "elevation_valid": valid})
+    writer.finalize()
+```
+
+`configs/hydrostate_extended.py` is a complete configuration example adding these
+two packs. Set its dataset paths for your library. Shared top-level `tasks`,
+`input_packs`, and `label_packs` are propagated by the training/statistics CLI to
+the datasets, model and evaluators. Explicit `variables` selects which arrays to
+read. Model heads must match the task names; `input_fusion.inputs` must match the
+selected auxiliary inputs. For direct `Runner.from_cfg` use, call
+`hydrostate.cli.configure_target_statistics` first, as the standard CLI does.
+
+Compute a new frozen statistics file using the same configuration before training:
+
+```bash
+python tools/data/compute_target_statistics.py \
+  --config configs/hydrostate_extended.py \
+  --output /path/to/dataset/target_stats_extended_v1.json --num-workers 4
+
+HYDROSTATE_TARGET_STATS=/path/to/dataset/target_stats_extended_v1.json \
+  python tools/train.py configs/hydrostate_extended.py
+```
+
+Only training rows contribute statistics. A pack may omit samples; their new
+labels are masked out while other tasks can still train. Adding/replacing a pack
+requires a new statistics version. Keep published packs and statistics files
+alongside the saved experiment configuration. See `DATA_SCHEMA.md` for supported
+shapes, observation support, provenance checks and current adapter boundaries.
+
 ## Environment and launch
+
+### Add ecosystem labels to the existing 20,000 merged_v1 samples
+
+The producer uses `computePixels` directly and never changes base samples or
+inputs. It reuses each sample's exact DW asset, PML GPP from the selected ET
+asset when available (otherwise the containing interval), containing MCD15A3H
+LAI, same-date MCD43A3 albedo, and same-UTC-date Landsat 8/9 C2 L2 surface
+temperature. This baseline producer keeps the original same-date LST policy;
+the separate observation-time extension below adds paired Landsat dates.
+
+```bash
+# Run tests and validate the 64-sample pilot; download it only if absent.
+bash scripts/verify_gee_labels.sh
+
+# Run all 20,000 samples, reusing completed pilot downloads.
+WORKERS=8 bash scripts/run_gee_labels.sh
+```
+
+Defaults: `SAMPLE_ROOT=/mnt/d/Hydrostate/samples/merged_v1`, production
+`OUTPUT_DIR=$SAMPLE_ROOT/labels/ecosystem_v1`, pilot
+`PILOT_DIR=$SAMPLE_ROOT/labels/ecosystem_pilot_v2`, and shared
+`WORK_DIR=$SAMPLE_ROOT/labels/.ecosystem_clear_v1.work`. These paths, `PYTHON`
+and `GEE_PROJECT` are overridable environment variables. Re-run the same command
+after interruption: a SQLite checkpoint preserves successful samples; failed
+requests are retried and never turned into missing observations. A completed
+pack is immutable; publishing to an existing directory is refused. The work
+directory contains a reusable compressed cache, not training ZIP archives.
+
+Published ordinary Zarr directories contain nine cover indicators, LAI, GPP,
+black-sky and white-sky shortwave albedo, LST and LST uncertainty. Existing ET
+and SM remain in the base library, making 16 configured prediction tasks.
+`coverage.json` reports source coverage and separate 2/3/5 K sensitivity counts;
+these comparison counts do not change the selected 2 K training cutoff.
+
+- DW uses categorical `label`, not confidence probabilities, and retains a
+  common mask. Each valid 30 m label requires nine valid 10 m subpixels.
+- LAI uses `Lai * 0.1`, main algorithm with/without saturation, clear cloud state,
+  and excludes extra-QC snow, high aerosol, cirrus, internal cloud and shadow.
+- GPP uses `GPP * 0.01` gC/m²/day on its containing eight-day interval. It shares
+  the PML model with ET; their relationship is not independent validation.
+- Albedo uses both shortwave bands times 0.001 with full BRDF inversions. Its
+  daily date represents a 16-day retrieval window, not an instantaneous value.
+- LST uses `ST_B10 * 0.00341802 + 149` K, L2SP scenes, and excludes fill, cloud,
+  dilated cloud, cirrus and shadow. Clear snow remains eligible. Store `ST_QA *
+  0.01` K and exclude uncertainty **above 2 K** in training. The 30 m output
+  value averages nearest-sampled 10 m contributors; all contributors must pass
+  source masks, and their maximum uncertainty is retained conservatively.
+  Landsat thermal information remains approximately 100 m, despite the 30 m grid.
+- LAI/GPP/albedo use complete native footprints with equal-area polygon weights.
+  Missing/partial cells cannot supervise a cropped or upsampled pseudo-observation.
+
+After the full pack is published, validate it and create separate training-only
+statistics. The configuration defaults to the 2 K cutoff and this new statistics
+file; it does not reuse the original three-task statistics:
+
+```bash
+python tools/data/validate_gee_labels.py \
+  --manifest /mnt/d/Hydrostate/samples/merged_v1/samples.parquet \
+  --pack /mnt/d/Hydrostate/samples/merged_v1/labels/ecosystem_v1 --limit 64
+python tools/data/compute_target_statistics.py \
+  --config configs/hydrostate_ecosystem.py \
+  --output /mnt/d/Hydrostate/samples/merged_v1/target_stats_ecosystem_v1.json
+```
+
+Product definitions: [Dynamic World](https://developers.google.com/earth-engine/datasets/catalog/GOOGLE_DYNAMICWORLD_V1),
+[LAI](https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD15A3H),
+[PML](https://developers.google.com/earth-engine/datasets/catalog/projects_pml_evapotranspiration_PML_OUTPUT_PML_V22a),
+[albedo](https://developers.google.com/earth-engine/datasets/catalog/MODIS_061_MCD43A3),
+[Landsat LST](https://developers.google.com/earth-engine/datasets/catalog/LANDSAT_LC08_C02_T1_L2).
+
+### Extend LST observations and train with explicit target times
+
+Use the completed `ecosystem_v1` pack as the baseline. The LST extension first
+preserves qualifying same-day labels, then tests other same-day L2SP candidates,
+then the L2 products corresponding to **existing Landsat L1 inputs**, nearest to
+the original sample date first. Each candidate is tested on the actual window
+pixels. The first candidate with usable pixels is selected; later candidates
+are not mosaicked into it. Off-date labels also require valid pixels in their
+paired Landsat input. Cloud masks and the **≤2 K** cutoff remain mandatory.
+
+Each sample has at most one LST label map with its true UTC acquisition time.
+An unavailable label stays masked. Base inputs, sample IDs and splits remain
+unchanged. The result is a separate ordinary directory Zarr pack. Successful
+downloads are resumable in `.lst_observation_v1.work/checkpoint.sqlite3`;
+network failures are reported instead of becoming missing labels.
+
+```bash
+conda activate hydrostate
+
+# Representative pilot; the later full run reuses this checkpoint.
+OUTPUT_DIR=/mnt/d/Hydrostate/samples/merged_v1/labels/lst_observation_pilot_v1 \
+  bash scripts/run_gee_lst.sh --limit 256
+python tools/data/validate_gee_lst.py \
+  --manifest /mnt/d/Hydrostate/samples/merged_v1/samples.parquet \
+  --base-pack /mnt/d/Hydrostate/samples/merged_v1/labels/ecosystem_v1 \
+  --pack /mnt/d/Hydrostate/samples/merged_v1/labels/lst_observation_pilot_v1 --limit 0
+
+# Full extension; published destinations are immutable and cannot be overwritten.
+bash scripts/run_gee_lst.sh
+python tools/data/validate_gee_lst.py \
+  --manifest /mnt/d/Hydrostate/samples/merged_v1/samples.parquet \
+  --base-pack /mnt/d/Hydrostate/samples/merged_v1/labels/ecosystem_v1 \
+  --pack /mnt/d/Hydrostate/samples/merged_v1/labels/lst_observation_v1 --limit 256
+
+# Statistics use only the train split and the exact new label/time contract.
+python tools/data/compute_target_statistics.py \
+  --config configs/hydrostate_ecosystem_temporal.py \
+  --output /mnt/d/Hydrostate/samples/merged_v1/target_stats_ecosystem_temporal_v1.json
+HYDROSTATE_MODEL_PATH=/home/xiaoz/HydroState/pretrained/OlmoEarth-v1_2-Base \
+  hydrostate-train configs/hydrostate_ecosystem_temporal.py
+```
+
+Use `SAMPLE_ROOT`, `BASE_PACK`, `OUTPUT_DIR`, `WORK_DIR`, `WORKERS`, `PYTHON` and
+`GEE_PROJECT` to relocate collection. Training supports `HYDROSTATE_DATA_ROOT`,
+`HYDROSTATE_LABEL_PACK`, `HYDROSTATE_LST_PACK`, `HYDROSTATE_TARGET_STATS`, and
+`HYDROSTATE_MODEL_PATH`. A pilot pack covers only its selected sample IDs; use
+the full pack for production statistics and training. Once the pilot is already
+published, run validation or the full collection command directly.
+The validator checks scene identity, actual acquisition time, input support and
+2 K QA for all rows selected by `--limit`. Its all-task supervision/backward
+check defaults to 64 of those rows (`--training-limit 0` checks all). This latter
+check reads real masks/times and targets; it uses dummy predictions and does not
+read satellite pixel values or measure model accuracy.
+
+The 2026-10-16 representative 256-sample pilot retained seven baseline LST
+samples and added 54 paired-input observations, for 61 usable samples and
+72,245 valid 30 m label pixels under the unchanged 2 K cutoff. These are pilot
+coverage results, not full-library counts or evidence of improved model accuracy.
+
+All tasks use the same configurable `TargetTimeQuery` module
+(`model.query_time`). The temporal configuration queries DW at its acquisition time, SMAP at its
+observation time, ET/GPP on their eight-day interval, LAI on its four-day
+interval, albedo on its 16-day retrieval support, and LST at its selected
+overpass time. The pretrained encoder runs once; a task/time-conditioned pool
+and the shared decoder run per task group (all nine cover classes share one
+group). Exact acquisition slots replace the old 15-day cross-sensor merge.
+This increases activation memory and decoder work; size batches for the training
+GPU and retain gradient checkpointing. The existing configuration remains a
+baseline for controlled comparisons.
+
+This is retrospective retrieval/reconstruction, with all supplied images
+available as context. Training a causal forecast would additionally require
+removing later images before encoding. Changes in coverage do not establish
+changes in predictive accuracy; evaluate the trained temporal model separately.
+
+### Sampling environment
 
 Use the project's Python 3.12 environment:
 
@@ -210,6 +445,39 @@ Use a new output directory for new production exports too; old run state is not
 silently upgraded.
 
 ## Transfers and restart
+
+### Joint ecosystem training on HPC
+
+Use `configs/hydrostate_ecosystem_temporal_hpc.py` for the 20,000 merged samples:
+nine land-cover fractions, soil moisture, ET, LAI, GPP, black-sky and white-sky
+albedo, and LST. All tasks use the shared target-time query module. LST uses
+`labels/lst_observation_v1` with the unchanged 2 K uncertainty cutoff; the other
+extension labels use `labels/ecosystem_v1`. Both packs remain ordinary directory
+Zarr. Missing labels are masked, so a sample need not have all 16 labels.
+
+Keep code in `/home/xiaoz/HydroState` and synchronize its committed `main` branch
+through GitHub. Reuse `/scr/u/xiaoz/HydroState/samples_merged_v1`, including its
+`manifests/merged_v1_n20000/samples.parquet`; place both packs under its `labels/`.
+Before reusing an existing HPC manifest, verify that sample IDs, splits, grids and
+target times match the local manifest. Storage path differences are allowed.
+
+```bash
+cd /home/xiaoz/HydroState
+git pull --ff-only origin main
+bash scripts/slurm/27_submit_ecosystem_training.sh
+```
+
+The launcher submits training-only statistics on CPU, followed by a GPU job with
+an `afterok` dependency. It uses a separate immutable statistics file,
+`target_stats_ecosystem_temporal_v1.json`, and validates its task/pack fingerprint.
+Training requests one 48 GB GPU from `l40s,c_foss_gpu,condo_gpu`, BF16, batch 2,
+gradient accumulation 8 (effective batch 16), 50 epochs and a 96-hour limit.
+Logs, submission records and `work_dirs/ecosystem_temporal_JOBID` are under
+`/scr/u/xiaoz/HydroState`. Each job checks the submitted Git commit before starting;
+keep that checkout unchanged while jobs are queued or running. The submission
+record prevents accidental duplicate submissions for the same commit.
+
+### Original GEE export transfers
 
 One Float32 multiband GeoTIFF per sample; timestamps are stored separately in
 metadata. Defaults: 32 samples per batch, at most two pending exports. A unique
