@@ -2,13 +2,14 @@
 # Shared paths for statistics and training; source from the submitted scripts.
 export HYDROSTATE_CODE_ROOT="${HYDROSTATE_CODE_ROOT:-/home/xiaoz/HydroState}"
 cd "$HYDROSTATE_CODE_ROOT"
-if [[ -n "${HYDROSTATE_CODE_COMMIT:-}" ]]; then
-    [[ "$(git rev-parse HEAD)" == "$HYDROSTATE_CODE_COMMIT" ]] || {
-        echo "Repository commit changed after submission; resubmit with the intended code." >&2
-        exit 1
-    }
-    git diff --quiet HEAD -- || { echo "Tracked source has uncommitted changes." >&2; exit 1; }
-fi
+# Compute nodes need not provide Git. The submitter records every tracked file's
+# hash on the login node; coreutils verifies that exact source on the worker.
+: "${HYDROSTATE_CODE_COMMIT:?Use scripts/slurm/27_submit_ecosystem_training.sh}"
+: "${HYDROSTATE_SOURCE_HASHES:?Submission source checksums are required}"
+sha256sum --check --status "$HYDROSTATE_SOURCE_HASHES" || {
+    echo "Source changed after submission; resubmit with the intended code." >&2
+    exit 1
+}
 export HYDROSTATE_CONDA_BASE="${HYDROSTATE_CONDA_BASE:-/home/xiaoz/miniconda}"
 export HYDROSTATE_CONDA_ENV=hydrostate
 source "$HYDROSTATE_CONDA_BASE/etc/profile.d/conda.sh"

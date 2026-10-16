@@ -9,6 +9,8 @@ mkdir -p /scr/u/xiaoz/HydroState/logs /scr/u/xiaoz/HydroState/submissions
 record="${HYDROSTATE_SUBMISSION_RECORD:-/scr/u/xiaoz/HydroState/submissions/ecosystem_temporal_${HYDROSTATE_CODE_COMMIT}.txt}"
 # Preserve accepted job IDs on partial failure and refuse duplicate retries.
 (set -o noclobber; printf 'CODE_COMMIT=%s\n' "$HYDROSTATE_CODE_COMMIT" > "$record")
+export HYDROSTATE_SOURCE_HASHES="$record.source.sha256"
+git ls-files -z | xargs -0 sha256sum > "$HYDROSTATE_SOURCE_HASHES"
 stats=$(sbatch --parsable scripts/slurm/25_prepare_ecosystem_statistics.sh)
 stats=${stats%%;*}
 printf 'STATS_JOB=%s\n' "$stats" | tee -a "$record"

@@ -470,12 +470,15 @@ bash scripts/slurm/27_submit_ecosystem_training.sh
 The launcher submits training-only statistics on CPU, followed by a GPU job with
 an `afterok` dependency. It uses a separate immutable statistics file,
 `target_stats_ecosystem_temporal_v1.json`, and validates its task/pack fingerprint.
-Training requests one 48 GB GPU from `l40s,c_foss_gpu,condo_gpu`, BF16, batch 2,
+Training requests one 48 GB GPU from `l40s`, BF16, batch 2,
 gradient accumulation 8 (effective batch 16), 50 epochs and a 96-hour limit.
 Logs, submission records and `work_dirs/ecosystem_temporal_JOBID` are under
-`/scr/u/xiaoz/HydroState`. Each job checks the submitted Git commit before starting;
+`/scr/u/xiaoz/HydroState`. Each job verifies the committed source checksums before starting;
 keep that checkout unchanged while jobs are queued or running. The submission
 record prevents accidental duplicate submissions for the same commit.
+Checksums are generated on the login node, so compute nodes do not need Git.
+The cluster currently rejects comma-separated partition lists at submission;
+select one partition per submission.
 
 ### Original GEE export transfers
 
