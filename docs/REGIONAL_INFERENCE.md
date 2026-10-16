@@ -52,24 +52,29 @@ python tools/predict_region.py status --root outputs/poyang_201704_202512_pilot
 按影像及空间块下载，缓存可供相邻窗口和日期复用。成功窗口记录在 SQLite 中，
 完整日期另有 Parquet 清单；网络失败后重跑同一命令即可恢复。
 
-也可以在 HPC 上直接下载；这只需要 CPU，无需占用 GPU。GEE 用户凭据放在
+也可以在 HPC 上直接下载；这只需要 CPU，无需占用 GPU。本次 HPC 的计算节点
+无法联网，使用可联网的登录节点后台运行，不提交 Slurm 下载任务。GEE 用户凭据放在
 `~/.config/earthengine/credentials`，目录权限为 `700`、文件权限为 `600`，
 通过 SSH 单独传输，不能提交到 Git。`client_secret.json` 本身不等于已完成的
 用户授权，直接像素下载实际使用 Earth Engine 凭据。
 
-使用已安装 GEE 和本项目依赖的 Python，在 CPU 作业中运行：
+使用已安装 GEE 和本项目依赖的 Python 3.12，在登录节点运行：
 
 ```bash
-python tools/predict_region.py prepare \
+nohup /scr/u/xiaoz/HydroState/environments/gee-download/bin/python \
+  tools/predict_region.py prepare \
   --root /scr/u/xiaoz/HydroState/inference/poyang_201704_202512 \
-  --workers 4 --min-free-gib 20
+  --workers 4 --min-free-gib 20 > /scr/u/xiaoz/HydroState/logs/poyang_inputs.log 2>&1 < /dev/null &
 ```
 
 省略 `--dates` 会依次处理全部 403 期，已有结果会跳过。CLI 默认保留 20 GiB
 空间；达到阈值或请求持续失败时退出并保留断点，不会自动删除缓存。排队仅保留
-与下载线程数量相同的窗口任务，失败后停止补充任务。用相同命令可继续；Slurm
-达到时限也需重新提交。CPU 作业脚本为 `scripts/slurm/31_prepare_region.sh`，
-需设置 `HYDROSTATE_CODE_ROOT`、`HYDROSTATE_SOURCE_HASHES` 和
+与下载线程数量相同的窗口任务，失败后停止补充任务。用相同命令可继续，重启前先
+确认旧进程已退出，避免重复启动。此次正式后台进程使用冻结源码，并将 PID、
+命令、环境、源码版本和日志路径记录在区域目录的 `submissions/download_direct_*.json`。
+
+只有计算节点可联网时才使用 CPU 作业脚本 `scripts/slurm/31_prepare_region.sh`，
+并设置 `HYDROSTATE_CODE_ROOT`、`HYDROSTATE_SOURCE_HASHES` 和
 `HYDROSTATE_GEE_PYTHON`，分别指向冻结源码、源码校验清单和可用解释器。
 
 通过 rsync 将 `plan.json`、`aoi.geojson`、`windows.parquet`、`catalogs/`、
