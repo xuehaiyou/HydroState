@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
 from pathlib import Path
 
@@ -20,6 +21,12 @@ def main():
     parser.add_argument("--pilot", action="store_true")
     parser.add_argument("--dates", nargs="+", help="Exact nominal dates listed in plan.json")
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument(
+        "--min-free-gib",
+        type=float,
+        default=20,
+        help="Stop preparation below this free space (minimum 5 GiB)",
+    )
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--checkpoint", type=Path)
@@ -30,6 +37,8 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.workers < 0 or args.batch_size < 1:
         parser.error("workers must be nonnegative and batch size positive")
+    if not math.isfinite(args.min_free_gib) or args.min_free_gib < 5:
+        parser.error("min-free-gib must be finite and at least 5")
     if args.command == "init":
         from hydrostate.inference.planning import initialize
 
@@ -51,7 +60,13 @@ def main():
         for period in plan["periods"]:
             if args.dates and period["time"] not in args.dates:
                 continue
-            prepare_date(args.root, plan, period, workers=max(1, args.workers))
+            prepare_date(
+                args.root,
+                plan,
+                period,
+                workers=max(1, args.workers),
+                min_free_gib=args.min_free_gib,
+            )
     elif args.command == "predict":
         from hydrostate.inference.predict import predict_dates
 

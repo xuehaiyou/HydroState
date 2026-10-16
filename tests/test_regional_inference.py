@@ -1,6 +1,9 @@
 """Regional contract tests: dates, registration, missing inputs and durable output."""
 
 import json
+import sqlite3
+import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -178,6 +181,51 @@ def test_cache_reads_require_committed_chunks_and_preserve_offsets(tmp_path, pla
     actual, valid = cache.read(scene, window)
     np.testing.assert_array_equal(actual[0], value[:120, :120].astype("f2"))
     assert valid.all()
+
+
+def test_download_space_reserve_stops_before_request(tmp_path, plan, monkeypatch):
+    monkeypatch.setattr(
+        "hydrostate.inference.gee.shutil.disk_usage",
+        lambda _: SimpleNamespace(free=19 * 1024**3),
+    )
+    cache = SceneCache(tmp_path, plan, ee=object(), min_free_gib=20)
+    with pytest.raises(OSError, match="Less than 20 GiB"):
+        cache._download(dict(asset_id="test"), 0, 0, None)
+
+
+def test_preparation_failure_stops_queue_and_resumes_saved_windows(tmp_path, plan, monkeypatch):
+    from hydrostate.inference import gee
+
+    monkeypatch.setitem(
+        sys.modules,
+        "ee",
+        SimpleNamespace(
+            Initialize=lambda **_: None,
+            data=SimpleNamespace(setDeadline=lambda _: None),
+        ),
+    )
+    plan["config"]["gee_project"] = "test"
+    monkeypatch.setattr(gee, "catalog", lambda *args: [])
+    calls = []
+
+    def select(plan, period, window, scenes, cache):
+        calls.append(window["window_id"])
+        if len(calls) == 2:
+            raise OSError("simulated disk limit")
+        return dict(window, accepted=True)
+
+    monkeypatch.setattr(gee, "select_window", select)
+    with pytest.raises(OSError, match="simulated disk limit"):
+        gee.prepare_date(tmp_path, plan, plan["periods"][0], workers=1)
+    assert len(calls) == 2
+    with sqlite3.connect(tmp_path / "preparation.sqlite") as db:
+        assert db.execute("SELECT count(*) FROM windows").fetchone()[0] == 1
+    assert not (tmp_path / "manifests" / "2025-01-21.parquet").exists()
+    saved_id = calls[0]
+    table = gee.prepare_date(tmp_path, plan, plan["periods"][0], workers=1)
+    assert len(table) == len(windows(plan))
+    assert calls.count(saved_id) == 1
+    assert (tmp_path / "manifests" / "2025-01-21.parquet").exists()
 
 
 def test_zarr_masks_commit_markers_provenance_and_resume(tmp_path, plan):

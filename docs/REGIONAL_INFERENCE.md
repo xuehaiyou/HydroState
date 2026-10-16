@@ -52,6 +52,26 @@ python tools/predict_region.py status --root outputs/poyang_201704_202512_pilot
 按影像及空间块下载，缓存可供相邻窗口和日期复用。成功窗口记录在 SQLite 中，
 完整日期另有 Parquet 清单；网络失败后重跑同一命令即可恢复。
 
+也可以在 HPC 上直接下载；这只需要 CPU，无需占用 GPU。GEE 用户凭据放在
+`~/.config/earthengine/credentials`，目录权限为 `700`、文件权限为 `600`，
+通过 SSH 单独传输，不能提交到 Git。`client_secret.json` 本身不等于已完成的
+用户授权，直接像素下载实际使用 Earth Engine 凭据。
+
+使用已安装 GEE 和本项目依赖的 Python，在 CPU 作业中运行：
+
+```bash
+python tools/predict_region.py prepare \
+  --root /scr/u/xiaoz/HydroState/inference/poyang_201704_202512 \
+  --workers 4 --min-free-gib 20
+```
+
+省略 `--dates` 会依次处理全部 403 期，已有结果会跳过。CLI 默认保留 20 GiB
+空间；达到阈值或请求持续失败时退出并保留断点，不会自动删除缓存。排队仅保留
+与下载线程数量相同的窗口任务，失败后停止补充任务。用相同命令可继续；Slurm
+达到时限也需重新提交。CPU 作业脚本为 `scripts/slurm/31_prepare_region.sh`，
+需设置 `HYDROSTATE_CODE_ROOT`、`HYDROSTATE_SOURCE_HASHES` 和
+`HYDROSTATE_GEE_PYTHON`，分别指向冻结源码、源码校验清单和可用解释器。
+
 通过 rsync 将 `plan.json`、`aoi.geojson`、`windows.parquet`、`catalogs/`、
 `manifests/` 和 `input_cache/` 同步至 HPC。缓存和产品都是普通目录式 Zarr，
 不用 ZIP 或自定义分片压缩包。数据可放在：
@@ -108,7 +128,8 @@ bash scripts/slurm/29_submit_region.sh \
 不带 `--pilot` 初始化独立完整区域目录，先按日期或按月准备、预测和验收，避免
 一次下载十年的输入撑满 scratch。输入缓存应按完成日期滚动管理；已确认不再
 用于后续 63 日上下文、消融或重跑的影像块才可清理。当前 HPC 约 200 GB 空余，
-正式生产前需要依据试运行实测缓存量安排批次，不能一次性准备全部 403 期。
+正式生产前需要依据试运行实测缓存量安排批次，不能假设全部 403 期输入都能
+同时保留。若按全部日期下载，必须保留上述空间阈值，并检查作业是否已暂停。
 
 正式扩大前检查：区域边界、输入归一化与掩膜、缺失 S2 时的表现、湖岸与洲滩
 接缝、各期覆盖率、SM/ET 的监督尺度以及独立参考或产品一致性。训练重叠不会

@@ -11,10 +11,11 @@ import shutil
 import sqlite3
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from threading import Event
 
 import numpy as np
 import pandas as pd
@@ -91,8 +92,12 @@ class SceneCache:
     interrupted download is safely repeated. Inference is strictly read-only.
     """
 
-    def __init__(self, root, plan, *, ee=None):
+    def __init__(self, root, plan, *, ee=None, min_free_gib=5):
         self.root, self.plan, self.ee = Path(root), plan, ee
+        if not math.isfinite(min_free_gib) or min_free_gib < 5:
+            raise ValueError("min_free_gib must be finite and at least 5")
+        self.min_free_gib = min_free_gib
+        self.stopped = Event()
         self.grid, self.chunk = plan["grid"], plan["config"]["cache_chunk"]
         if not 120 <= self.chunk <= 720 or self.chunk % 3:
             raise ValueError("cache_chunk must be a multiple of 3 in [120,720]")
@@ -151,11 +156,13 @@ class SceneCache:
         return group
 
     def _download(self, scene, cy, cx, group):
+        if self.stopped.is_set():
+            raise RuntimeError("Input preparation stopped after a worker failure")
         if self.ee is None:
             raise FileNotFoundError(f"Scene chunk is not prepared: {scene['asset_id']} {cy},{cx}")
-        if shutil.disk_usage(self.root).free < 5 * 1024**3:
+        if shutil.disk_usage(self.root).free < self.min_free_gib * 1024**3:
             raise OSError(
-                "Less than 5 GiB free; finish/transfer the current batch before continuing"
+                f"Less than {self.min_free_gib:g} GiB free; free space and rerun to resume"
             )
         h, w = input_shape(self.grid)
         y, x = cy * self.chunk, cx * self.chunk
@@ -206,6 +213,8 @@ class SceneCache:
         group["done"][cy, cx] = 1
 
     def read(self, scene, window):
+        if self.stopped.is_set():
+            raise RuntimeError("Input preparation stopped after a worker failure")
         y, x = window["row"] * 3, window["col"] * 3
         indices = [
             (cy, cx)
@@ -319,7 +328,7 @@ def select_window(plan, period, window, scenes, cache):
     )
 
 
-def prepare_date(root, plan, period, *, workers=4):
+def prepare_date(root, plan, period, *, workers=4, min_free_gib=5):
     import ee
 
     root = Path(root)
@@ -342,7 +351,7 @@ def prepare_date(root, plan, period, *, workers=4):
             )
             for key in BANDS
         }
-        cache = SceneCache(root, plan, ee=ee)
+        cache = SceneCache(root, plan, ee=ee, min_free_gib=min_free_gib)
         todo = windows(plan)
         db = sqlite3.connect(root / "preparation.sqlite")
         try:
@@ -358,27 +367,55 @@ def prepare_date(root, plan, period, *, workers=4):
             }
             pending = [w for w in todo if w["window_id"] not in saved]
             accepted_count = sum(r["accepted"] for r in saved.values())
+            LOG.info(
+                "%s resuming %d/%d windows; free=%.1f GiB, reserve=%.1f GiB",
+                period["time"],
+                len(saved),
+                len(todo),
+                shutil.disk_usage(root).free / 1024**3,
+                min_free_gib,
+            )
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {
-                    pool.submit(select_window, plan, period, w, scenes, cache): w for w in pending
-                }
-                for future in as_completed(futures):
-                    result = future.result()
-                    saved[result["window_id"]] = result
-                    accepted_count += result["accepted"]
-                    db.execute(
-                        "INSERT INTO windows VALUES (?,?,?)",
-                        (period["time"], result["window_id"], json.dumps(result)),
-                    )
-                    db.commit()
-                    if len(saved) == len(todo) or len(saved) % max(1, len(todo) // 100) == 0:
-                        LOG.info(
-                            "%s prepared %d/%d windows; accepted=%d",
-                            period["time"],
-                            len(saved),
-                            len(todo),
-                            accepted_count,
-                        )
+                remaining = iter(pending)
+                futures = set()
+
+                def submit_next():
+                    window = next(remaining, None)
+                    if window is not None:
+                        futures.add(pool.submit(select_window, plan, period, window, scenes, cache))
+
+                for _ in range(workers):
+                    submit_next()
+                try:
+                    while futures:
+                        completed, futures = wait(futures, return_when=FIRST_COMPLETED)
+                        for future in completed:
+                            result = future.result()
+                            saved[result["window_id"]] = result
+                            accepted_count += result["accepted"]
+                            db.execute(
+                                "INSERT INTO windows VALUES (?,?,?)",
+                                (period["time"], result["window_id"], json.dumps(result)),
+                            )
+                            db.commit()
+                            if (
+                                len(saved) == len(todo)
+                                or len(saved) % max(1, len(todo) // 100) == 0
+                            ):
+                                LOG.info(
+                                    "%s prepared %d/%d windows; accepted=%d",
+                                    period["time"],
+                                    len(saved),
+                                    len(todo),
+                                    accepted_count,
+                                )
+                        for _ in completed:
+                            submit_next()
+                except BaseException:
+                    cache.stopped.set()
+                    for future in futures:
+                        future.cancel()
+                    raise
             table = pd.DataFrame([saved[w["window_id"]] for w in todo])
             dest.parent.mkdir(parents=True, exist_ok=True)
             temporary = dest.with_suffix(".parquet.part")
