@@ -15,6 +15,7 @@ DRIVE_TOKEN="${DRIVE_TOKEN:-$PWD/drive_token.json}"
 PYTHON="${PYTHON:-/home/xiaoz/miniconda3/envs/hydrostate/bin/python}"
 
 args=(--project "$GEE_PROJECT"
+      --backend "${GEE_BACKEND:-pixels}"
       --output "$OUTPUT_DIR"
       --candidate-dir "$CANDIDATE_DIR" --candidate-seed "${CANDIDATE_SEED:-42}"
       --drive-token "$DRIVE_TOKEN"
@@ -26,4 +27,4 @@ args=(--project "$GEE_PROJECT"
       --poll-seconds "${POLL_SECONDS:-30}")
 
 # Run in the foreground with unbuffered progress output.
-exec "$PYTHON" -u hydrostate/data/gee_sampling.py "${args[@]}" "$@"
+exec "$PYTHON" -u tools/data/prepare_gee_samples.py "${args[@]}" "$@"

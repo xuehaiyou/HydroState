@@ -58,20 +58,22 @@ python tools/predict_region.py status --root outputs/poyang_201704_202512_pilot
 通过 SSH 单独传输，不能提交到 Git。`client_secret.json` 本身不等于已完成的
 用户授权，直接像素下载实际使用 Earth Engine 凭据。
 
+完整区域现在使用 Drive 批量导出通道；小样本继续使用像素下载。
+代码结构、配置和恢复流程见 [GEE_DOWNLOAD.md](GEE_DOWNLOAD.md)。
 使用已安装 GEE 和本项目依赖的 Python 3.12，在登录节点运行：
 
 ```bash
 nohup /scr/u/xiaoz/HydroState/environments/gee-download/bin/python \
-  tools/predict_region.py prepare \
+  tools/data/prepare_region_inputs.py \
   --root /scr/u/xiaoz/HydroState/inference/poyang_201704_202512 \
   --workers 4 --min-free-gib 20 > /scr/u/xiaoz/HydroState/logs/poyang_inputs.log 2>&1 < /dev/null &
 ```
 
 省略 `--dates` 会依次处理全部 403 期，已有结果会跳过。CLI 默认保留 20 GiB
-空间；达到阈值或请求持续失败时退出并保留断点，不会自动删除缓存。排队仅保留
-与下载线程数量相同的窗口任务，失败后停止补充任务。用相同命令可继续，重启前先
+空间；达到阈值或请求持续失败时退出并保留断点，不会自动删除缓存。导出队列受
+并发数和总字节数限制；Drive 文件校验入库后清理。用相同命令可继续，重启前先
 确认旧进程已退出，避免重复启动。此次正式后台进程使用冻结源码，并将 PID、
-命令、环境、源码版本和日志路径记录在区域目录的 `submissions/download_direct_*.json`。
+命令、环境、源码版本和日志路径记录在区域目录的 `submissions/download_drive_*.json`。
 
 只有计算节点可联网时才使用 CPU 作业脚本 `scripts/slurm/31_prepare_region.sh`，
 并设置 `HYDROSTATE_CODE_ROOT`、`HYDROSTATE_SOURCE_HASHES` 和

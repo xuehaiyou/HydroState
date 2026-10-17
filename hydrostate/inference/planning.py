@@ -14,7 +14,13 @@ from rasterio.features import geometry_mask
 from shapely.geometry import box, mapping, shape
 from shapely.ops import transform
 
-from hydrostate.data.gee_sampling import atomic_json, fingerprint
+from hydrostate.data.gee.contracts import (
+    atomic_json,
+    fingerprint,
+    map_point,
+)
+from hydrostate.data.gee.contracts import input_shape as input_shape
+from hydrostate.data.gee.contracts import input_transform as input_transform
 from hydrostate.storage.packs import file_hash
 
 
@@ -63,21 +69,6 @@ def make_grid(geometry, crs, core=32, stride=None):
 
 def output_transform(grid):
     return Affine(30, 0, grid["left"], 0, -30, grid["top"])
-
-
-def input_transform(grid):
-    halo = grid["halo"] * 30
-    return Affine(10, 0, grid["left"] - halo, 0, -10, grid["top"] + halo)
-
-
-def input_shape(grid):
-    halo = grid["halo"] * 6
-    return grid["height"] * 3 + halo, grid["width"] * 3 + halo
-
-
-def map_point(affine, col, row):
-    """Compatible with both stable Affine 2.x and the 3.x matrix-operator API."""
-    return (affine.a * col + affine.b * row + affine.c, affine.d * col + affine.e * row + affine.f)
 
 
 def aoi_mask(plan):

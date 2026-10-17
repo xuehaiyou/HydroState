@@ -78,14 +78,9 @@ def fetch_pixels(ee, sample, scene):
     valid = image.mask().reduce(ee.Reducer.min()).unmask(0, sameFootprint=False)
     image = image.unmask(0, sameFootprint=False).addBands(valid.rename("lst_valid")).toFloat()
     names = ["lst_raw", "lst_qa", "lst_uncertainty_raw", "lst_valid"]
-    raw = ee.data.computePixels(dict(
-        expression=image, fileFormat="NUMPY_NDARRAY", bandIds=names,
-        grid=dict(dimensions=dict(width=120, height=120), crsCode=sample["crs"],
-                  affineTransform=dict(zip(
-                      ("scaleX", "shearX", "translateX", "shearY", "scaleY", "translateY"),
-                      sample["transform"])))))
-    if raw.shape != (120, 120) or list(raw.dtype.names or []) != names:
-        raise ValueError("Unexpected LST pixel response")
+    from hydrostate.data.gee.backends.pixels import compute_pixels
+
+    raw = compute_pixels(ee, image, names, sample["crs"], sample["transform"], 120, 120)
     data = {name: raw[name] for name in names}
     if any(not np.isfinite(value).all() for value in data.values()):
         raise ValueError("Nonfinite LST pixel response")

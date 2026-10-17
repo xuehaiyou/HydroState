@@ -21,6 +21,14 @@ def main():
     parser.add_argument("--pilot", action="store_true")
     parser.add_argument("--dates", nargs="+", help="Exact nominal dates listed in plan.json")
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--backend", choices=["pixels", "drive"], default="pixels")
+    parser.add_argument(
+        "--download-config",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "configs/data/gee_drive.json",
+    )
+    parser.add_argument("--drive-token", type=Path)
+    parser.add_argument("--drive-quota-project")
     parser.add_argument(
         "--min-free-gib",
         type=float,
@@ -55,11 +63,23 @@ def main():
     if args.dates and not set(args.dates).issubset(available):
         parser.error(f"Dates must be in plan.json; available: {sorted(available)}")
     if args.command == "prepare":
-        from hydrostate.inference.gee import prepare_date
+        from hydrostate.data.gee.workflows.region import prepare_date, prepare_region_drive
 
-        for period in plan["periods"]:
-            if args.dates and period["time"] not in args.dates:
-                continue
+        periods = [p for p in plan["periods"] if not args.dates or p["time"] in args.dates]
+        if args.backend == "drive":
+            prepare_region_drive(
+                args.root,
+                plan,
+                periods,
+                json.loads(args.download_config.read_text()),
+                workers=max(1, args.workers),
+                min_free_gib=args.min_free_gib,
+                drive_token=args.drive_token,
+                quota_project=args.drive_quota_project,
+            )
+            return
+
+        for period in periods:
             prepare_date(
                 args.root,
                 plan,

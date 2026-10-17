@@ -211,14 +211,9 @@ def fetch_sample(ee, row, *, capacity=64):
     scenes = select_scenes(ee, sample)
     selected = time.perf_counter()
     image, names = build_image(ee, scenes)
-    raw = ee.data.computePixels(dict(
-        expression=image, fileFormat="NUMPY_NDARRAY", bandIds=names,
-        grid=dict(dimensions=dict(width=120, height=120), crsCode=sample["crs"],
-                  affineTransform=dict(zip(
-                      ("scaleX", "shearX", "translateX", "shearY", "scaleY", "translateY"),
-                      sample["transform"])))))
-    if raw.shape != (120, 120) or list(raw.dtype.names or []) != names:
-        raise ValueError("Unexpected computePixels shape or band identities")
+    from hydrostate.data.gee.backends.pixels import compute_pixels
+
+    raw = compute_pixels(ee, image, names, sample["crs"], sample["transform"], 120, 120)
     data = {name: raw[name] for name in names}
     if any(not np.isfinite(value).all() for value in data.values()):
         raise ValueError("Nonfinite GEE response")
