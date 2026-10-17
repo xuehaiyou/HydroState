@@ -16,6 +16,7 @@ import pandas as pd
 
 from hydrostate.data.gee.backends.pixels import PixelSceneCache as SceneCache
 from hydrostate.data.gee.catalog import catalog
+from hydrostate.data.gee.client import retry as retry
 from hydrostate.data.gee.contracts import locked
 from hydrostate.data.gee.products import (
     BANDS,
