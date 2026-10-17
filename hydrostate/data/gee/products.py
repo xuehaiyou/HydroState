@@ -126,3 +126,16 @@ def scene_expression(ee, scene):
     return ee.Image.cat(
         [image.unmask(0, sameFootprint=False), valid.unmask(0, sameFootprint=False).rename("valid")]
     ).toFloat()
+
+
+def validity_expression(ee, scene):
+    """The identical all-band validity used by scene_expression, as one byte band."""
+    image = prepare(ee, scene["key"], ee.Image(scene["asset_id"]))
+    return (
+        image.mask()
+        .reduce(ee.Reducer.min())
+        .gt(0)
+        .unmask(0, sameFootprint=False)
+        .rename("valid")
+        .toUint8()
+    )

@@ -1,12 +1,20 @@
 """Direct pixel transport for small requests and the legacy regional reader."""
 
 import shutil
+import time
+from concurrent.futures import Future
 
 import numpy as np
 
 from hydrostate.data.gee.client import retry
 from hydrostate.data.gee.contracts import input_shape, input_transform, locked, map_point
-from hydrostate.data.gee.products import BANDS, normalize_pixels, scene_expression
+from hydrostate.data.gee.products import (
+    BANDS,
+    normalize_pixels,
+    scene_expression,
+    validity_expression,
+)
+from hydrostate.storage.quality_cache import QualityCache
 from hydrostate.storage.scene_cache import SceneCache
 
 
@@ -36,6 +44,61 @@ def compute_pixels(ee, image, names, crs, transform, width, height):
     if any(not np.isfinite(raw[name]).all() for name in names):
         raise ValueError("Nonfinite GEE response")
     return raw
+
+
+class PixelQualityCache(QualityCache):
+    """Deduplicated mask-only requests; independent tiles download concurrently."""
+
+    def __init__(self, full_cache, *, ee, **kwargs):
+        super().__init__(full_cache, **kwargs)
+        self.ee = ee
+        self._inflight = {}
+        self.requests = self.response_bytes = 0
+        self.request_seconds = 0.0
+
+    def get_tile(self, scene, ty, tx):
+        key = (scene["asset_id"], ty, tx)
+        with self.guard:
+            try:
+                return super().get_tile(scene, ty, tx)
+            except FileNotFoundError:
+                pass
+            owner = key not in self._inflight
+            if owner:
+                self._inflight[key] = Future()
+            future = self._inflight[key]
+        if not owner:
+            return future.result()
+        try:
+            if self.stopped.is_set():
+                raise RuntimeError("Input preparation stopped after a worker failure")
+            if shutil.disk_usage(self.root).free < self.full.min_free_gib * 1024**3:
+                raise OSError(f"Less than {self.full.min_free_gib:g} GiB free")
+            y, x, y1, x1 = self.tile_bounds(ty, tx)
+            left, top = map_point(input_transform(self.grid), x, y)
+            started = time.monotonic()
+            raw = compute_pixels(
+                self.ee,
+                validity_expression(self.ee, scene),
+                ["valid"],
+                self.grid["crs"],
+                [10, 0, left, 0, -10, top],
+                x1 - x,
+                y1 - y,
+            )
+            valid = self.write_tile(scene, ty, tx, raw["valid"])
+            with self.guard:
+                self.requests += 1
+                self.response_bytes += raw.nbytes
+                self.request_seconds += time.monotonic() - started
+            future.set_result(valid)
+            return valid
+        except BaseException as exc:
+            future.set_exception(exc)
+            raise
+        finally:
+            with self.guard:
+                self._inflight.pop(key, None)
 
 
 class PixelSceneCache(SceneCache):

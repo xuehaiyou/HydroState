@@ -6,7 +6,7 @@ import math
 import shutil
 from collections import OrderedDict
 from pathlib import Path
-from threading import Event
+from threading import Event, RLock
 
 import numpy as np
 import zarr
@@ -38,6 +38,7 @@ class SceneCache:
 
         self.norm = load_computed_config()
         self._groups = OrderedDict()
+        self._groups_lock = RLock()
         self.contract = fingerprint(
             dict(
                 grid=self.grid,
@@ -51,6 +52,10 @@ class SceneCache:
         return self.root / "input_cache" / scene["key"] / (fingerprint(scene["asset_id"]) + ".zarr")
 
     def _open(self, scene, writable=False):
+        with self._groups_lock:
+            return self._open_group(scene, writable)
+
+    def _open_group(self, scene, writable):
         path = self.path(scene)
         if not writable:
             if str(path) in self._groups:

@@ -13,16 +13,17 @@ hydrostate/data/gee/
   client.py               GEE 初始化与有限重试
   catalog.py              可复用的影像元数据目录
   selection.py            原有窗口观测选择规则
-  region_plan.py          根据缺失缓存生成有大小上限的区域矩形
+  region_plan.py          入选窗口的空间块并集、缺失块与有大小上限的区域矩形
   state.py                exports.sqlite 持久化导出状态
   backends/
-    pixels.py             小请求 computePixels；兼容旧区域像素读取
+    pixels.py             小请求 computePixels；区域单字节掩膜请求与并发去重
     drive.py              区域导出、Range 续传、校验、入库和精确清理
   workflows/
     samples.py            样本规划与获取；保留旧 Drive 样本实现
     region.py             区域准备、缓存复用和日期清单
     drive_queue.py        有并发数和字节数上限的导出队列
 hydrostate/storage/scene_cache.py  离线 Zarr 读写，无网络请求
+hydrostate/storage/quality_cache.py 离线掩膜 Zarr、已有输入复用和一致性验证
 ```
 
 入口是 `tools/data/prepare_gee_samples.py` 和
@@ -71,10 +72,25 @@ python -u tools/data/prepare_region_inputs.py \
 每个 TIFF 部分最多 3840×3840 像素，对齐 256 像素 GEE shard 和 480 像素缓存块。
 这只是传输期间的 GeoTIFF 切块，最终 Zarr 不使用 ZIP。
 
-当前版本下载时间上下文内与窗口相交的候选影像区域，再在本地按原质量规则选择。
-没有在 GEE 端先筛选最优窗口，也没有改成时间合成影像。有效性单独导出为 valid 波段，
+区域准备分为两阶段：
+
+1. 按需读取候选影像的单字节有效性掩膜，先完成窗口选片。已有完整输入块直接复用；
+   缺失掩膜使用 `computePixels`，默认 1920×1920 像素一块，保持原 10 m 网格。
+   相同掩膜请求去重，不同块可并行；网络请求不持有写锁。
+2. 仅对通过筛选的窗口，合并入选影像所需的 480×480 空间块，包括输入 halo。
+   跳过已完成块，将空间需求按大小上限递归拆成矩形；额外填充面积不超过需求的 25%。
+   这些完整波段通过 Drive 导出、下载、校验、入库和清理。
+
+选片仍在本地完成：四个时间槽、按时间与资产 ID 倒序、逐窗口锁定 S1 轨道、
+有效像素比例、最新观测时效及缺失传感器规则不变；不使用整景云量代替窗口 QA，
+不制作时间合成影像。掩膜是 QA 与**所有输入波段有效范围的交集**，与完整导出的
+`valid` 完全相同；仍在原 30 m 像素中心计算比例，不先将掩膜粗化。
+完整输入下载后再次比较对应掩膜，全部所需块就绪才发布 `manifests/`。
+
+有效性单独导出为 valid 波段，
 空像素显式为零；关闭 skipEmptyTiles，从而能严格区分空区域与尚未下载的 TIFF 部分。
-这减少小请求往返，但仍可能导出最后未选中的候选影像；加速幅度需要实测。
+矩形包含少量填充像素，但不会为未入选影像新建完整波段导出。实际端到端提速
+取决于入选比例、已有缓存及 GEE 排队；`reports/` 记录每期需求量和两阶段耗时。
 
 ## 恢复与数据安全
 
@@ -82,7 +98,11 @@ python -u tools/data/prepare_region_inputs.py \
 区域根目录/
   plan.json / windows.parquet / catalogs/  原区域计划与目录
   input_cache/<sensor>/<scene>.zarr/       已归一化输入，跨日期复用
-  manifests/<date>.parquet                 完整日期窗口选择结果
+  quality_cache/<sensor>/<scene>.zarr/     单字节有效性掩膜，不代表完整输入已就绪
+  selections/<date>.parquet                选片完成，完整波段可能尚未下载
+  manifests/<date>.parquet                 完整输入就绪，可用于推理
+  selection_contract.json                  防止变更计划后误用选片断点
+  reports/preparation_<date>.json          所需块、导出量、掩膜请求数与阶段耗时
   preparation.sqlite                      可恢复的逐窗口结果
   exports.sqlite                          导出身份、task ID、文件、提交状态
   staging/drive/<export_id>/               临时 TIFF 和 .part 续传文件
@@ -91,6 +111,8 @@ python -u tools/data/prepare_region_inputs.py \
 
 - 区域像素和 Drive 工作流共用 `prepare.lock`，不会同时写入。
 - 已有兼容缓存的 done 块直接复用；缓存网格、归一化和块尺寸必须一致。
+- 切换到掩膜选片时，先接收 exports.sqlite 中已提交的旧导出，再开始新需求规划。
+  preparation.sqlite 中原规则生成的窗口结果仍可复用；不删除现有数据。
 - 先记录 GEE request ID 再提交；中断后检查原任务并复用其 ID，避免重复提交。
 - 下载以文件 ID、长度和 MD5 固定对象身份；HTTP Range 续传，完成后校验 MD5。
 - TIFF 验证 CRS、分辨率、像素原点、波段顺序、全部部分的覆盖和非重叠性。
@@ -113,3 +135,15 @@ python tools/data/validate_region_transfer.py \
 它执行真实 Drive 导出、下载、入库和清理，再请求同块像素，要求 valid 掩膜及
 归一化 float16 数据逐值一致，结果写入 `validation.json`。此测试验证数据合同，
 小块导出耗时不能用来推算整个区域的加速倍数。
+
+独立验证掩膜选片与原完整波段选片的一致性：
+
+```bash
+python tools/data/validate_region_selection.py \
+  --source /path/to/existing/region --output /path/to/separate/selection_validation \
+  --limit 8 --workers 4
+```
+
+读取原 preparation.sqlite 的代表窗口，用独立掩膜缓存重做选片，逐项比较入选资产、
+时间、有效比例和接受状态；另检查三个传感器各一个完整空间块的掩膜。
+输出中的导出字节比较仅针对该窗口子集，不等于完整区域下载加速倍数。

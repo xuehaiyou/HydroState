@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import sqlite3
+import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import date, timedelta
 from pathlib import Path
@@ -17,7 +18,7 @@ import pandas as pd
 from hydrostate.data.gee.backends.pixels import PixelSceneCache as SceneCache
 from hydrostate.data.gee.catalog import catalog
 from hydrostate.data.gee.client import retry as retry
-from hydrostate.data.gee.contracts import locked
+from hydrostate.data.gee.contracts import atomic_json, fingerprint, locked
 from hydrostate.data.gee.products import (
     BANDS,
     slots,
@@ -59,8 +60,17 @@ def prepare_date(root, plan, period, *, workers=4, min_free_gib=5):
         return _prepare_windows(root, plan, period, scenes, cache, workers, min_free_gib)
 
 
-def _prepare_windows(root, plan, period, scenes, cache, workers, min_free_gib):
-    dest = root / "manifests" / f"{period['time']}.parquet"
+def _publish_table(table, dest):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    temporary = dest.with_suffix(".parquet.part")
+    table.to_parquet(temporary, index=False)
+    with temporary.open("rb") as handle:
+        os.fsync(handle.fileno())
+    os.replace(temporary, dest)
+
+
+def _prepare_windows(root, plan, period, scenes, cache, workers, min_free_gib, *, publish=True):
+    dest = root / ("manifests" if publish else "selections") / f"{period['time']}.parquet"
     todo = windows(plan)
     db = sqlite3.connect(root / "preparation.sqlite")
     try:
@@ -123,10 +133,7 @@ def _prepare_windows(root, plan, period, scenes, cache, workers, min_free_gib):
                     future.cancel()
                 raise
         table = pd.DataFrame([saved[w["window_id"]] for w in todo])
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        temporary = dest.with_suffix(".parquet.part")
-        table.to_parquet(temporary, index=False)
-        os.replace(temporary, dest)
+        _publish_table(table, dest)
         return table
     finally:
         db.close()
@@ -159,10 +166,11 @@ def prepare_region_drive(
     drive_token=None,
     quota_project=None,
 ):
-    """Fetch regional scene rectangles, then apply the unchanged window selection."""
+    """Select with byte masks, export required rectangles, then publish ready inputs."""
     from hydrostate.data.gee.backends.drive import DriveTransport
+    from hydrostate.data.gee.backends.pixels import PixelQualityCache
     from hydrostate.data.gee.client import initialize
-    from hydrostate.data.gee.region_plan import export_jobs
+    from hydrostate.data.gee.region_plan import selected_chunks, selected_export_jobs
     from hydrostate.data.gee.state import ExportState
     from hydrostate.data.gee.workflows.drive_queue import run_jobs, validate_settings
     from hydrostate.storage.scene_cache import SceneCache as OfflineSceneCache
@@ -179,10 +187,16 @@ def prepare_region_drive(
         quota_project=quota_project or plan["config"]["gee_project"],
     )
     with locked(root / "prepare.lock", blocking=False):
+        contract_path = root / "selection_contract.json"
+        contract = dict(plan=fingerprint(plan), preprocessing=cache.contract, selection_version=1)
+        if contract_path.exists() and json.loads(contract_path.read_text()) != contract:
+            raise ValueError("Selection plan changed; use a separate preparation root")
+        atomic_json(contract_path, contract)
         state = ExportState(root / "exports.sqlite")
         try:
             # Recover previous submissions/commits even if their date manifest exists.
             run_jobs(transport, state, cache, [], settings)
+            quality = PixelQualityCache(cache, ee=ee)
             todo = windows(plan)
             for period in periods:
                 dest = root / "manifests" / f"{period['time']}.parquet"
@@ -213,10 +227,57 @@ def prepare_region_drive(
                     len(candidates),
                     len(todo),
                 )
-                jobs = export_jobs(
-                    cache, candidates, todo, max_export_bytes=settings["max_export_gib"] * 1024**3
+                quality.refresh_full()
+                started = time.monotonic()
+                mask_requests, mask_bytes = quality.requests, quality.response_bytes
+                table = _prepare_windows(
+                    root, plan, period, scenes, quality, workers, min_free_gib, publish=False
                 )
+                demands = selected_chunks(cache, table.to_dict("records"))
+                jobs = list(
+                    selected_export_jobs(
+                        cache, demands, max_export_bytes=settings["max_export_gib"] * 1024**3
+                    )
+                )
+                report = dict(
+                    time=period["time"],
+                    status="selected",
+                    candidate_scenes=len(candidates),
+                    selected_scenes=len(demands),
+                    windows=len(table),
+                    accepted_windows=int(table["accepted"].sum()),
+                    required_chunks=sum(len(d["chunks"]) for d in demands),
+                    missing_chunks=sum(len(job["chunks"]) for job in jobs),
+                    new_exports=len(jobs),
+                    export_raw_bytes=sum(j["raw_bytes"] for j in jobs),
+                    mask_requests=quality.requests - mask_requests,
+                    mask_response_bytes=quality.response_bytes - mask_bytes,
+                    selection_seconds=time.monotonic() - started,
+                )
+                reports = root / "reports"
+                reports.mkdir(exist_ok=True)
+                report_path = reports / f"preparation_{period['time']}.json"
+                atomic_json(report_path, report)
+                LOG.info(
+                    "%s selected %d/%d windows, %d/%d scenes; %d missing chunks, "
+                    "%d exports, %.2f GiB raw; masks=%d (%.1f MiB)",
+                    period["time"],
+                    report["accepted_windows"],
+                    len(table),
+                    len(demands),
+                    len(candidates),
+                    report["missing_chunks"],
+                    len(jobs),
+                    report["export_raw_bytes"] / 1024**3,
+                    report["mask_requests"],
+                    report["mask_response_bytes"] / 1024**2,
+                )
+                started = time.monotonic()
                 run_jobs(transport, state, cache, jobs, settings)
-                _prepare_windows(root, plan, period, scenes, cache, workers, min_free_gib)
+                report["mask_verified_chunks"] = quality.verify_full(demands)
+                _publish_table(table, dest)
+                report.update(status="ready", download_seconds=time.monotonic() - started)
+                atomic_json(report_path, report)
+                LOG.info("%s inputs ready: %s", period["time"], dest)
         finally:
             state.close()
