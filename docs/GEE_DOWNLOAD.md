@@ -59,7 +59,13 @@ python -u tools/data/prepare_region_inputs.py \
 
 此入口默认 Drive。可用 `--dates 2017-04-03` 只准备一期；省略则依次准备全部期次。
 旧入口仍默认 pixels，使用区域导出时显式加 `--backend drive`。
-在本项目 HPC 上直接运行于可联网的登录节点，不提交 Slurm 下载作业。
+本项目 HPC 的 CPU 计算节点无法联网。下载使用官方文件传输节点
+`hpc2021-io1.hku.hk` 或 `hpc2021-io2.hku.hk`，不在主节点 `hpc2021.hku.hk`
+长期运行下载进程。节点用途见 [HKU 官方说明](https://hpc.hku.hk/hpc/hpc2021/userguide/)。
+IO 节点不经过 Slurm 排队；使用 `scripts/run_region_download_io.sh` 检查主机和
+冻结源码校验和，并将进程限制在最多两个 CPU，设置 nice=10 和计算库单线程。
+四个选片线程主要用于网络并发。启动记录必须包含 hostname、PID、commit 和日志，
+后续通过同一 IO 节点查询进程；共享 `prepare.lock` 防止跨节点重复启动。
 
 默认复用 `~/.config/earthengine/credentials`；授权需要包括 Drive 权限，
 对应 quota project 必须启用 Drive API。也支持 `--drive-token /private/path/token.json`

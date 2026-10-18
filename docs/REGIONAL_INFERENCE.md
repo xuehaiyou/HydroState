@@ -53,7 +53,8 @@ python tools/predict_region.py status --root outputs/poyang_201704_202512_pilot
 完整日期另有 Parquet 清单；网络失败后重跑同一命令即可恢复。
 
 也可以在 HPC 上直接下载；这只需要 CPU，无需占用 GPU。本次 HPC 的计算节点
-无法联网，使用可联网的登录节点后台运行，不提交 Slurm 下载任务。GEE 用户凭据放在
+无法联网，使用官方文件传输节点 `hpc2021-io1.hku.hk` 或 `hpc2021-io2.hku.hk`
+后台运行，不提交 Slurm 下载任务，也不在主节点长期运行下载。GEE 用户凭据放在
 `~/.config/earthengine/credentials`，目录权限为 `700`、文件权限为 `600`，
 通过 SSH 单独传输，不能提交到 Git。`client_secret.json` 本身不等于已完成的
 用户授权，直接像素下载实际使用 Earth Engine 凭据。
@@ -62,11 +63,14 @@ python tools/predict_region.py status --root outputs/poyang_201704_202512_pilot
 区域流程先通过单字节掩膜选片，再仅导出入选影像所需空间块。`selections/`
 表示选片完成，只有 `manifests/` 中的日期才表示完整输入就绪；推理读取后者。
 代码结构、配置和恢复流程见 [GEE_DOWNLOAD.md](GEE_DOWNLOAD.md)。
-使用已安装 GEE 和本项目依赖的 Python 3.12，在登录节点运行：
+使用已安装 GEE 和本项目依赖的 Python 3.12，在 IO 节点运行。先设置冻结源码目录、
+对应源码校验清单和解释器路径：
 
 ```bash
-nohup /scr/u/xiaoz/HydroState/environments/gee-download/bin/python \
-  tools/data/prepare_region_inputs.py \
+export HYDROSTATE_CODE_ROOT=/path/to/frozen/source
+export HYDROSTATE_SOURCE_HASHES=/path/to/source.sha256
+export HYDROSTATE_GEE_PYTHON=/scr/u/xiaoz/HydroState/environments/gee-download/bin/python
+nohup bash "$HYDROSTATE_CODE_ROOT/scripts/run_region_download_io.sh" \
   --root /scr/u/xiaoz/HydroState/inference/poyang_201704_202512 \
   --workers 4 --min-free-gib 20 > /scr/u/xiaoz/HydroState/logs/poyang_inputs.log 2>&1 < /dev/null &
 ```
@@ -75,7 +79,8 @@ nohup /scr/u/xiaoz/HydroState/environments/gee-download/bin/python \
 空间；达到阈值或请求持续失败时退出并保留断点，不会自动删除缓存。导出队列受
 并发数和总字节数限制；Drive 文件校验入库后清理。用相同命令可继续，重启前先
 确认旧进程已退出，避免重复启动。此次正式后台进程使用冻结源码，并将 PID、
-命令、环境、源码版本和日志路径记录在区域目录的 `submissions/download_*.json`。
+主机、命令、环境、源码版本和日志路径记录在区域目录的 `submissions/download_*.json`。
+IO 启动器将 CPU 限制为最多两个，并降低调度优先级；下载与选片仍支持四路网络并发。
 
 只有计算节点可联网时才使用 CPU 作业脚本 `scripts/slurm/31_prepare_region.sh`，
 并设置 `HYDROSTATE_CODE_ROOT`、`HYDROSTATE_SOURCE_HASHES` 和
