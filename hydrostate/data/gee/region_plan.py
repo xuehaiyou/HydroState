@@ -38,10 +38,11 @@ def selected_chunks(cache, rows):
 
 
 def selected_export_jobs(cache, demands, *, max_export_bytes, max_padding_fraction=0.25):
-    """Split sparse demand into bounded rectangles, with at most 25% padding.
+    """Split sparse demand into rectangles bounded by bytes and extra pixel area.
 
     The budget and padding apply to actual pixels, including partial edge chunks.
     Completed chunks and scenes used only by rejected windows are never demanded.
+    The low-level default preserves the previous policy; workflows pass their config.
     """
     if not math.isfinite(max_export_bytes) or max_export_bytes <= 0:
         raise ValueError("Invalid export byte budget")

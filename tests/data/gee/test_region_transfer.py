@@ -13,9 +13,9 @@ from affine import Affine
 from hydrostate.data.gee.backends.drive import IncompleteExport, ingest_export, resume_download
 from hydrostate.data.gee.contracts import atomic_json, input_transform
 from hydrostate.data.gee.products import BANDS, normalize_pixels
-from hydrostate.data.gee.region_plan import export_jobs
+from hydrostate.data.gee.region_plan import export_jobs, selected_export_jobs
 from hydrostate.data.gee.state import ExportState
-from hydrostate.data.gee.workflows.drive_queue import run_jobs
+from hydrostate.data.gee.workflows.drive_queue import run_jobs, validate_settings
 from hydrostate.storage.scene_cache import SceneCache
 
 
@@ -106,6 +106,72 @@ def test_plan_bounds_bytes_covers_halo_and_skips_done(setup):
     remaining = list(export_jobs(cache, [scene], [window], max_export_bytes=480**2 * 12))
     assert len(remaining) == 3
     assert all([0, 0] not in j["chunks"] for j in remaining)
+
+
+def test_more_padding_merges_jobs_but_ingests_only_required_chunks(setup, tmp_path):
+    cache, scene, _ = setup
+    demand = [dict(scene=scene, chunks={(0, 0), (0, 1), (1, 0)})]
+    budget = 0.5 * 1024**3
+    old = list(
+        selected_export_jobs(cache, demand, max_export_bytes=budget, max_padding_fraction=0.25)
+    )
+    merged = list(
+        selected_export_jobs(cache, demand, max_export_bytes=budget, max_padding_fraction=0.5)
+    )
+    assert len(old) == 2 and len(merged) == 1
+    job = merged[0]
+    assert job["raw_bytes"] == 960**2 * 12 <= budget
+    assert {tuple(c) for j in old for c in j["chunks"]} == set(map(tuple, job["chunks"]))
+    path = tmp_path / "padded.tif"
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=960,
+        height=960,
+        count=3,
+        dtype="float32",
+        crs=cache.grid["crs"],
+        transform=Affine(*job["transform"]),
+    ) as dst:
+        dst.write(np.ones((3, 960, 960), "f4"))
+        dst.descriptions = tuple(job["bands"])
+    ingest_export(cache, job, [path])
+    assert cache.done(scene).tolist() == [[True, True], [True, False]]
+    assert not cache._open(scene)["values"][:, 480:, 480:].any()
+    # The byte cap takes precedence over the larger allowed footprint.
+    small = list(
+        selected_export_jobs(
+            SimpleNamespace(
+                chunk=cache.chunk,
+                grid=cache.grid,
+                contract=cache.contract,
+                done=lambda s: np.zeros((2, 2), bool),
+            ),
+            demand,
+            max_export_bytes=480**2 * 12,
+            max_padding_fraction=0.5,
+        )
+    )
+    assert len(small) == 3 and all(j["raw_bytes"] <= 480**2 * 12 for j in small)
+
+
+@pytest.mark.parametrize("padding", [-0.1, float("nan"), float("inf"), "0.5", True])
+def test_invalid_padding_config_rejected(setup, padding):
+    cache, _, _ = setup
+    settings = json.loads(Path("configs/data/gee_drive.json").read_text())
+    settings["max_padding_fraction"] = padding
+    with pytest.raises(ValueError, match="max_padding_fraction"):
+        validate_settings(settings, cache)
+
+
+def test_zero_padding_and_legacy_config_are_valid(setup):
+    cache, _, _ = setup
+    settings = json.loads(Path("configs/data/gee_drive.json").read_text())
+    settings["max_padding_fraction"] = 0
+    validate_settings(settings, cache)
+    del settings["max_padding_fraction"]
+    validate_settings(settings, cache)
 
 
 def test_resumes_range_and_retries_truncated_range(tmp_path, monkeypatch):

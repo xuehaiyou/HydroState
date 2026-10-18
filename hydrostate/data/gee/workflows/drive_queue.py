@@ -21,14 +21,27 @@ def validate_settings(settings, cache):
         "drive_reserve_gib",
         "poll_seconds",
     }
-    if set(settings) != required:
-        raise ValueError(f"Download config must contain exactly {sorted(required)}")
+    optional = {"max_padding_fraction"}
+    if not required <= set(settings) or set(settings) - required - optional:
+        raise ValueError(
+            f"Download config requires {sorted(required)}; optional keys: {sorted(optional)}"
+        )
     import math
 
     if any(
-        not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0 for v in settings.values()
+        not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0
+        for k, v in settings.items()
+        if k not in optional
     ):
         raise ValueError("All download settings must be finite and positive")
+    padding = settings.get("max_padding_fraction", 0.25)
+    if (
+        isinstance(padding, bool)
+        or not isinstance(padding, (int, float))
+        or not math.isfinite(padding)
+        or padding < 0
+    ):
+        raise ValueError("max_padding_fraction must be finite and nonnegative")
     for key in ("max_exports", "download_workers", "file_dimensions"):
         if not isinstance(settings[key], int):
             raise ValueError(f"{key} must be an integer")

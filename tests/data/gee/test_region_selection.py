@@ -211,7 +211,13 @@ def test_drive_workflow_resumes_selection_and_publishes_only_complete_inputs(set
     period = dict(time="2025-01-21", start="2025-01-17", end="2025-01-25")
     monkeypatch.setattr(client, "initialize", lambda _: object())
     monkeypatch.setattr(drive, "DriveTransport", lambda *a, **k: object())
-    monkeypatch.setattr(region, "windows", lambda _: [dict(window_id="w", row=156, col=156)])
+    monkeypatch.setattr(
+        region,
+        "windows",
+        lambda _: [
+            dict(window_id=f"{r}_{c}", row=r, col=c) for r, c in [(0, 0), (0, 160), (160, 0)]
+        ],
+    )
     monkeypatch.setattr(
         region,
         "catalog",
@@ -223,6 +229,7 @@ def test_drive_workflow_resumes_selection_and_publishes_only_complete_inputs(set
         download_workers=2,
         file_dimensions=3840,
         max_export_gib=0.5,
+        max_padding_fraction=0.5,
         max_pending_gib=1,
         drive_reserve_gib=0.5,
         poll_seconds=1,
@@ -234,6 +241,9 @@ def test_drive_workflow_resumes_selection_and_publishes_only_complete_inputs(set
             return
         assert (cache.root / "selections/2025-01-21.parquet").exists()
         assert not (cache.root / "manifests/2025-01-21.parquet").exists()
+        # A three-chunk L shape merges into one rectangle per scene only with 50% padding.
+        assert len(jobs) == 2
+        assert all(len(j["chunks"]) == 3 and j["width"] == j["height"] == 960 for j in jobs)
         if fail:
             raise OSError("interrupted export")
         for job in jobs:
@@ -252,4 +262,7 @@ def test_drive_workflow_resumes_selection_and_publishes_only_complete_inputs(set
     assert pd.read_parquet(cache.root / "manifests/2025-01-21.parquet")["accepted"].all()
     report = json.loads((cache.root / "reports/preparation_2025-01-21.json").read_text())
     assert report["status"] == "ready" and report["mask_requests"] == 0
-    assert report["mask_verified_chunks"] == 8
+    assert report["mask_verified_chunks"] == 6
+    assert report["packing"] == dict(max_export_gib=0.5, max_padding_fraction=0.5)
+    for s in (scene, older):
+        assert not cache.done(s)[1, 1]

@@ -179,6 +179,12 @@ def prepare_region_drive(
     ee = initialize(plan["config"]["gee_project"])
     cache = OfflineSceneCache(root, plan, min_free_gib=min_free_gib)
     validate_settings(settings, cache)
+    padding = settings.get("max_padding_fraction", 0.25)
+    LOG.info(
+        "Regional packing: max_export_gib=%.2f, max_padding_fraction=%.2f",
+        settings["max_export_gib"],
+        padding,
+    )
     transport = DriveTransport(
         ee,
         root,
@@ -236,12 +242,18 @@ def prepare_region_drive(
                 demands = selected_chunks(cache, table.to_dict("records"))
                 jobs = list(
                     selected_export_jobs(
-                        cache, demands, max_export_bytes=settings["max_export_gib"] * 1024**3
+                        cache,
+                        demands,
+                        max_export_bytes=settings["max_export_gib"] * 1024**3,
+                        max_padding_fraction=padding,
                     )
                 )
                 report = dict(
                     time=period["time"],
                     status="selected",
+                    packing=dict(
+                        max_export_gib=settings["max_export_gib"], max_padding_fraction=padding
+                    ),
                     candidate_scenes=len(candidates),
                     selected_scenes=len(demands),
                     windows=len(table),

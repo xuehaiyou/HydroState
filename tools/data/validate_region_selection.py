@@ -21,12 +21,13 @@ from hydrostate.data.gee.contracts import atomic_json
 from hydrostate.data.gee.products import BANDS, slots
 from hydrostate.data.gee.region_plan import export_jobs, selected_chunks, selected_export_jobs
 from hydrostate.data.gee.selection import epoch, select_window
+from hydrostate.data.gee.workflows.drive_queue import validate_settings
 from hydrostate.storage.scene_cache import SceneCache
 
 LOG = logging.getLogger(__name__)
 
 
-def validate(source, output, *, limit=8, workers=4):
+def validate(source, output, *, limit=8, workers=4, download_config=None):
     if source.resolve() == output.resolve() or source.resolve() in output.resolve().parents:
         raise ValueError("Use a separate validation root outside the production root")
     if limit < 1 or workers < 1:
@@ -62,6 +63,11 @@ def validate(source, output, *, limit=8, workers=4):
     }
     # An empty full cache forces fresh mask requests, independent of the reference.
     full = SceneCache(output, plan)
+    config_path = (
+        download_config or Path(__file__).resolve().parents[2] / "configs/data/gee_drive.json"
+    )
+    settings = json.loads(config_path.read_text())
+    validate_settings(settings, full)
     if (output / "input_cache").exists():
         raise ValueError("Validation root must not contain full-band inputs")
     quality = PixelQualityCache(full, ee=initialize(plan["config"]["gee_project"]))
@@ -115,12 +121,19 @@ def validate(source, output, *, limit=8, workers=4):
         )
         LOG.info("Exact full-chunk mask parity: %s %s", key, valid.shape)
     candidates = [s for group in scenes.values() for s in group]
-    old_jobs = list(export_jobs(full, candidates, actual, max_export_bytes=0.5 * 1024**3))
+    budget = settings["max_export_gib"] * 1024**3
+    old_jobs = list(export_jobs(full, candidates, actual, max_export_bytes=budget))
     new_jobs = list(
-        selected_export_jobs(full, selected_chunks(full, actual), max_export_bytes=0.5 * 1024**3)
+        selected_export_jobs(
+            full,
+            selected_chunks(full, actual),
+            max_export_bytes=budget,
+            max_padding_fraction=settings.get("max_padding_fraction", 0.25),
+        )
     )
     report = dict(
         passed=True,
+        download_settings=settings,
         windows=len(actual),
         time=period["time"],
         selection_seconds=selection_seconds,
@@ -143,11 +156,19 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--download-config", type=Path)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     print(
         json.dumps(
-            validate(args.source, args.output, limit=args.limit, workers=args.workers), indent=2
+            validate(
+                args.source,
+                args.output,
+                limit=args.limit,
+                workers=args.workers,
+                download_config=args.download_config,
+            ),
+            indent=2,
         )
     )
 
