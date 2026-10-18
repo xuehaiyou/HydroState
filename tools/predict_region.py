@@ -42,6 +42,8 @@ def main():
     parser.add_argument("--statistics", type=Path)
     parser.add_argument("--drop-s2", action="store_true", help="Separate sensor ablation product")
     args = parser.parse_args()
+    if (args.root / "recency_update_pending.json").exists() and args.command != "status":
+        parser.error("Interrupted recency revision; rerun tools/data/update_region_recency.py")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.workers < 0 or args.batch_size < 1:
         parser.error("workers must be nonnegative and batch size positive")

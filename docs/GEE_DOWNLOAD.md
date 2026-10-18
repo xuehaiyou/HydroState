@@ -106,6 +106,23 @@ IO 节点不经过 Slurm 排队；使用 `scripts/run_region_download_io.sh` 检
 
 ## 恢复与数据安全
 
+鄱阳湖三变量推理的 `configs/inference/poyang_3vars.json` 使用 `latest_days=4`：
+最近一次入选观测到目标日期最多相隔 4 天；窗口有效像元比例仍为 50%，至少两个
+时间槽有观测。样本采集的默认 3 天规则保持不变。
+
+已有区域的参数保存在 `plan.json`，修改源配置不会自动改变运行断点。需要放宽
+观测时效时，先停止该区域的准备进程，执行离线修订，再用原命令恢复下载：
+
+```bash
+python tools/data/update_region_recency.py --root /path/to/region --latest-days 4
+```
+
+工具持有准备、预测和下载锁，在 `revisions/` 备份原计划、筛选数据库与受影响的清单，
+按已保存的观测年龄重算接受状态。只有接受状态变化的日期才撤销就绪清单，补齐缺失
+完整波段后重新发布；已有影像、掩膜和在途 GEE 导出均保留。已有预测产品时工具拒绝
+原地修订，避免把旧预测标成新规则。若修订中断，正常准备入口会阻止读取混合状态，
+重新运行同一修订命令即可接续。该工具仅支持放宽时效，不更改选片或 QA 规则。
+
 ```text
 区域根目录/
   plan.json / windows.parquet / catalogs/  原区域计划与目录

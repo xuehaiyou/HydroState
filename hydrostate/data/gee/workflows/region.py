@@ -46,6 +46,10 @@ def prepare_date(root, plan, period, *, workers=4, min_free_gib=5):
             raise ValueError("Incomplete date manifest")
         return table
     with locked(root / "prepare.lock", blocking=False):
+        if (root / "recency_update_pending.json").exists():
+            raise RuntimeError(
+                "Resume the interrupted regional recency revision before preparation"
+            )
         t = date.fromisoformat(period["time"])
         years = range((t - timedelta(days=63)).year, t.year + 1)
         scenes = {
@@ -193,6 +197,10 @@ def prepare_region_drive(
         quota_project=quota_project or plan["config"]["gee_project"],
     )
     with locked(root / "prepare.lock", blocking=False):
+        if (root / "recency_update_pending.json").exists():
+            raise RuntimeError(
+                "Resume the interrupted regional recency revision before preparation"
+            )
         contract_path = root / "selection_contract.json"
         contract = dict(plan=fingerprint(plan), preprocessing=cache.contract, selection_version=1)
         if contract_path.exists() and json.loads(contract_path.read_text()) != contract:

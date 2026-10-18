@@ -17,7 +17,7 @@
   "cache_chunk": 480,
   "min_valid_fraction": 0.5,
   "min_active_slots": 2,
-  "latest_days": 3,
+  "latest_days": 4,
   "gee_project": "cropland-477906",
   "model_config": "configs/hydrostate_multilevel.py",
   "checkpoint": "/scr/u/xiaoz/HydroState/work_dirs/multilevel_n20000_4251319/best_hydro_score_epoch_32.pth",

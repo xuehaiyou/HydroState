@@ -166,6 +166,36 @@ def test_scene_selection_locks_orbit_and_accepts_missing_s2(plan):
     ]
 
 
+@pytest.mark.parametrize(
+    "age,limit,accepted", [(3.57, 3, False), (3.57, 4, True), (4, 4, True), (4.001, 4, False)]
+)
+def test_recency_gate_uses_configured_days_without_changing_observations(
+    plan, age, limit, accepted
+):
+    plan["config"]["latest_days"] = limit
+    target = epoch(plan["periods"][0]["time"])
+    scenes = dict(
+        s1=[
+            dict(
+                key="s1",
+                time=int(target - days * 86400),
+                asset_id=f"S1/{days}",
+                orbit=12,
+                bounds=[399000, 3190000, 410000, 3210000],
+            )
+            for days in (age, 20)
+        ],
+        s2=[],
+        landsat=[],
+    )
+    cache = SimpleNamespace(read_valid=lambda scene, window: np.ones((120, 120), bool))
+    row = select_window(plan, plan["periods"][0], windows(plan)[0], scenes, cache)
+    assert row["accepted"] is accepted
+    assert row["active_slots"] == 2
+    assert row["latest_age_days"] == pytest.approx(age, abs=1 / 86400)
+    assert len([s for s in json.loads(row["selections"]).values() if s]) == 2
+
+
 def test_cache_reads_require_committed_chunks_and_preserve_offsets(tmp_path, plan):
     cache = SceneCache(tmp_path, plan)
     scene = dict(key="s1", asset_id="S1/test", time=epoch("2025-01-21"))
