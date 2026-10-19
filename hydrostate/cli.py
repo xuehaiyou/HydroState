@@ -8,12 +8,22 @@ from pathlib import Path
 from mmengine.config import Config, DictAction
 from mmengine.runner import Runner
 
+from hydrostate.data.input_products import L2_PROFILE, LEGACY_PROFILE
+from hydrostate.data.model_inputs import input_keys
 from hydrostate.normalization import load_target_statistics, training_fingerprint
 from hydrostate.tasks import task_config
 
 
 def configure_data_contract(cfg: Config) -> None:
     """Fan out one optional task/pack configuration without changing legacy configs."""
+    profile = cfg.get("input_profile", cfg.model.get("encoder", {}).get(
+        "input_profile", LEGACY_PROFILE))
+    input_keys(profile)
+    if profile != LEGACY_PROFILE or "input_profile" in cfg:
+        for component in ("encoder", "data_preprocessor"):
+            if cfg.model[component].get("input_profile", profile) != profile:
+                raise ValueError(f"Model {component} input_profile disagrees with configuration")
+            cfg.model[component].input_profile = profile
     tasks = cfg.get("tasks", cfg.model.get("tasks"))
     if tasks is not None:
         tasks = task_config(tasks)
@@ -28,6 +38,10 @@ def configure_data_contract(cfg: Config) -> None:
         if loader is None:
             continue
         dataset = loader.dataset
+        if dataset.get("input_profile", profile) != profile:
+            raise ValueError(f"{key} input_profile disagrees with model")
+        if profile != LEGACY_PROFILE:
+            dataset.input_profile = profile
         if tasks is not None:
             if dataset.get("tasks") is not None and task_config(dataset.tasks) != tasks:
                 raise ValueError(f"{key} tasks disagree with model tasks")
@@ -60,7 +74,8 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
         if dataset.split != "train":
             raise ValueError("Fine-tuning requires the train split")
         contract = None
-        if any(dataset.get(key) for key in ("tasks", "input_packs", "label_packs", "target_time_queries")) or (
+        if any(dataset.get(key) for key in (
+            "tasks", "input_packs", "label_packs", "target_time_queries", "input_profile")) or (
             dataset.get("output_scale", 3) != 3
         ):
             from hydrostate.datasets.zarr_dataset import HydroStateZarrDataset
@@ -68,6 +83,8 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
             loaded = HydroStateZarrDataset(**{k: v for k, v in dataset.items() if k != "type"})
             contract = loaded.data_contract
             selected_inputs = {name for pack in loaded.input_packs for name in pack.variables}
+            if loaded.input_profile == L2_PROFILE:
+                selected_inputs.discard("landsat_l2")
             fusion = cfg.model.get("input_fusion") or {}
             if selected_inputs != set(fusion.get("inputs", {})):
                 raise ValueError("Selected auxiliary inputs must match model.input_fusion.inputs")

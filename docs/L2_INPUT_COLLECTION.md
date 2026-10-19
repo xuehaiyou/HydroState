@@ -50,9 +50,11 @@ OUTPUT_DIR=/mnt/d/Hydrostate/samples/merged_v1/inputs/landsat_l2_sr_pilot_v1 \
 
 `.landsat_l2_sr_v1.work/checkpoint.sqlite3` 是可恢复的临时下载缓存，`run.log` 记录进度。
 试采成功的数据可在全量采集中复用。完成发布前不会暴露半成品包。
-训练数据集可通过 `input_packs=[dict(path="inputs/landsat_l2_sr_v1",
-variables=["landsat_l2"])]` 读取新增变量；此设置本身不会替换模型的旧 Landsat 分支。
-新模型必须显式配置 L2 输入适配、停用旧 L1 分支并重新训练/微调。
+训练配置同时声明 `input_profile="landsat_l2_sr_v1"` 和
+`input_packs=[dict(path="inputs/landsat_l2_sr_v1", variables=["landsat_l2"])]`。
+数据集此时不读取旧 Landsat L1 数值和掩膜，第三个传感器的可用性和时间由 L2 包重建。
+L2 没有有效像元的槽位清空；缺少包记录会在训练前报错，不能把尚未下载当成无观测。
+同一像元要求七波段全部有效；无效值置零，但有效负反射率保留。
 
 ## HPC 本地区域输入
 
@@ -105,8 +107,86 @@ S1 裁成多个瓦片时分别保留，不能按原始场景 ID 去重丢掉其�
 
 旧 `pixels`/`drive` 区域通道与原 L1 缓存保持原合同；它们目前不负责新 L2 区域补缺。
 新区域根目录不会覆盖旧下载成果。现有三变量 L1 checkpoint 无法直接消费 L2，
-`predict` 会明确拒绝，以免产生看似成功但输入不匹配的结果。本次交付的是输入采集，
-并未提交新训练或区域预测任务。
+`predict` 会检查模型输入版本、L2 训练统计和完整权重，拒绝不匹配的组合。
+
+## 从样本到模型
+
+训练与本地区域输入共用 `prepare_model_inputs` 和 `HydroDataPreprocessor`：
+
+```text
+GEE 样本 L2 输入包 ─┐
+                   ├─ L2 掩膜/时间 → 可训练光谱适配 → OlmoEarth 多层观测特征
+本地场景缓存 ──────┘                                  ↓
+                                      各变量目标时间查询 → 多尺度解码
+                                                    ↓
+                                      任务 adapter / 交互 → 各变量输出
+```
+
+Landsat 适配层把七通道物理反射率先做固定尺度变换 `(SR - 0.2) / 0.2`，再通过可训练
+1×1 卷积映射成 OlmoEarth Landsat 输入嵌入所需的十一通道特征。前七个对角权重初始化
+为 1，余下通道和偏置为 0。这些是待学习特征，**不代表反演了 L1、全色或热红外波段**。
+输入与输出都应用有效掩膜，不将云和填充值带入模型。S1/S2 保留现有归一化。
+新适配层使用未衰减的基础学习率，骨干仍按原层级学习率衰减进行微调。
+
+提供两个配置：
+
+- `configs/hydrostate_multilevel_temporal_l2.py`：WF/SM/ET，供三变量鄱阳湖推理使用。
+- `configs/hydrostate_ecosystem_multilevel_temporal_l2.py`：保留已有十六任务和标签质量规则，
+  包括 LST 2 K 阈值；默认沿用 HPC 数据路径，可用环境变量指定本地数据。
+
+两个配置均保留三层 OlmoEarth 特征、统一目标时间查询、多尺度解码、任务 adapter 和交互。
+WF 与 SM 训练标签日期可能不同，因此不将另一个日期的 WF 当作 SM 的土地掩膜。
+区域三变量输出中 WF/SM 查询同一个参考日，ET 查询计划中的 `[start,end)` 区间；
+区域 SM 输出仍按同日预测水体比例限制土地范围。
+
+### 统计、验证与训练
+
+先生成一份新的训练集统计，旧 L1 统计的输入支持指纹不能复用。统计只读取输入掩膜、
+时间与标签，不读取与统计无关的卫星影像值；训练和验证始终读取真实影像。
+
+```bash
+export HYDROSTATE_DATA_ROOT=/mnt/d/Hydrostate/samples/merged_v1
+export HYDROSTATE_MODEL_PATH="$PWD/pretrained/OlmoEarth-v1_2-Base"
+
+python tools/data/compute_target_statistics.py \
+  --config configs/hydrostate_multilevel_temporal_l2.py \
+  --output "$HYDROSTATE_DATA_ROOT/target_stats_multilevel_temporal_l2_v1.json" \
+  --num-workers 4
+
+python tools/data/validate_l2_pipeline.py \
+  --config configs/hydrostate_multilevel_temporal_l2.py \
+  --pretrained "$HYDROSTATE_MODEL_PATH" --limit 2 --device cuda \
+  --report work_dirs/l2_validation/pipeline.json
+
+hydrostate-train configs/hydrostate_multilevel_temporal_l2.py
+```
+
+验证程序读取真实样本，执行前向、反向与参数更新，在临时目录保存并严格重载权重，
+核对重载输出；三变量配置还验证区域预测接口及 32×32 中心拼接。
+`--unit-statistics` 可在全量统计完成前做连接性测试，其报告明确标记临时单位尺度；
+该结果不代表精度，临时模型会删除。测试不会下载数据或覆盖正式权重。
+
+十六任务训练使用对应配置，统计另存为 `target_stats_ecosystem_temporal_l2_v1.json`。
+在 HPC 设置 `HYDROSTATE_DATA_ROOT`、`HYDROSTATE_MANIFEST`、`HYDROSTATE_L2_PACK` 和
+`HYDROSTATE_MODEL_PATH` 指向已同步的数据与权重；统计输出路径与配置保持一致。
+
+### 接入已完成的区域日期
+
+训练出三变量 L2 checkpoint 后，通过显式参数选择模型，**不用改动正在准备的区域计划**：
+
+```bash
+python tools/predict_region.py predict \
+  --root /scr/u/xiaoz/HydroState/inference/poyang_local_l2_201704_202512 \
+  --model-config configs/hydrostate_multilevel_temporal_l2.py \
+  --checkpoint /path/to/trained_l2_checkpoint.pth \
+  --pretrained /scr/u/xiaoz/HydroState/pretrained/OlmoEarth-v1_2-Base \
+  --statistics /path/to/target_stats_multilevel_temporal_l2_v1.json \
+  --dates 2017-05-29 --batch-size 2 --workers 2 --device cuda
+```
+
+此区域导出接口仍只生成 WF/SM/ET，十六任务配置用于样本训练与验证。
+代码链路通过验证不等于已获得 L2 模型精度；正式区域产品需要 L2 训练/验证、源数据覆盖
+检查，以及前述 S1/S2 跨来源数值核验。现有 HPC 本地影像准备任务不依赖此次模型修改。
 
 ## 代码位置
 
@@ -118,5 +198,8 @@ S1 裁成多个瓦片时分别保留，不能按原始场景 ID 去重丢掉其�
 - `hydrostate/data/local/reader.py`：块读取、投影、掩膜、S2 偏移校正。
 - `hydrostate/data/local/region.py`：区域准备、完整性校验与发布。
 - `hydrostate/data/local/planning.py`：离线复用区域计划。
+- `hydrostate/data/model_inputs.py`：样本和区域共用的 L2 掩膜与时间合同。
+- `hydrostate/models/landsat_l2_adapter.py`：可训练七通道反射率输入适配。
+- `tools/data/validate_l2_pipeline.py`：真实样本到模型、权重重载及拼接验证。
 
-验证：`python -m pytest -q tests/data/test_l2_inputs.py tests/data/gee tests/test_regional_inference.py`。
+验证：`python -m pytest -q tests/test_l2_model_pipeline.py tests/data/test_l2_inputs.py tests/data/gee tests/test_regional_inference.py`。

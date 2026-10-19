@@ -1,5 +1,9 @@
 # 可配置的 HydroState 架构
 
+新增 [Shared / Private LoRA 架构](SHARED_PRIVATE_MODEL.md) 通过
+`configs/hydrostate_shared_private.py` 选择，注册类为 `SharedPrivateHydroStateModel`。
+它冻结 OlmoEarth 基础权重，支持分阶段训练与新增变量适配；下文旧配置保持原行为。
+
 默认模型仍为 `HydroStateModel`。`StagedHydroStateModel` 实现三阶段任务分支、
 交互前辅助头和一次同步门控交互。两者使用同一个 OlmoEarth 编码器、数据合同、
 30 m 输出、产品/站点监督支持、训练集标准化统计和最终 NLL；评估和预测 API 相同。

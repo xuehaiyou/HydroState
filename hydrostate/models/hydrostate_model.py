@@ -8,6 +8,7 @@ from typing import Any
 import torch
 from mmengine.model import BaseModel
 
+from hydrostate.data.input_products import LEGACY_PROFILE
 from hydrostate.losses.uncertainty_nll import (
     global_observation_means,
     masked_standardized_mse_sum,
@@ -199,6 +200,7 @@ class HydroStateModel(BaseModel):
     ) -> None:
         self.task_specs = resolve_tasks(tasks)
         self.tasks = tuple(self.task_specs)
+        self.input_profile = encoder.get("input_profile", LEGACY_PROFILE)
         if data_preprocessor is not None:
             data_preprocessor = dict(data_preprocessor)
             if str(data_preprocessor.get("type", "")).endswith("HydroDataPreprocessor"):
@@ -209,6 +211,9 @@ class HydroStateModel(BaseModel):
                     raise ValueError("Preprocessor output_scale disagrees with model")
                 data_preprocessor.setdefault("tasks", task_config(self.task_specs))
                 data_preprocessor.setdefault("output_scale", output_scale)
+                if data_preprocessor.get("input_profile", self.input_profile) != self.input_profile:
+                    raise ValueError("Preprocessor input_profile disagrees with encoder")
+                data_preprocessor.setdefault("input_profile", self.input_profile)
         super().__init__(data_preprocessor=data_preprocessor, init_cfg=init_cfg)
         if set(heads) != set(self.tasks):
             raise ValueError(f"heads must be exactly {self.tasks}, got {tuple(heads)}")

@@ -81,6 +81,13 @@ See [model architectures](docs/MODEL_ARCHITECTURES.md)
 for equations, ablations and configuration switches. Existing configs retain the
 original shared-decoder baseline.
 
+The opt-in `configs/hydrostate_shared_private.py` selects the new registered
+`SharedPrivateHydroStateModel`: frozen OlmoEarth weights, shared/private LoRA,
+and independent temporal prediction branches. Separate configs cover task
+specialization, independent-LoRA controls, and incremental LAI/LST adaptation.
+See [shared/private training and model selection](docs/SHARED_PRIVATE_MODEL.md)
+for configuration choices, checkpoint composition, and transfer commands.
+
 Local coverage indexing, station ingestion, and ready-to-submit SLURM jobs are
 documented in `docs/DATA_PREPARATION.md`.
 

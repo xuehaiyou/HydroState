@@ -88,10 +88,11 @@ class WeightedMosaic:
 
 
 class RegionDataset(Dataset):
-    def __init__(self, root, plan, table, drop_s2=False):
+    def __init__(self, root, plan, table, drop_s2=False, query_period=None):
         self.root, self.plan = root, plan
         self.rows = table.to_dict("records")
         self.drop_s2, self.cache = drop_s2, None
+        self.query_period = query_period
 
     def __len__(self):
         return len(self.rows)
@@ -100,18 +101,26 @@ class RegionDataset(Dataset):
         if self.cache is None:
             self.cache = SceneCache(self.root, self.plan)
         arrays = assemble_inputs(self.cache, self.rows[index], drop_s2=self.drop_s2)
-        return dict(inputs={k: torch.from_numpy(v) for k, v in arrays.items()}, index=index)
+        inputs = {k: torch.from_numpy(v) for k, v in arrays.items()}
+        if self.query_period is not None:
+            p = self.query_period
+            instant = torch.tensor([epoch(p['time'])] * 2, dtype=torch.long)
+            inputs['target_time'] = dict(
+                water=instant, soil_moisture=instant.clone(),
+                et=torch.tensor([epoch(p['start']), epoch(p['end'])], dtype=torch.long))
+        return dict(inputs=inputs, index=index)
 
 
 def masked_outputs(model, inputs):
     """Run the original model with its trained preprocessing and predicted WF mask."""
     batch = inputs["s1"].shape[0]
+    height, width = inputs["s1"].shape[-2:]
     data = model.data_preprocessor(
         dict(
             inputs=inputs,
             data_samples=dict(
-                water=torch.zeros(batch, 1, 120, 120),
-                water_valid=torch.zeros(batch, 1, 120, 120, dtype=torch.bool),
+                water=torch.zeros(batch, 1, height, width),
+                water_valid=torch.zeros(batch, 1, height, width, dtype=torch.bool),
             ),
         ),
         training=False,
@@ -120,7 +129,11 @@ def masked_outputs(model, inputs):
     support = data["data_samples"]["prediction_valid"]
     if any(not torch.isfinite(value)[support].all() for value in outputs.values()):
         raise ValueError("Nonfinite model output on observed support")
-    sm = model.water_soil_coupling.prepare(outputs, dict(prediction_valid=support))
+    from hydrostate.models.water_soil_coupling import WaterSoilCoupling
+
+    # Regional WF/SM queries are aligned even when training product dates differ.
+    coupling = model.water_soil_coupling or WaterSoilCoupling()
+    sm = coupling.prepare(outputs, dict(prediction_valid=support))
     result = {
         k: v.float().masked_fill(
             ~(sm.pixel_valid if k == "soil_moisture" else support), float("nan")
@@ -130,38 +143,50 @@ def masked_outputs(model, inputs):
     return {k: v[:, 0].cpu().numpy() for k, v in result.items()}
 
 
-def load_model(plan, *, checkpoint=None, pretrained=None, statistics=None, device="cuda"):
-    from hydrostate.data.input_products import LEGACY_PROFILE
-
-    if plan['config'].get('input_profile', LEGACY_PROFILE) != LEGACY_PROFILE:
-        raise ValueError('L2 data preparation is supported; regional prediction requires a '
-                         'model trained with an explicit L2 input adapter. Legacy L1 weights '
-                         'cannot consume these inputs.')
+def load_model(plan, *, checkpoint=None, pretrained=None, statistics=None, model_config=None,
+               device="cuda"):
     from mmengine.config import Config
     from mmengine.registry import init_default_scope
     from mmengine.utils import import_modules_from_strings
 
     import hydrostate.models  # noqa: F401
+    from hydrostate.cli import configure_data_contract
+    from hydrostate.data.input_products import L2_PROFILE, LEGACY_PROFILE
     from hydrostate.registry import MODELS
 
     init_default_scope("hydrostate")
 
     config = plan["config"]
+    profile = config.get('input_profile', LEGACY_PROFILE)
+    source_config = model_config or config.get("model_config")
+    if not source_config or not (checkpoint or config.get("checkpoint")):
+        raise ValueError(
+            "Provide --model-config and a trained --checkpoint for regional prediction")
     checkpoint = str(checkpoint or config["checkpoint"])
     pretrained = str(pretrained or config["pretrained"])
     statistics = str(statistics or config["target_statistics"])
     if not Path(pretrained).is_dir():
         raise FileNotFoundError(f"Local pretrained model directory is required: {pretrained}")
-    cfg = Config.fromfile(config["model_config"])
+    cfg = Config.fromfile(source_config)
+    configure_data_contract(cfg)
+    if cfg.model.encoder.get('input_profile', LEGACY_PROFILE) != profile:
+        raise ValueError("Regional inputs and model input_profile differ; L1 weights cannot "
+                         "consume L2 without training the L2 adapter")
     if cfg.get("custom_imports"):
         import_modules_from_strings(**cfg.custom_imports)
     cfg.model.encoder.model_path = pretrained
     cfg.model.encoder.gradient_checkpointing = False
     cfg.model.target_statistics = json.loads(Path(statistics).read_text())
-    if cfg.model.type != "MultiLevelHydroStateModel":
+    if profile == L2_PROFILE and cfg.model.target_statistics.get('data_contract', {}).get(
+            'input_profile') != L2_PROFILE:
+        raise ValueError("L2 prediction requires target statistics computed with the L2 profile")
+    if cfg.model.type not in {"MultiLevelHydroStateModel", "MultiLevelTemporalHydroStateModel",
+                              "SharedPrivateHydroStateModel"}:
         raise ValueError(
-            "This regional contract is for the original three-variable multilevel model"
+            "Regional prediction requires a three-variable multilevel model"
         )
+    if cfg.model.type == "SharedPrivateHydroStateModel":
+        cfg.model.adapter_init = None  # The full checkpoint includes all task branches.
     model = MODELS.build(cfg.model)
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
     model.load_state_dict(state["state_dict"], strict=True)
@@ -175,6 +200,7 @@ def load_model(plan, *, checkpoint=None, pretrained=None, statistics=None, devic
         model_config=cfg.model.to_dict(),
         torch_version=torch.__version__,
         device=device,
+        input_profile=profile,
     )
     import os
 
@@ -193,6 +219,10 @@ def create_product(root, plan, provenance, *, drop_s2=False):
         statistics_sha256=provenance["statistics_sha256"],
         drop_s2=drop_s2,
     )
+    if provenance.get("input_profile") == "landsat_l2_sr_v1":
+        from hydrostate.data.gee.contracts import fingerprint
+
+        identity['model_config_hash'] = fingerprint(provenance['model_config'])
     if (path / ".zattrs").exists():
         group = zarr.open_group(str(path), mode="r+")
         if group.attrs.get("identity") != identity:
@@ -371,6 +401,7 @@ def predict_dates(
     checkpoint=None,
     pretrained=None,
     statistics=None,
+    model_config=None,
     drop_s2=False,
 ):
     root = Path(root)
@@ -379,7 +410,8 @@ def predict_dates(
     requested = set(dates or [p["time"] for p in plan["periods"]])
     with locked(root / "predict.lock", blocking=False):
         model, provenance = load_model(
-            plan, checkpoint=checkpoint, pretrained=pretrained, statistics=statistics, device=device
+            plan, checkpoint=checkpoint, pretrained=pretrained, statistics=statistics,
+            model_config=model_config, device=device
         )
         group = create_product(root, plan, provenance, drop_s2=drop_s2)
         grid, halo, core = plan["grid"], plan["grid"]["halo"], plan["grid"]["core"]
@@ -398,7 +430,10 @@ def predict_dates(
                         )
                     )
                 ].reset_index(drop=True)
-            dataset = RegionDataset(root, plan, accepted, drop_s2=drop_s2)
+            needs_time = (hasattr(model, "query_time")
+                          or getattr(model, "requires_target_time", False))
+            dataset = RegionDataset(root, plan, accepted, drop_s2=drop_s2,
+                                    query_period=period if needs_time else None)
             loader = DataLoader(
                 dataset,
                 batch_size=batch_size,
@@ -424,7 +459,8 @@ def predict_dates(
                             },
                         )
                     LOG.info("%s batch %d/%d", period["time"], batch_index + 1, len(loader))
-            maps = mosaic.finish(model.water_soil_coupling.min_land_fraction)
+            coupling = model.water_soil_coupling
+            maps = mosaic.finish(coupling.min_land_fraction if coupling else 0.01)
             report = write_date(group, plan, index, maps, table)
             report["window_context_disagreement"] = mosaic.disagreement()
             report.update(

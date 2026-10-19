@@ -334,7 +334,7 @@ class VariablePack:
                     name: product_time_bounds(scenes, name) for name in self.variables
                     if "time_support" not in self.variables[name]}
 
-    def read(self, sample_id, cache):
+    def read(self, sample_id, cache, *, read_values=True):
         location = self.locations.get(sample_id)
         group, row = (None, None) if location is None else (cache.get(location[0]), location[1])
         result = {}
@@ -343,7 +343,8 @@ class VariablePack:
             if group is None:
                 value, valid = np.zeros(shape, dtype=spec["dtype"]), np.zeros(shape, dtype=bool)
             else:
-                value = np.asarray(group[name][row])
+                value = (np.asarray(group[name][row]) if read_values else
+                         np.zeros(shape, dtype=spec['dtype']))
                 valid = np.asarray(group[f"{name}_valid"][row], dtype=bool)
                 if value.shape != shape or valid.shape != shape:
                     raise ValueError(f"Pack array shape differs from metadata: {name}")

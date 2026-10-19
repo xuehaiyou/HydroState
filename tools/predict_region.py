@@ -42,6 +42,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--model-config", type=Path,
+                        help="Prediction model config; does not change the frozen input plan")
     parser.add_argument("--pretrained", type=Path)
     parser.add_argument("--statistics", type=Path)
     parser.add_argument("--drop-s2", action="store_true", help="Separate sensor ablation product")
@@ -120,6 +122,7 @@ def main():
             checkpoint=args.checkpoint,
             pretrained=args.pretrained,
             statistics=args.statistics,
+            model_config=args.model_config,
             drop_s2=args.drop_s2,
         )
     else:

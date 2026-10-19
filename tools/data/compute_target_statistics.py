@@ -15,6 +15,7 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
+from hydrostate.data.input_products import LEGACY_PROFILE
 from hydrostate.datasets.zarr_dataset import HydroStateZarrDataset, hydro_collate
 from hydrostate.models.data_preprocessor import HydroDataPreprocessor
 from hydrostate.models.hydrostate_model import site_supervision_values, supervision_values
@@ -58,16 +59,23 @@ class RunningMoments:
         return dict(count=int(self.count), mean=self.mean, std=std)
 
 
+class _SupportDataset(HydroStateZarrDataset):
+    """Statistics need input masks/times and labels, not satellite radiances."""
+
+    def _load_inputs(self, row):
+        return super()._load_inputs(row, read_values=False)
+
+
 def compute_statistics(manifest, data_root, num_workers=4, batch_size=4, *,
                        tasks=None, input_packs=None, label_packs=None, output_scale=3,
-                       target_time_queries=False):
+                       target_time_queries=False, input_profile=LEGACY_PROFILE):
     manifest = Path(manifest)
     content = manifest.read_bytes()
     table = pd.read_parquet(manifest)
-    dataset = HydroStateZarrDataset(
+    dataset = _SupportDataset(
         str(manifest), "train", str(data_root), training=False, tasks=tasks,
         input_packs=input_packs, label_packs=label_packs, output_scale=output_scale,
-        target_time_queries=target_time_queries,
+        target_time_queries=target_time_queries, input_profile=input_profile,
     )
     specs = resolve_tasks(tasks)
     loader = DataLoader(
@@ -77,7 +85,8 @@ def compute_statistics(manifest, data_root, num_workers=4, batch_size=4, *,
         num_workers=num_workers,
         collate_fn=hydro_collate,
     )
-    preprocessor = HydroDataPreprocessor(tasks=tasks, output_scale=output_scale)
+    preprocessor = HydroDataPreprocessor(tasks=tasks, output_scale=output_scale,
+                                        input_profile=input_profile)
     moments = {task: RunningMoments() for task in specs}
     counts = {task: dict(product_count=0, site_count=0, product_samples=0) for task in specs}
     seen = 0
@@ -145,7 +154,8 @@ def main():
         args.manifest = dataset.manifest
         args.data_root = dataset.get("data_root", str(Path(args.manifest).parent))
         options = {key: dataset[key] for key in (
-            "tasks", "input_packs", "label_packs", "output_scale", "target_time_queries")
+            "tasks", "input_packs", "label_packs", "output_scale", "target_time_queries",
+            "input_profile")
                    if key in dataset}
     elif not args.manifest or not args.data_root:
         parser.error("Provide --config or both --manifest and --data-root")

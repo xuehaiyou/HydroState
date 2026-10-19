@@ -7,6 +7,8 @@ from typing import Any
 import torch
 from mmengine.model import BaseDataPreprocessor
 
+from hydrostate.data.input_products import LEGACY_PROFILE
+from hydrostate.data.model_inputs import input_keys, prepare_model_inputs
 from hydrostate.registry import MODELS
 from hydrostate.tasks import resolve_tasks
 
@@ -46,17 +48,19 @@ class HydroDataPreprocessor(BaseDataPreprocessor):
     same preprocessing version is recorded in every shard's attributes.
     """
 
-    def __init__(self, tasks=None, output_scale=3, **kwargs):
+    def __init__(self, tasks=None, output_scale=3, input_profile=LEGACY_PROFILE, **kwargs):
         super().__init__(**kwargs)
         if type(output_scale) is not int or output_scale < 1:
             raise ValueError("output_scale must be a positive integer")
         self.tasks = resolve_tasks(tasks)
         self.output_scale = output_scale
+        self.input_profile = input_profile
+        self.input_keys = input_keys(input_profile)
 
     def forward(self, data: dict[str, Any], training: bool = False) -> dict[str, Any]:
         # Keep control metadata on CPU. Pack all gather indices into a single
         # tensor so cast_data transfers them once alongside the image tensors.
-        inputs = dict(data["inputs"])
+        inputs = prepare_model_inputs(data["inputs"], self.input_profile)
         metadata = None
         temporal = {
             key: inputs.pop(key).detach().to(device="cpu", dtype=dtype)
@@ -72,15 +76,15 @@ class HydroDataPreprocessor(BaseDataPreprocessor):
         data["inputs"].update(temporal)
         if metadata is not None:
             data["inputs"]["_temporal_metadata"] = metadata
-        for key in ("s1", "s2", "landsat"):
+        for key in self.input_keys:
             data["inputs"][key] = data["inputs"][key].float()
         for key, value in data["data_samples"].items():
             if key.endswith("_valid") and torch.is_tensor(value):
                 data["data_samples"][key] = value.bool()
         inputs = data["inputs"]
         masks = [
-            inputs[f"{key}_valid"].bool().any(dim=1)
-            for key in ("s1", "s2", "landsat")
+            inputs[f"{key}_valid"].bool().all(dim=2, keepdim=True).any(dim=1)
+            for key in self.input_keys
             if f"{key}_valid" in inputs
         ]
         if masks:

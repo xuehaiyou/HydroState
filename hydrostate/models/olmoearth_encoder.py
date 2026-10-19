@@ -9,6 +9,8 @@ from typing import Any
 import torch
 from torch import nn
 
+from hydrostate.data.input_products import L2_PROFILE, LEGACY_PROFILE
+from hydrostate.data.model_inputs import input_keys
 from hydrostate.registry import MODELS
 
 from .temporal_metadata import prepare_temporal_metadata
@@ -37,6 +39,8 @@ def _broadcast_sdpa(attention, q, k, v, n, attn_mask=None, **kwargs):
 class OlmoEarthEncoder(nn.Module):
     """Load OlmoEarth v1.2 Base and return its pooled spatial feature map."""
 
+    input_keys = INPUT_KEYS
+
     def __init__(
         self,
         model_id: str = "OLMOEARTH_V1_2_BASE",
@@ -46,8 +50,18 @@ class OlmoEarthEncoder(nn.Module):
         inputs_are_normalized: bool = True,
         gradient_checkpointing: bool = False,
         broadcast_attention_mask: bool = True,
+        input_profile: str = LEGACY_PROFILE,
     ) -> None:
         super().__init__()
+        self.input_profile = input_profile
+        self.input_keys = input_keys(input_profile)
+        self.landsat_l2_adapter = None
+        if input_profile == L2_PROFILE:
+            if not inputs_are_normalized:
+                raise ValueError("L2 adapter requires already-normalized S1/S2 inputs")
+            from .landsat_l2_adapter import LandsatL2Adapter
+
+            self.landsat_l2_adapter = LandsatL2Adapter()
         try:
             from olmoearth_pretrain_minimal import ModelID
             from rslearn.models.olmoearth_pretrain.model import OlmoEarth
@@ -117,7 +131,8 @@ class OlmoEarthEncoder(nn.Module):
 
         for batch_index, modalities in enumerate(metadata):
             sample: dict[str, RasterImage] = {}
-            for modality_index, (input_key, modality) in enumerate(zip(INPUT_KEYS, MODALITIES)):
+            pairs = zip(self.input_keys, MODALITIES)
+            for modality_index, (input_key, modality) in enumerate(pairs):
                 item = modalities[modality_index]
                 if item.start == item.stop:
                     continue
@@ -128,7 +143,10 @@ class OlmoEarthEncoder(nn.Module):
                     pixel_valid = inputs[valid_key][batch_index].index_select(0, selected)
                     if pixel_valid.ndim == 3:
                         pixel_valid = pixel_valid.unsqueeze(1)
-                    image = image * pixel_valid.to(dtype=image.dtype)
+                    if input_key == "landsat_l2":
+                        image = self.landsat_l2_adapter(image, pixel_valid)
+                    else:
+                        image = image.masked_fill(~pixel_valid.bool(), 0)
                 image = image.permute(1, 0, 2, 3).contiguous()  # C,Tv,H,W
                 sample[modality] = RasterImage(image=image, timestamps=list(item.timestamps))
             if not sample:

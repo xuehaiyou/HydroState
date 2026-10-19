@@ -7,15 +7,17 @@ from .hydrostate_model import HydroStateModel
 from .input_fusion import AuxiliaryInputFusion
 from .multilevel_encoder import MultiLevelOlmoEarthEncoder
 from .multilevel_model import MultiLevelFusionDecoder, MultiLevelHydroStateModel
-from .olmoearth_encoder import OlmoEarthEncoder
-from .staged_model import StagedHydroStateModel
-from .task_branches import StagedTaskDecoder, TaskGatedInteraction
-from .query_time import TargetTimeQuery
-from .temporal_model import TemporalHydroStateModel, TemporalOlmoEarthEncoder
 from .multilevel_temporal_model import (
     MultiLevelTemporalHydroStateModel,
     MultiLevelTemporalOlmoEarthEncoder,
 )
+from .olmoearth_encoder import OlmoEarthEncoder
+from .query_time import TargetTimeQuery
+from .shared_private_encoder import SharedPrivateOlmoEarthEncoder
+from .shared_private_model import SharedPrivateHydroStateModel
+from .staged_model import StagedHydroStateModel
+from .task_branches import StagedTaskDecoder, TaskGatedInteraction
+from .temporal_model import TemporalHydroStateModel, TemporalOlmoEarthEncoder
 
 __all__ = [
     "AuxiliaryInputFusion",
@@ -29,6 +31,8 @@ __all__ = [
     "OlmoEarthEncoder",
     "RegressionHead",
     "SharedUNetDecoder",
+    "SharedPrivateHydroStateModel",
+    "SharedPrivateOlmoEarthEncoder",
     "StagedHydroStateModel",
     "StagedTaskDecoder",
     "TaskGatedInteraction",

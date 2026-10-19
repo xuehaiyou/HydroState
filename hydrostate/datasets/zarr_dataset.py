@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 import json
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,8 @@ import zarr
 from mmengine.registry import FUNCTIONS
 from torch.utils.data import Dataset, default_collate
 
+from hydrostate.data.input_products import L2_PROFILE, LEGACY_PROFILE, landsat_l2_spec
+from hydrostate.data.model_inputs import input_keys, prepare_model_inputs
 from hydrostate.registry import DATASETS
 from hydrostate.storage.packs import VariablePack, file_hash, validate_samples
 from hydrostate.tasks import resolve_tasks, task_config
@@ -104,6 +106,7 @@ class HydroStateZarrDataset(Dataset):
         tasks: dict | None = None,
         output_scale: int = 3,
         target_time_queries: bool = False,
+        input_profile: str = LEGACY_PROFILE,
     ) -> None:
         self.manifest_path = Path(manifest)
         self.data_root = Path(data_root) if data_root else self.manifest_path.parent
@@ -111,6 +114,8 @@ class HydroStateZarrDataset(Dataset):
         validate_samples(table)
         self.tasks = resolve_tasks(tasks)
         self.target_time_queries = target_time_queries
+        self.input_profile = input_profile
+        self.input_keys = input_keys(input_profile)
         if type(output_scale) is not int or output_scale < 1:
             raise ValueError("output_scale must be a positive integer")
         self.output_scale = output_scale
@@ -125,6 +130,20 @@ class HydroStateZarrDataset(Dataset):
         self.flip_probability = flip_probability
         self._cache = _ShardCache(max_open=max_open_shards)
         self.input_packs = self._open_packs(input_packs, table, "input")
+        if input_profile == L2_PROFILE:
+            packs = [p for p in self.input_packs if "landsat_l2" in p.variables]
+            if len(packs) != 1:
+                raise ValueError("L2 profile requires exactly one landsat_l2 input pack")
+            pack = packs[0]
+            spec = pack.variables["landsat_l2"]
+            expected = landsat_l2_spec()
+            for key in ("bands", "units", "input_profile", "normalization", "temporal"):
+                if spec.get(key) != expected[key]:
+                    raise ValueError(f"L2 pack has incompatible {key}")
+            missing = set(self.table.sample_id) - pack.locations.keys()
+            if missing:
+                raise ValueError(f"L2 pack has no records for {len(missing)} {split} samples; "
+                                 "finish collecting the pack before training")
         self.label_packs = self._open_packs(label_packs, table, "label")
         for pack in self.label_packs:
             for name, spec in pack.variables.items():
@@ -135,7 +154,8 @@ class HydroStateZarrDataset(Dataset):
                 if spec["grid"] != self.tasks[name].grid:
                     raise ValueError(f"Label grid disagrees with task configuration: {name}")
         self.data_contract = None
-        if input_packs or label_packs or tasks is not None or output_scale != 3 or target_time_queries:
+        if (input_packs or label_packs or tasks is not None or output_scale != 3
+                or target_time_queries or input_profile != LEGACY_PROFILE):
             self.data_contract = dict(
                 tasks=task_config(self.tasks), output_scale=output_scale,
                 packs=[dict(kind=p.metadata["kind"], variables=list(p.variables),
@@ -145,6 +165,8 @@ class HydroStateZarrDataset(Dataset):
             )
             if target_time_queries:
                 self.data_contract["target_time_queries"] = "observation_intervals_v1"
+            if input_profile != LEGACY_PROFILE:
+                self.data_contract["input_profile"] = input_profile
 
     def _open_packs(self, configs, table, kind):
         packs, names = [], set()
@@ -160,10 +182,10 @@ class HydroStateZarrDataset(Dataset):
             packs.append(pack)
         return packs
 
-    def _pack_values(self, packs, sample_id):
+    def _pack_values(self, packs, sample_id, *, read_values=True):
         values = {}
         for pack in packs:
-            for key, array in pack.read(sample_id, self._cache).items():
+            for key, array in pack.read(sample_id, self._cache, read_values=read_values).items():
                 dtype = (torch.bool if key.endswith("_valid") else
                          torch.long if key.endswith("_time") else torch.float32)
                 values[key] = _tensor(array, dtype)
@@ -181,26 +203,29 @@ class HydroStateZarrDataset(Dataset):
             raise ValueError("sample_weight values must be finite and positive")
         return weights
 
-    def _load_inputs(self, row: pd.Series) -> dict[str, torch.Tensor]:
+    def _load_inputs(self, row: pd.Series, *, read_values=True) -> dict[str, torch.Tensor]:
         path = _resolve_path(str(row.input_shard), self.data_root)
         group = self._cache.get(path)
         index = int(row.input_row)
-        inputs = {key: _tensor(group[key][index], torch.float32) for key in MODALITY_KEYS}
+        base_keys = [key for key in self.input_keys if key != "landsat_l2"]
+        inputs = {key: (_tensor(group[key][index], torch.float32) if read_values else
+                        torch.zeros(group[key].shape[1:], dtype=torch.float32))
+                  for key in base_keys}
         for key in ("sensor_valid", "observation_time"):
             if key not in group:
                 raise KeyError(f"{path} is missing required array {key!r}")
             inputs[key] = _tensor(group[key][index])
-        for key in MODALITY_KEYS:
+        for key in base_keys:
             valid_key = f"{key}_valid"
             if valid_key in group:
                 inputs[valid_key] = _tensor(group[valid_key][index], torch.bool)
-        extras = self._pack_values(self.input_packs, row.sample_id)
+        extras = self._pack_values(self.input_packs, row.sample_id, read_values=read_values)
         for pack in self.input_packs:
             for name in pack.variables:
                 if extras[name].shape[-2:] != inputs["s1"].shape[-2:]:
                     raise ValueError(f"Input pack {name} is not on the sample grid")
         inputs.update(extras)
-        return inputs
+        return prepare_model_inputs(inputs, self.input_profile)
 
     def _load_targets(self, row: pd.Series, height: int, width: int) -> dict[str, Any]:
         targets: dict[str, Any] = {}
@@ -285,8 +310,9 @@ class HydroStateZarrDataset(Dataset):
                 valid_key = f"{name}_native_valid" if spec.support in {
                     "native", "pml_native"} else f"{name}_valid"
                 if targets[valid_key].any():
-                    raise ValueError(f"{name}: valid labels require actual observation time bounds; "
-                                     "declare time_support and store the label's _time array")
+                    raise ValueError(
+                        f"{name}: valid labels require actual observation time bounds; "
+                        "declare time_support and store the label's _time array")
                 bounds = torch.tensor([default, default], dtype=torch.long)
             times[name] = bounds.clone()
         return times

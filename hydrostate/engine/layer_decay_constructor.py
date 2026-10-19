@@ -22,7 +22,7 @@ def olmoearth_layer_id(name: str, num_layers: int) -> int:
     use depth ``num_layers + 1`` and therefore the unscaled base LR.
     """
     if name.startswith(("decoder.", "heads.", "auxiliary_heads.", "interaction.",
-                        "loss_module.", "input_fusion.")):
+                        "loss_module.", "input_fusion.", "encoder.landsat_l2_adapter.")):
         return num_layers + 1
     match = _BLOCK_PATTERN.search(name)
     if match:

@@ -13,7 +13,7 @@ from hydrostate.registry import MODELS
 
 from .hydrostate_model import HydroStateModel
 from .multilevel_encoder import multilevel_features
-from .olmoearth_encoder import INPUT_KEYS, MODALITIES, OlmoEarthEncoder
+from .olmoearth_encoder import MODALITIES, OlmoEarthEncoder
 
 
 @MODELS.register_module()
@@ -54,7 +54,7 @@ class TemporalOlmoEarthEncoder(OlmoEarthEncoder):
         # Propagate per-pixel observation masks into the backbone as well as pooling.
         for modality in present:
             mi = MODALITIES.index(modality)
-            key = INPUT_KEYS[mi]
+            key = self.input_keys[mi]
             original_slots, aligned_slots = [], []
             for times, validity, union in zip(times_cpu, valid_cpu, unions):
                 source = {times[t][mi]: t for t in range(steps) if validity[t][mi]}
@@ -66,7 +66,7 @@ class TemporalOlmoEarthEncoder(OlmoEarthEncoder):
             aligned = torch.tensor(aligned_slots, device=device)
             pixel_valid = inputs[key + "_valid"].bool()
             if pixel_valid.ndim == 5:
-                pixel_valid = pixel_valid[:, :, 0]
+                pixel_valid = pixel_valid.all(dim=2)
             h, w = pixel_valid.shape[-2:]
             pixels = pixel_valid.gather(1, aligned[:, :, None, None].expand(-1, -1, h, w))
             mask = getattr(sample, modality + "_mask")
