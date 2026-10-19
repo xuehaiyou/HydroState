@@ -9,6 +9,9 @@ model = dict(
     branch_init_seed=ablation_seed,
     train_shared=True, train_tasks=None, active_tasks_only=False,
 )
+# BF16 needs no loss scaling. With only one supervised variable an accumulation
+# window can have no labels/owned gradients; GradScaler.step would assert then.
+optim_wrapper = dict(loss_scale=dict(enabled=False))
 # Retain epoch 50 plus one validation-selected checkpoint; bound scratch usage.
 default_hooks = dict(checkpoint=dict(max_keep_ckpts=1, save_last=True,
                                     save_best="hydro_score", rule="greater"))

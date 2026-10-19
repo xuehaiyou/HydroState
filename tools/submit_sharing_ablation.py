@@ -56,11 +56,30 @@ def validate_config(cfg, entry):
             or cfg.load_from is not None or cfg.resume
             or cfg.train_cfg.max_epochs != 50
             or cfg.train_dataloader.batch_size != 2
+            or cfg.optim_wrapper.loss_scale != dict(enabled=False)
             or cfg.optim_wrapper.accumulative_counts != 8):
         raise ValueError(f"Unexpected comparison configuration: {entry['stage']}")
     for name in ("val_evaluator", "test_evaluator"):
         if cfg[name].get("evaluated_tasks") != ([entry["task"]] if single else None):
             raise ValueError("Independent runs must evaluate only their trained task")
+
+
+def training_command(record, entry):
+    code, root, stage = record["code_root"], record["run_root"], entry["stage"]
+    return ["sbatch", "--parsable", f"--chdir={code}",
+            f"--job-name=hs_abl_{stage}_{Path(root).name}",
+            f"--output={root}/logs/{stage}-%j.out", f"--error={root}/logs/{stage}-%j.err",
+            "--export=ALL", "scripts/slurm/35_train_sharing_ablation.sh", stage]
+
+
+def summary_command(record):
+    code, root = record["code_root"], record["run_root"]
+    dependencies = ":".join(record["jobs"][e["stage"]]["job_id"] for e in record["experiments"])
+    return ["sbatch", "--parsable", f"--chdir={code}",
+            f"--job-name=hs_abl_summary_{Path(root).name}",
+            f"--output={root}/logs/summarize-%j.out", f"--error={root}/logs/summarize-%j.err",
+            "--export=ALL", f"--dependency=afterok:{dependencies}", "--kill-on-invalid-dep=yes",
+            "scripts/slurm/36_summarize_sharing_ablation.sh"]
 
 
 def main():
@@ -69,6 +88,8 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--l2-pack", default="inputs/landsat_l2_sr_v1")
     parser.add_argument("--seeds", type=int, nargs="+", default=[3407, 3408, 3409])
+    parser.add_argument("--defer-on-quota", action="store_true",
+                        help="Submit remaining jobs when the account's GPU quota frees up")
     args = parser.parse_args()
     plan = experiment_plan(args.seeds)
     code, root = Path(__file__).resolve().parents[1], args.root.resolve()
@@ -155,20 +176,17 @@ def main():
                   experiments=plan, jobs={})
     record_path = root / "submission.json"
     save_record(record_path, record)
+    if args.defer_on_quota:
+        from tools.dispatch_sharing_ablation import dispatch_pending, submission_limits
+
+        record["gpu_submission_limits"] = submission_limits()
+        save_record(record_path, record)
+        dispatch_pending(record_path, environment)
+        return
     for entry in plan:
         stage = entry["stage"]
-        command = ["sbatch", "--parsable", f"--chdir={code}",
-                   f"--job-name=hs_abl_{stage}_{root.name}",
-                   f"--output={root}/logs/{stage}-%j.out",
-                   f"--error={root}/logs/{stage}-%j.err", "--export=ALL",
-                   "scripts/slurm/35_train_sharing_ablation.sh", stage]
-        submit_stage(record, record_path, stage, command, environment)
-    dependencies = ":".join(record["jobs"][entry["stage"]]["job_id"] for entry in plan)
-    submit_stage(record, record_path, "summarize", [
-        "sbatch", "--parsable", f"--chdir={code}", f"--job-name=hs_abl_summary_{root.name}",
-        f"--output={root}/logs/summarize-%j.out", f"--error={root}/logs/summarize-%j.err",
-        "--export=ALL", f"--dependency=afterok:{dependencies}", "--kill-on-invalid-dep=yes",
-        "scripts/slurm/36_summarize_sharing_ablation.sh"], environment)
+        submit_stage(record, record_path, stage, training_command(record, entry), environment)
+    submit_stage(record, record_path, "summarize", summary_command(record), environment)
     print(f"Submission record: {record_path}", flush=True)
 
 

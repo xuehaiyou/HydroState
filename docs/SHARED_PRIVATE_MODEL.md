@@ -262,6 +262,10 @@ MMEngine 展开配置、训练日志、checkpoint 和初始化来源。
 `branch_init_seed` 保证同一 seed 的输入投影、查询、解码器和头在三组中初值相同，
 不因不同 LoRA rank 消耗随机数而改变预测分支初始化。
 
+三组 BF16 均设置 `loss_scale=dict(enabled=False)`，避免单任务的整个梯度累积窗口
+缺标时 GradScaler 因没有参数梯度而报错。空窗口保持参数和 AdamW 动量不变；之后
+有标签的窗口正常训练。该设置仅作用于新的三组对照配置。
+
 共享范围是 **FM 的 LoRA 参数**。所有组保留相同的专属输入投影、时间查询、解码器
 和头，因此 A 不是整个模型、解码器和输出头全共享。A/B/C 每任务的 LoRA 秩上限
 均为 16，但三组总 LoRA 参数量分别与 16/32/48 成正比。这轮没有提交等总参数量
@@ -277,6 +281,7 @@ C 配置使用 `train_shared=False`、`train_tasks=[task]`、`active_tasks_only=
 
 ```bash
 python tools/submit_sharing_ablation.py \
+  --defer-on-quota \
   --root /scr/u/xiaoz/HydroState/experiments/sharing_ablation_RUN_ID \
   --data-root /scr/u/xiaoz/HydroState/samples_merged_v1 \
   --manifest /scr/u/xiaoz/HydroState/samples_merged_v1/manifests/merged_v1_n20000/samples.parquet \
@@ -303,3 +308,12 @@ CPU 汇总生成运行根目录的 `comparison.json`，报告每任务 RMSE、�
 标准化平均 RMSE、相对独立训练的收益，以及以相同种子和 5° 空间块配对重采样的
 2000 次 bootstrap 区间。先核对测试样本与有效观测支持完全一致，再计算对照；
 区间是探索性区间，未做多重比较校正。单个变量退步必须与综合指标同时报告。
+
+`--defer-on-quota` 从 Slurm 读取 GPU QOS 的课题组/用户提交上限，并按展开的 array
+任务计数。满额时由一个 normal QOS CPU 控制作业管理续提，每次检查后退出；若仍有
+待提交实验，只创建一个最早 10 分钟后启动的下一次检查，不占 GPU 等待。仅在实际
+队列显示空位时提交；额度竞争导致拒绝后保留原始返回，队列状态未变化时不重复尝试。
+`submission.json` 中 `waiting_for_gpu_submission` 是尚未被 Slurm 接受的训练任务，
+`active_dispatcher` 是唯一续提作业，不能把它们表述成全部训练已进入 GPU 队列。
+全部训练作业接受后，才提交带完整依赖的汇总作业。文件锁和每次提交前后落盘防止
+重复续提；非配额错误或不明确的 sbatch 返回会停止自动流程，供检查后恢复。

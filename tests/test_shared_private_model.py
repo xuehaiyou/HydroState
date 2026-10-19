@@ -627,3 +627,34 @@ def test_ablation_evaluation_runner_writes_final_and_best_results(tmp_path, monk
         assert ("water_rmse" not in result["metrics"]) == single
         assert result["metrics"] == report["results"][kind]["metrics"]
         assert len(Path(result["sample_metrics"]).read_text().splitlines()) == 2
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is needed for empty BF16 windows")
+def test_independent_bf16_empty_accumulation_preserves_adam_state(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg.model.encoder.update(shared_rank=0, private_rank=4, shared_gate_mode="fixed_one")
+    cfg.model.update(train_tasks=["soil_moisture"], train_shared=False, active_tasks_only=True)
+    cfg.optim_wrapper.update(accumulative_counts=2, loss_scale=dict(enabled=False))
+    model = MODELS.build(cfg.model).cuda().train()
+    optim = build_optim_wrapper(model, cfg.optim_wrapper)
+    y = samples()
+    y["water"] = torch.full((2, 1, 12, 12), .3)
+    y["water_valid"] = torch.ones(2, 1, 12, 12, dtype=torch.bool)
+    batch = dict(inputs=inputs(model.tasks), data_samples=y)
+    empty = copy.deepcopy(batch)
+    empty["data_samples"]["soil_moisture_valid"].zero_()
+    for current in (empty, batch, empty, batch):
+        before = copy.deepcopy(model.state_dict())
+        state = copy.deepcopy(optim.optimizer.state_dict()["state"])
+        for _ in range(2):
+            losses = model.train_step(copy.deepcopy(current), optim)
+            assert torch.isfinite(losses["loss"])
+        if current is empty:
+            assert all(torch.equal(v, before[n]) for n, v in model.state_dict().items())
+            after = optim.optimizer.state_dict()["state"]
+            assert state.keys() == after.keys()
+            for key in state:
+                for field in state[key]:
+                    torch.testing.assert_close(state[key][field], after[key][field], atol=0, rtol=0)
+        else:
+            assert any(not torch.equal(v, before[n]) for n, v in model.state_dict().items())

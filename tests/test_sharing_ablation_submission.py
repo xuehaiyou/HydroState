@@ -9,6 +9,7 @@ import pytest
 from mmengine.config import Config
 
 from hydrostate.cli import configure_data_contract
+from tools import dispatch_sharing_ablation as dispatch
 from tools import submit_sharing_ablation as submit
 from tools.summarize_sharing_ablation import paired_summary, summarize
 
@@ -136,3 +137,63 @@ def test_summary_joins_independent_tasks_and_checks_sample_identity(tmp_path):
     samples.write_text(samples.read_text().replace('"b"', '"wrong-id"'))
     with pytest.raises(ValueError, match="sample identities"):
         summarize(receipt, draws=25)
+
+
+def test_quota_controller_only_submits_missing_jobs_and_has_one_successor(tmp_path, monkeypatch):
+    path = tmp_path / "submission.json"
+    record = dict(code_root="/code", run_root=str(tmp_path), environment={}, jobs={},
+                  experiments=submit.experiment_plan([3407]), gpu_submission_limits={})
+    path.write_text(json.dumps(record))
+    remaining = [1]
+
+    def capacity(record):
+        return dict(free=remaining[0], job_ids=["existing"])
+
+    monkeypatch.setattr(dispatch, "capacity", capacity)
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if command[-2].endswith("35_train_sharing_ablation.sh"):
+            remaining[0] -= 1
+        return subprocess.CompletedProcess(command, 0, f"{100 + len(commands)}\n", "")
+
+    monkeypatch.setattr(dispatch.subprocess, "run", run)
+    dispatch.dispatch_pending(path, {})
+    record = json.loads(path.read_text())
+    assert record["jobs"]["shared_s3407"]["job_id"] == "101"
+    assert record["active_dispatcher"] == "102"
+    assert len(record["waiting_for_gpu_submission"]) == 4
+    dispatch.dispatch_pending(path, {})
+    assert len(commands) == 2  # A second interactive invocation cannot duplicate the chain.
+    monkeypatch.setenv("SLURM_JOB_ID", "102")
+    remaining[0] = 10
+    dispatch.dispatch_pending(path, {})
+    record = json.loads(path.read_text())
+    assert record["waiting_for_gpu_submission"] == []
+    assert "active_dispatcher" not in record
+    assert "--dependency=afterok:101:103:104:105:106" in commands[-1]
+    assert len(commands) == 7
+
+
+def test_quota_race_is_not_retried_until_queue_changes(tmp_path, monkeypatch):
+    path = tmp_path / "submission.json"
+    path.write_text(json.dumps(dict(
+        code_root="/code", run_root=str(tmp_path), environment={}, jobs={},
+        experiments=submit.experiment_plan([3407]))))
+    monkeypatch.setattr(dispatch, "capacity", lambda record: dict(free=1, job_ids=["unchanged"]))
+    attempts = []
+
+    def run(command, **kwargs):
+        attempts.append(command)
+        if command[-2].endswith("35_train_sharing_ablation.sh"):
+            return subprocess.CompletedProcess(command, 1, "", "MaxSubmitJobsPerAccount")
+        return subprocess.CompletedProcess(command, 0, f"{100 + len(attempts)}\n", "")
+
+    monkeypatch.setattr(dispatch.subprocess, "run", run)
+    dispatch.dispatch_pending(path, {})
+    record = json.loads(path.read_text())
+    monkeypatch.setenv("SLURM_JOB_ID", record["active_dispatcher"])
+    dispatch.dispatch_pending(path, {})
+    assert len(attempts) == 3  # One rejected GPU submission, two controller submissions.
+    assert "--begin=now+10minutes" in attempts[-1]
