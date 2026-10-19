@@ -13,7 +13,8 @@ import zarr
 from numcodecs import Blosc
 
 from hydrostate.data.gee.contracts import fingerprint, input_shape, locked
-from hydrostate.data.gee.products import BANDS, normalize_pixels
+from hydrostate.data.gee.products import normalize_pixels
+from hydrostate.data.input_products import L2_PROFILE, LEGACY_PROFILE, profile_bands
 
 
 class SceneCache:
@@ -37,14 +38,17 @@ class SceneCache:
         )
 
         self.norm = load_computed_config()
+        self.profile = plan['config'].get('input_profile', LEGACY_PROFILE)
+        self.bands = profile_bands(self.profile)
         self._groups = OrderedDict()
         self._groups_lock = RLock()
         self.contract = fingerprint(
             dict(
                 grid=self.grid,
                 normalization=self.norm,
-                bands=BANDS,
-                preprocessing="gee_sampling.prepare_v1",
+                bands=self.bands,
+                preprocessing=("gee_sampling.prepare_v1" if self.profile == LEGACY_PROFILE
+                               else self.profile),
             )
         )
 
@@ -66,13 +70,14 @@ class SceneCache:
             group = zarr.open_group(str(path), mode="a")
             if "contract" not in group.attrs:
                 h, w = input_shape(self.grid)
-                bands, chunk = len(BANDS[scene["key"]]), self.chunk
+                bands, chunk = len(self.bands[scene["key"]]), self.chunk
                 compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
                 group.require_dataset(
                     "values",
                     shape=(bands, h, w),
                     chunks=(bands, chunk, chunk),
-                    dtype="f2",
+                    dtype=("f4" if self.profile == L2_PROFILE and scene['key'] == 'landsat'
+                           else "f2"),
                     compressor=compressor,
                 )
                 group.require_dataset(
@@ -130,9 +135,14 @@ class SceneCache:
         h, w = input_shape(self.grid)
         y, x = cy * self.chunk, cx * self.chunk
         expected = (min(self.chunk, h - y), min(self.chunk, w - x))
-        if valid.shape != expected or values.shape != (len(BANDS[scene["key"]]), *expected):
+        if valid.shape != expected or values.shape != (len(self.bands[scene["key"]]), *expected):
             raise ValueError("Scene chunk shape does not match its grid")
-        normalized = normalize_pixels(scene["key"], values, valid, self.norm)
+        if self.profile == L2_PROFILE and scene['key'] == 'landsat':
+            normalized = np.where(valid[None], values, 0).astype('float32')
+            if not np.isfinite(normalized).all():
+                raise ValueError('Nonfinite L2 reflectance')
+        else:
+            normalized = normalize_pixels(scene["key"], values, valid, self.norm)
         with locked(str(self.path(scene)) + ".lock"):
             group = self._open(scene, writable=True)
             if group["done"][cy, cx]:

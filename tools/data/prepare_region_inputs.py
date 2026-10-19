@@ -9,6 +9,6 @@ from tools.predict_region import main
 
 if __name__ == "__main__":
     sys.argv.insert(1, "prepare")
-    if "--backend" not in sys.argv:
+    if not any(arg == '--backend' or arg.startswith('--backend=') for arg in sys.argv):
         sys.argv.extend(["--backend", "drive"])
     main()

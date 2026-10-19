@@ -25,6 +25,7 @@ from hydrostate.data.gee.products import (
 )
 from hydrostate.data.gee.products import normalize_pixels as normalize_pixels
 from hydrostate.data.gee.selection import epoch, select_window
+from hydrostate.data.input_products import L2_PROFILE, LEGACY_PROFILE
 from hydrostate.inference.planning import (
     windows,
 )
@@ -34,6 +35,8 @@ LOG = logging.getLogger(__name__)
 
 
 def prepare_date(root, plan, period, *, workers=4, min_free_gib=5):
+    if plan['config'].get('input_profile', LEGACY_PROFILE) != LEGACY_PROFILE:
+        raise ValueError('Regional pixels currently support the legacy L1 profile only')
     import ee
 
     root = Path(root)
@@ -145,6 +148,13 @@ def _prepare_windows(root, plan, period, scenes, cache, workers, min_free_gib, *
 
 def assemble_inputs(cache, row, *, drop_s2=False):
     values = {name: np.zeros(spec.tail_shape, spec.dtype) for name, spec in Schema().inputs.items()}
+    l2 = cache.plan['config'].get('input_profile') == L2_PROFILE
+    if l2:
+        del values['landsat']
+        del values['landsat_valid']
+        values['landsat_l2'] = np.zeros((4, 7, 120, 120), 'float32')
+        values['landsat_l2_valid'] = np.zeros((4, 7, 120, 120), bool)
+        values['landsat_l2_time'] = np.zeros(4, 'int64')
     selected = json.loads(row["selections"])
     for slot in range(4):
         for mi, key in enumerate(BANDS):
@@ -152,8 +162,11 @@ def assemble_inputs(cache, row, *, drop_s2=False):
             if scene is None or (drop_s2 and key == "s2"):
                 continue
             image, valid = cache.read(scene, row)
-            values[key][slot] = image
-            values[f"{key}_valid"][slot, 0] = valid
+            name = 'landsat_l2' if l2 and key == 'landsat' else key
+            values[name][slot] = image
+            values[f"{name}_valid"][slot] = valid
+            if name == 'landsat_l2':
+                values['landsat_l2_time'][slot] = scene['time']
             values["sensor_valid"][slot, mi] = bool(valid.any())
             values["observation_time"][slot, mi] = scene["time"]
     return values
@@ -171,6 +184,8 @@ def prepare_region_drive(
     quota_project=None,
 ):
     """Select with byte masks, export required rectangles, then publish ready inputs."""
+    if plan['config'].get('input_profile', LEGACY_PROFILE) != LEGACY_PROFILE:
+        raise ValueError('Regional Drive currently supports the legacy L1 profile only')
     from hydrostate.data.gee.backends.drive import DriveTransport
     from hydrostate.data.gee.backends.pixels import PixelQualityCache
     from hydrostate.data.gee.client import initialize

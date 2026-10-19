@@ -131,6 +131,12 @@ def masked_outputs(model, inputs):
 
 
 def load_model(plan, *, checkpoint=None, pretrained=None, statistics=None, device="cuda"):
+    from hydrostate.data.input_products import LEGACY_PROFILE
+
+    if plan['config'].get('input_profile', LEGACY_PROFILE) != LEGACY_PROFILE:
+        raise ValueError('L2 data preparation is supported; regional prediction requires a '
+                         'model trained with an explicit L2 input adapter. Legacy L1 weights '
+                         'cannot consume these inputs.')
     from mmengine.config import Config
     from mmengine.registry import init_default_scope
     from mmengine.utils import import_modules_from_strings

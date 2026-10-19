@@ -21,7 +21,11 @@ def main():
     parser.add_argument("--pilot", action="store_true")
     parser.add_argument("--dates", nargs="+", help="Exact nominal dates listed in plan.json")
     parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--backend", choices=["pixels", "drive"], default="pixels")
+    parser.add_argument("--backend", choices=["pixels", "drive", "local"], default="pixels")
+    parser.add_argument('--local-config', type=Path,
+                        default=Path('configs/data/hpc_local_l2.json'))
+    parser.add_argument('--template-root', type=Path,
+                        help='Initialize offline using an existing plan AOI/grid/training overlap')
     parser.add_argument(
         "--download-config",
         type=Path,
@@ -53,12 +57,19 @@ def main():
         from hydrostate.inference.planning import initialize
 
         config = json.loads(Path(args.config).read_text())
-        plan = initialize(
-            args.root,
-            args.config,
-            args.training_manifest or config["training_manifest"],
-            pilot=args.pilot,
-        )
+        if args.template_root:
+            from hydrostate.data.local.planning import initialize_from_template
+
+            if args.pilot:
+                parser.error('Template geometry is reused exactly; --pilot cannot be combined')
+            plan = initialize_from_template(args.root, args.config, args.template_root)
+        else:
+            plan = initialize(
+                args.root,
+                args.config,
+                args.training_manifest or config["training_manifest"],
+                pilot=args.pilot,
+            )
     else:
         plan = json.loads((args.root / "plan.json").read_text())
     available = {p["time"] for p in plan["periods"]}
@@ -68,6 +79,13 @@ def main():
         from hydrostate.data.gee.workflows.region import prepare_date, prepare_region_drive
 
         periods = [p for p in plan["periods"] if not args.dates or p["time"] in args.dates]
+        if args.backend == 'local':
+            from hydrostate.data.local.region import prepare_region_local
+
+            prepare_region_local(args.root, plan, periods,
+                                 json.loads(args.local_config.read_text()),
+                                 workers=max(1, args.workers), min_free_gib=args.min_free_gib)
+            return
         if args.backend == "drive":
             prepare_region_drive(
                 args.root,

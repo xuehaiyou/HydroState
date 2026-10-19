@@ -176,3 +176,7 @@ python tools/data/validate_region_selection.py \
 读取原 preparation.sqlite 的代表窗口，用独立掩膜缓存重做选片，逐项比较入选资产、
 时间、有效比例和接受状态；另检查三个传感器各一个完整空间块的掩膜。
 输出中的导出字节比较仅针对该窗口子集，不等于完整区域下载加速倍数。
+# Landsat L2 与本地第三通道
+
+新增样本 L2 输入包和 `--backend local` 区域准备，使用方式与输入兼容性见
+[L2_INPUT_COLLECTION.md](L2_INPUT_COLLECTION.md)。旧 pixels/Drive 的 L1 数据合同保持不变。
