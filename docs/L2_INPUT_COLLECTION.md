@@ -75,13 +75,21 @@ python tools/data/prepare_region_inputs.py \
 本地流程：建立源文件索引 → 按现有四个 16 天槽位读取块掩膜 → 筛选窗口 →
 只处理被选中的完整波段块 → 校验并发布日期 manifest。相同源块跨窗口/日期复用。
 实际路径、采集时间、S2 元数据、源文件大小和修改时间保存在 `local_catalog.json`。
-缺文件、缺质量层、缺偏移元数据或源文件变化时明确失败，不静默猜测。
+Landsat 在打开波段之前检查 MTL：T2 产品记录为 `landsat_tier_2` 并跳过，继续处理
+T1；缺失或未知的质量等级、缺文件、缺质量层、缺偏移元数据或源文件变化仍明确失败。
+
+`local_catalog.sqlite` 逐景提交索引断点，同时保存每个传感器已发现的文件列表。
+重启时复用文件列表和已完成的元数据检查，只重试未成功的场景；复用前核对源文件
+大小和修改时间。所有场景检查结束后才发布完整的 `local_catalog.json`，其中
+`excluded` 保存被排除的 T2 路径与原因。`local_catalog_progress.json` 记录当前扫描
+阶段、完成量、复用量、排除量和出错场景。文件列表冻结后，新增源影像需使用新的区域目录。
 
 输出结构：
 
 ```text
 poyang_local_l2_201704_202512/
   plan.json, local_catalog.json, local_contract.json
+  local_catalog.sqlite, local_catalog_progress.json
   preparation.sqlite
   quality_cache/{s1,s2,landsat}/*.zarr
   input_cache/{s1,s2,landsat}/*.zarr
@@ -106,6 +114,7 @@ S1 裁成多个瓦片时分别保留，不能按原始场景 ID 去重丢掉其�
 - `hydrostate/data/gee/workflows/landsat_l2.py`：GEE 同次观测 L2 样本生产。
 - `tools/data/extend_gee_landsat_l2.py`：断点下载与普通 Zarr 输入包发布。
 - `hydrostate/data/local/catalog.py`：本地文件发现、元数据与索引。
+- `hydrostate/data/local/index.py`：文件列表与逐景索引的事务式断点保存。
 - `hydrostate/data/local/reader.py`：块读取、投影、掩膜、S2 偏移校正。
 - `hydrostate/data/local/region.py`：区域准备、完整性校验与发布。
 - `hydrostate/data/local/planning.py`：离线复用区域计划。

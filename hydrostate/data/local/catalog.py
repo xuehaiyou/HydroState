@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import xml.etree.ElementTree as ET
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,9 +16,20 @@ from shapely.geometry import box
 from hydrostate.data.gee.contracts import atomic_json, fingerprint, input_shape, input_transform
 from hydrostate.data.gee.products import BANDS
 from hydrostate.data.input_products import LANDSAT_SR_BANDS, LANDSAT_SR_OFFSET, LANDSAT_SR_SCALE
+from hydrostate.data.local.index import CatalogCheckpoint
 
 VERSION = 'local_l2_catalog_v1'
 LOG = logging.getLogger(__name__)
+
+
+class ExcludedScene(ValueError):
+    """An explicitly excluded product, not a corrupt or incomplete source."""
+
+    def __init__(self, reason, metadata):
+        super().__init__(f'{reason}: {metadata.parent}')
+        self.reason = reason
+        stat = metadata.stat()
+        self.snapshot = {str(metadata): [stat.st_size, stat.st_mtime_ns]}
 
 
 def timestamp(value):
@@ -70,7 +82,10 @@ def inspect_scene(key, path, crs):
             raise ValueError(f'Not a Landsat L2 scene: {path}')
         if attributes.get('SPACECRAFT_ID') not in {'LANDSAT_8', 'LANDSAT_9'}:
             raise ValueError(f'Only Landsat 8/9 are supported: {path}')
-        if attributes.get('COLLECTION_CATEGORY', content.get('COLLECTION_CATEGORY')) != 'T1':
+        category = attributes.get('COLLECTION_CATEGORY', content.get('COLLECTION_CATEGORY'))
+        if category == 'T2':
+            raise ExcludedScene('landsat_tier_2', mtl)
+        if category != 'T1':
             raise ValueError(f'Only Landsat Collection 2 Tier 1 is supported: {path}')
         scaling = data['LEVEL2_SURFACE_REFLECTANCE_PARAMETERS']
         for i in range(1, 8):
@@ -148,26 +163,69 @@ def catalog(root, plan, settings):
     area = box(tr.c, tr.f - height * 10, tr.c + width * 10, tr.f)
     start = timestamp(plan['periods'][0]['time']) - 63 * 86400
     end = timestamp(plan['periods'][-1]['time']) + 86400
-    scenes, seen = [], set()
-    for key in BANDS:
-        paths = sorted(set(discover(key, settings['roots'][key])))
-        for index, path in enumerate(paths):
-            # Skip unrelated years before opening raster/XML files on shared storage.
-            match = re.search(r'(20\d{6})(?:T|_)', path.name)
-            if match:
-                day = datetime.strptime(match[1], '%Y%m%d').replace(tzinfo=UTC)
-                if not start - 86400 <= int(day.timestamp()) < end:
-                    continue
-            scene = inspect_scene(key, path, plan['grid']['crs'])
-            if not start <= scene['time'] < end or not box(*scene['bounds']).intersects(area):
-                continue
-            if scene['asset_id'] not in seen:
-                scenes.append(scene)
-                seen.add(scene['asset_id'])
-            if (index + 1) % 100 == 0:
-                LOG.info('Indexed %s %d/%d candidates', key, index + 1, len(paths))
-        LOG.info('Local %s: %d regional scenes', key, sum(s['key'] == key for s in scenes))
+    scenes, seen, excluded = [], set(), []
+    progress = dict(status='indexing', sensors={})
+    progress_path = Path(root) / 'local_catalog_progress.json'
+    with closing(CatalogCheckpoint(Path(root) / 'local_catalog.sqlite', contract)) as checkpoint:
+        for key in BANDS:
+            LOG.info('Discovering local %s sources (reuse saved file list when available)', key)
+            progress['sensor'] = key
+            atomic_json(progress_path, progress)
+            paths = checkpoint.candidates(key, lambda: discover(key, settings['roots'][key]))
+            counts = dict(candidates=len(paths), processed=0, inspected=0, resumed=0,
+                          accepted=0, excluded=0, outside_time=0, outside_region=0)
+            progress['sensors'][key] = counts
+            atomic_json(progress_path, progress)
+            for index, path in enumerate(paths):
+                try:
+                    # Skip unrelated years before opening raster/XML files on shared storage.
+                    match = re.search(r'(20\d{6})(?:T|_)', path.name)
+                    if match:
+                        day = datetime.strptime(match[1], '%Y%m%d').replace(tzinfo=UTC)
+                        if not start - 86400 <= int(day.timestamp()) < end:
+                            counts['outside_time'] += 1
+                            counts['processed'] = index + 1
+                            continue
+                    result = checkpoint.get(key, path)
+                    if result is None:
+                        try:
+                            result = dict(scene=inspect_scene(key, path, plan['grid']['crs']))
+                        except ExcludedScene as exc:
+                            result = dict(reason=exc.reason, snapshot=exc.snapshot)
+                        checkpoint.save(key, path, result)
+                        counts['inspected'] += 1
+                    else:
+                        counts['resumed'] += 1
+                    if 'scene' not in result:
+                        excluded.append(dict(key=key, path=str(path), reason=result['reason']))
+                        counts['excluded'] += 1
+                    else:
+                        scene = result['scene']
+                        if not start <= scene['time'] < end:
+                            counts['outside_time'] += 1
+                        elif not box(*scene['bounds']).intersects(area):
+                            counts['outside_region'] += 1
+                        elif scene['asset_id'] not in seen:
+                            scenes.append(scene)
+                            seen.add(scene['asset_id'])
+                            counts['accepted'] += 1
+                    counts['processed'] = index + 1
+                    if (index + 1) % 100 == 0:
+                        atomic_json(progress_path, progress)
+                        LOG.info('Indexed %s %d/%d; resumed=%d, excluded=%d', key,
+                                 index + 1, len(paths), counts['resumed'], counts['excluded'])
+                except Exception as exc:
+                    progress.update(status='failed', path=str(path), error=str(exc))
+                    atomic_json(progress_path, progress)
+                    raise
+            atomic_json(progress_path, progress)
+            LOG.info('Local %s: %d regional scenes; excluded=%d, resumed=%d',
+                     key, counts['accepted'], counts['excluded'], counts['resumed'])
     scenes.sort(key=lambda s: (s['time'], s['asset_id']), reverse=True)
     result = dict(contract=contract, scenes=scenes)
+    if excluded:
+        result['excluded'] = excluded
     atomic_json(destination, result)
+    progress['status'] = 'complete'
+    atomic_json(progress_path, progress)
     return result

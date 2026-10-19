@@ -192,3 +192,90 @@ def test_pack_publish_retains_identity_missing_slots_and_times(tmp_path):
     stored = pack.read('a', SimpleNamespace(get=lambda p: zarr.open_group(p, mode='r')))
     for name in values:
         np.testing.assert_array_equal(stored[name], values[name])
+
+
+def test_catalog_skips_t2_before_requiring_bands(tmp_path, local_setup):
+    from hydrostate.data.local.catalog import ExcludedScene, catalog
+
+    plan, settings, paths = local_setup
+    t2 = paths['landsat'].with_name(paths['landsat'].name.replace('_T1', '_T2'))
+    t2.mkdir()
+    metadata = json.loads((paths['landsat'] / 'test_MTL.json').read_text())
+    metadata['LANDSAT_METADATA_FILE']['PRODUCT_CONTENTS']['COLLECTION_CATEGORY'] = 'T2'
+    # Only the MTL exists: exclusion must happen before opening any QA or raster.
+    (t2 / 'test_MTL.json').write_text(json.dumps(metadata))
+    with pytest.raises(ExcludedScene, match='landsat_tier_2'):
+        inspect_scene('landsat', t2, plan['grid']['crs'])
+    root = tmp_path / 'region'
+    root.mkdir()
+    result = catalog(root, plan, settings)
+    assert len(result['scenes']) == 6
+    assert result['excluded'] == [dict(key='landsat', path=str(t2), reason='landsat_tier_2')]
+    progress = json.loads((root / 'local_catalog_progress.json').read_text())
+    assert progress['status'] == 'complete'
+    assert progress['sensors']['landsat']['excluded'] == 1
+    assert progress['sensors']['landsat']['accepted'] == 2
+
+
+def test_catalog_resumes_completed_scenes_and_discovery_after_failure(tmp_path, local_setup,
+                                                                   monkeypatch):
+    import importlib
+    import sqlite3
+
+    module = importlib.import_module('hydrostate.data.local.catalog')
+    plan, settings, _ = local_setup
+    root = tmp_path / 'region'
+    root.mkdir()
+    inspected = []
+
+    def interrupted(key, path, crs):
+        inspected.append((key, str(path)))
+        if len(inspected) == 6:
+            raise OSError('Simulated last-scene read failure')
+        return inspect_scene(key, path, crs)
+
+    monkeypatch.setattr(module, 'inspect_scene', interrupted)
+    with pytest.raises(OSError, match='last-scene'):
+        module.catalog(root, plan, settings)
+    assert not (root / 'local_catalog.json').exists()
+    with sqlite3.connect(root / 'local_catalog.sqlite') as db:
+        assert db.execute('SELECT count(*) FROM scenes').fetchone()[0] == 5
+        assert db.execute('SELECT count(*) FROM discoveries').fetchone()[0] == 3
+    failed = json.loads((root / 'local_catalog_progress.json').read_text())
+    assert failed['status'] == 'failed' and failed['path'] == inspected[-1][1]
+
+    def resume(key, path, crs):
+        assert (key, str(path)) == inspected[-1]
+        return inspect_scene(key, path, crs)
+
+    monkeypatch.setattr(module, 'inspect_scene', resume)
+    monkeypatch.setattr(module, 'discover', lambda *a: pytest.fail('Repeated directory discovery'))
+    result = module.catalog(root, plan, settings)
+    assert len(result['scenes']) == 6
+    progress = json.loads((root / 'local_catalog_progress.json').read_text())
+    assert progress['status'] == 'complete'
+    assert sum(v['resumed'] for v in progress['sensors'].values()) == 5
+    assert sum(v['inspected'] for v in progress['sensors'].values()) == 1
+
+
+def test_catalog_keeps_unknown_tiers_as_errors_and_rejects_changed_checkpoint(tmp_path,
+                                                                          local_setup):
+    from hydrostate.data.local.catalog import catalog
+
+    plan, settings, paths = local_setup
+    path = paths['landsat'] / 'test_MTL.json'
+    metadata = json.loads(path.read_text())
+    metadata['LANDSAT_METADATA_FILE']['PRODUCT_CONTENTS'].pop('COLLECTION_CATEGORY')
+    path.write_text(json.dumps(metadata))
+    root = tmp_path / 'region'
+    root.mkdir()
+    with pytest.raises(ValueError, match='Tier 1'):
+        catalog(root, plan, settings)
+    assert not (root / 'local_catalog.json').exists()
+    changed = dict(plan, config=dict(plan['config'], latest_days=10))
+    with pytest.raises(ValueError, match='checkpoint configuration changed'):
+        catalog(root, changed, settings)
+    # Previously indexed scenes must still refer to the frozen source files.
+    (paths['s1'] / 'Sigma0_VV_db.tif').touch()
+    with pytest.raises(ValueError, match='Indexed source changed'):
+        catalog(root, plan, settings)
