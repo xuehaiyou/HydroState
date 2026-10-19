@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import torch
 from mmengine.evaluator import BaseMetric
@@ -16,9 +18,15 @@ from hydrostate.tasks import resolve_tasks
 class HydroStateMetric(BaseMetric):
     default_prefix = None
 
-    def __init__(self, target_statistics, tasks=None, **kwargs):
+    def __init__(self, target_statistics, tasks=None, evaluated_tasks=None,
+                 sample_metrics_path=None, **kwargs):
         super().__init__(**kwargs)
-        self.tasks = tuple(resolve_tasks(tasks))
+        configured = tuple(resolve_tasks(tasks))
+        self.tasks = configured if evaluated_tasks is None else tuple(evaluated_tasks)
+        if (not self.tasks or len(set(self.tasks)) != len(self.tasks)
+                or not set(self.tasks) <= set(configured)):
+            raise ValueError("evaluated_tasks must be unique configured tasks")
+        self.sample_metrics_path = sample_metrics_path
         statistics = load_target_statistics(target_statistics, tasks)
         self.task_scales = {task: statistics["tasks"][task]["std"] for task in self.tasks}
 
@@ -48,9 +56,18 @@ class HydroStateMetric(BaseMetric):
                 result[f"{task}/sum_err"] = float(error.sum())
                 result[f"{task}/sum_y"] = float(values.sum())
                 result[f"{task}/sum_y2"] = float((values**2).sum())
+            if self.sample_metrics_path is not None:
+                info = sample.get("metainfo", {})
+                result["sample_id"] = str(info["sample_id"])
             self.results.append(result)
 
     def compute_metrics(self, results: list[dict]) -> dict[str, float]:
+        if self.sample_metrics_path is not None:
+            destination = Path(self.sample_metrics_path)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with destination.open("x") as stream:
+                for result in results:
+                    stream.write(json.dumps(result, allow_nan=False) + "\n")
         metrics: dict[str, float] = {}
         rmse_values = []
         for task in self.tasks:

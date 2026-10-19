@@ -78,7 +78,8 @@ class SharedPrivateLinear(nn.Module):
             raise RuntimeError("LoRA forward requires an explicit configured task")
         output = self.base(inputs)
         if self.shared is not None:
-            gate = context.gate_logits[self.block_index].sigmoid()
+            gate = (context.gate_logits[self.block_index].sigmoid()
+                    if context.gate_logits is not None else 1.0)
             output = output + gate * self.shared(inputs)
         if context.task in self.private:
             output = output + self.private[context.task](inputs)

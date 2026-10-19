@@ -453,8 +453,10 @@ def test_regional_checkpoint_and_explicit_physical_alignment(tmp_path):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is needed for BF16 AMP")
-def test_cuda_bfloat16_training_uses_only_adaptation_parameters(tmp_path):
+@pytest.mark.parametrize("gate_mode", ["learned", "fixed_one"])
+def test_cuda_bfloat16_training_uses_only_adaptation_parameters(tmp_path, gate_mode):
     cfg = make_config(tmp_path)
+    cfg.model.encoder.shared_gate_mode = gate_mode
     model = MODELS.build(cfg.model).cuda().train()
     cfg.optim_wrapper.accumulative_counts = 1
     optim = build_optim_wrapper(model, cfg.optim_wrapper)
@@ -471,3 +473,157 @@ def test_cuda_bfloat16_training_uses_only_adaptation_parameters(tmp_path):
             assert torch.equal(before[name], parameter), name
     assert any(not torch.equal(before[n], p) for n, p in model.named_parameters()
                if model.parameter_owner(n) == "__shared__")
+
+
+def test_fixed_one_has_no_gate_and_preserves_legacy_bundle_contract(tmp_path):
+    layer = SharedPrivateLinear(torch.nn.Linear(4, 3), 0, 2, dict(water=0))
+    torch.nn.init.normal_(layer.shared.b.weight)
+    x = torch.randn(2, 4)
+    with task_context(TaskContext("water", None)):
+        torch.testing.assert_close(layer(x), layer.base(x) + layer.shared(x))
+    cfg = make_config(tmp_path)
+    old = MODELS.build(cfg.model)
+    source = tmp_path / "legacy.pth"
+    save_adapter_bundle(old, source)
+    bundle = torch.load(source, weights_only=True)
+    del bundle["encoder"]["shared_gate_mode"]
+    torch.save(bundle, source)
+    load_adapter_bundle(old, source)
+    cfg.model.encoder.shared_gate_mode = "fixed_one"
+    fixed = MODELS.build(cfg.model)
+    assert not fixed.encoder.gates
+    with pytest.raises(ValueError, match="shared_gate_mode"):
+        load_adapter_bundle(fixed, source)
+    losses = fixed(inputs(fixed.tasks), samples(), mode="loss")
+    sum(v for k, v in losses.items() if k.startswith("loss_")).backward()
+    assert fixed.encoder.backbone.model.blocks[0].attn.q.shared.b.weight.grad.abs().sum() > 0
+    save_adapter_bundle(fixed, tmp_path / "fixed.pth")
+    restored = MODELS.build(cfg.model)
+    load_adapter_bundle(restored, tmp_path / "fixed.pth")
+
+
+def test_three_modes_have_identical_initial_readouts(tmp_path):
+    branches = []
+    for shared, private in ((4, 0), (2, 2), (0, 4)):
+        cfg = make_config(tmp_path)
+        cfg.model.encoder.update(shared_rank=shared, private_rank=private,
+                                 shared_gate_mode="fixed_one")
+        cfg.model.branch_init_seed = 3407
+        model = MODELS.build(cfg.model)
+        branches.append({n: v for n, v in model.state_dict().items()
+                         if n.startswith(("queries.", "decoders.", "heads.",
+                                          "encoder.landsat_l2_adapter."))})
+        assert not model.encoder.gates
+    for other in branches[1:]:
+        assert other.keys() == branches[0].keys()
+        for name, value in other.items():
+            torch.testing.assert_close(value, branches[0][name], atol=0, rtol=0)
+
+
+def test_task_only_execution_cannot_receive_other_task_gradients(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg.model.encoder.update(shared_rank=0, private_rank=4, shared_gate_mode="fixed_one")
+    cfg.model.update(train_tasks=["soil_moisture"], train_shared=False, active_tasks_only=True)
+    single = MODELS.build(cfg.model).train()
+    reference = copy.deepcopy(single)
+    reference.active_tasks_only = False
+    x, y = inputs(single.tasks), samples()
+    visited = []
+    handles = [single.decoders[t].register_forward_hook(
+        lambda module, args, output, t=t: visited.append(t)) for t in single.tasks]
+    optim = build_optim_wrapper(single, dict(
+        type="OptimWrapper", constructor="SharedPrivateOptimWrapperConstructor",
+        clip_grad=dict(max_norm=1.0), optimizer=dict(type="AdamW", lr=.002, weight_decay=.1)))
+    other_optim = build_optim_wrapper(reference, dict(
+        type="OptimWrapper", constructor="SharedPrivateOptimWrapperConstructor",
+        clip_grad=dict(max_norm=1.0), optimizer=dict(type="AdamW", lr=.002, weight_decay=.1)))
+    losses = step(single, x, y, optim)
+    assert visited == ["soil_moisture"]
+    assert {k for k in losses if k.startswith("loss_")} == {"loss_soil_moisture"}
+    step(reference, x, y, other_optim)
+    for name, value in single.state_dict().items():
+        torch.testing.assert_close(value, reference.state_dict()[name], atol=0, rtol=0)
+    assert all(single.parameter_owner(n) == "soil_moisture"
+               for n, p in single.named_parameters() if p.requires_grad)
+    prediction = single.predict(x, y)[0]
+    assert "soil_moisture" in prediction and "water" not in prediction and "et" not in prediction
+    for handle in handles:
+        handle.remove()
+    empty = copy.deepcopy(y)
+    empty["soil_moisture_valid"].zero_()
+    assert "loss_empty" in step(single, x, empty, optim)
+
+
+def test_single_task_metric_exports_reproducible_sample_errors(tmp_path):
+    from hydrostate.evaluation import HydroStateMetric
+
+    cfg = make_config(tmp_path)
+    cfg.model.encoder.update(shared_rank=0, private_rank=4, shared_gate_mode="fixed_one")
+    cfg.model.update(train_tasks=["soil_moisture"], train_shared=False, active_tasks_only=True)
+    model = MODELS.build(cfg.model)
+    y = samples()
+    y["metainfo"] = dict(sample_id=["first", "second"])
+    predictions = model.predict(inputs(model.tasks), y)
+    path = tmp_path / "samples.jsonl"
+    metric = HydroStateMetric(cfg.model.target_statistics, tasks=cfg.model.tasks,
+                              evaluated_tasks=["soil_moisture"], sample_metrics_path=str(path))
+    metric.process(None, predictions)
+    scores = metric.compute_metrics(metric.results)
+    assert "soil_moisture_rmse" in scores and "water_rmse" not in scores
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [r["sample_id"] for r in rows] == ["first", "second"]
+    expected = (sum(r["soil_moisture/sum_sq"] for r in rows) /
+                sum(r["soil_moisture/count"] for r in rows)) ** .5
+    assert scores["soil_moisture_rmse"] == expected
+
+
+@pytest.mark.parametrize("single", [True, False])
+def test_ablation_evaluation_runner_writes_final_and_best_results(tmp_path, monkeypatch, single):
+    from mmengine.runner import Runner
+    from torch.utils.data import DataLoader
+
+    from tools.evaluate_sharing_ablation import evaluate
+
+    monkeypatch.setenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    monkeypatch.setattr("mmengine.runner.runner.get_device", lambda: "cpu")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    cfg = make_config(tmp_path)
+    cfg.model.encoder.update(shared_rank=0 if single else 2, private_rank=4 if single else 2,
+                             shared_gate_mode="fixed_one")
+    cfg.model.update(train_tasks=["soil_moisture"] if single else None,
+                     train_shared=not single, active_tasks_only=single)
+    cfg.train_cfg.max_epochs = 50
+    metric = "soil_moisture_rmse" if single else "hydro_score"
+    cfg.default_hooks.checkpoint.save_best = metric
+    cfg.visualizer = dict(type="Visualizer", vis_backends=[])
+    cfg.custom_hooks = []
+    path = tmp_path / "independent.py"
+    cfg.dump(str(path))
+    model = MODELS.build(cfg.model)
+    for name in ("epoch_50.pth", f"best_{metric}_epoch_50.pth"):
+        torch.save(dict(state_dict=model.state_dict(), meta=dict(epoch=50)), tmp_path / name)
+    y = samples()
+    y["water"] = torch.full((2, 1, 12, 12), .3)
+    y["water_valid"] = torch.ones(2, 1, 12, 12, dtype=torch.bool)
+    y["metainfo"] = dict(sample_id=["first", "second"])
+    batch = dict(inputs=inputs(model.tasks), data_samples=y)
+    def from_cfg(config):
+        return Runner(
+            model=MODELS.build(config.model), work_dir=config.work_dir,
+            test_dataloader=DataLoader([0, 1], batch_size=2,
+                                       collate_fn=lambda rows: copy.deepcopy(batch)),
+            test_cfg=dict(type="TestLoop"), test_evaluator=config.test_evaluator,
+            load_from=config.load_from, default_scope="hydrostate",
+            visualizer=dict(type="Visualizer", vis_backends=[]), cfg=config)
+
+    monkeypatch.setattr(Runner, "from_cfg", from_cfg)
+    report = evaluate(path, tmp_path)
+    saved = json.loads((tmp_path / "evaluation/metrics.json").read_text())
+    assert saved["selected_tasks"] == (["soil_moisture"] if single else
+                                       ["water", "soil_moisture", "et"])
+    assert set(saved["results"]) == {"final", "best"}
+    for kind in saved["results"]:
+        result = saved["results"][kind]
+        assert ("water_rmse" not in result["metrics"]) == single
+        assert result["metrics"] == report["results"][kind]["metrics"]
+        assert len(Path(result["sample_metrics"]).read_text().splitlines()) == 2

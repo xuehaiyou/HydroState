@@ -29,7 +29,15 @@ class SharedPrivateHydroStateModel(HydroStateModel):
     requires_target_time = True
 
     def __init__(self, encoder, decoder, heads, query_time=None, train_shared=True,
-                 train_tasks=None, adapter_init=None, **kwargs):
+                 train_tasks=None, adapter_init=None, active_tasks_only=False,
+                 branch_init_seed=None, **kwargs):
+        if type(active_tasks_only) is not bool:
+            raise ValueError("active_tasks_only must be boolean")
+        if branch_init_seed is not None and type(branch_init_seed) is not int:
+            raise ValueError("branch_init_seed must be an integer")
+        if active_tasks_only and kwargs.get("water_soil_coupling"):
+            raise ValueError("Task-only execution cannot use cross-task support coupling")
+        self.active_tasks_only = active_tasks_only
         if kwargs.get("fraction_groups"):
             raise ValueError("Shared/private v1 requires independent variable heads")
         if kwargs.get("input_fusion"):
@@ -59,6 +67,16 @@ class SharedPrivateHydroStateModel(HydroStateModel):
             task: MODELS.build(dict(config, channels=self.encoder.out_channels, tasks=[task]))
             for task in self.tasks
         })
+        if branch_init_seed is not None:
+            # Identical readout initialization across ranks and sharing modes.
+            # Keep the legacy construction unchanged unless explicitly requested.
+            for index, task in enumerate(self.tasks):
+                with torch.random.fork_rng(devices=[]):
+                    torch.manual_seed(branch_init_seed + 1009 * index)
+                    self.decoders[task] = MODELS.build(copy.deepcopy(decoder))
+                    self.queries[task] = MODELS.build(
+                        dict(config, channels=self.encoder.out_channels, tasks=[task]))
+                    self.heads[task] = MODELS.build(copy.deepcopy(heads[task]))
         self.set_training_tasks(train_tasks, train_shared=train_shared)
         if adapter_init:
             from .shared_private_transfer import load_adapter_bundle
@@ -131,12 +149,13 @@ class SharedPrivateHydroStateModel(HydroStateModel):
 
     def _forward(self, inputs):
         self._validate_queries(inputs)
-        return {task: self._forward_task(inputs, task) for task in self.tasks}
+        tasks = self.train_tasks if self.active_tasks_only else self.tasks
+        return {task: self._forward_task(inputs, task) for task in tasks}
 
     def loss(self, inputs, data_samples):
         losses = self._loss_from_outputs(self._forward(inputs), data_samples)
         active = False
-        for task in self.tasks:
+        for task in (self.train_tasks if self.active_tasks_only else self.tasks):
             # Counts have already been globally reduced, so every DDP rank makes
             # the same decision. Missing tasks get no gradient (not a zero tensor)
             # and therefore no AdamW decay/momentum update.
@@ -153,5 +172,6 @@ class SharedPrivateHydroStateModel(HydroStateModel):
         predictions = super().predict(inputs, data_samples)
         for index, prediction in enumerate(predictions):
             prediction["target_time"] = {
-                task: inputs["target_time"][task][index] for task in self.tasks}
+                task: inputs["target_time"][task][index]
+                for task in (self.train_tasks if self.active_tasks_only else self.tasks)}
         return predictions

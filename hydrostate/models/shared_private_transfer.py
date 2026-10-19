@@ -82,6 +82,8 @@ def load_adapter_bundle(model, path, tasks=None, load_shared=True):
             or not set(selected) <= set(model.tasks)):
         raise ValueError("Import tasks must exist in both the bundle and destination model")
     current = model.encoder.adaptation_settings()
+    # Version-1 bundles written before the fixed-coefficient ablation used gates.
+    bundle["encoder"].setdefault("shared_gate_mode", "learned")
     for key in current:
         if key != "private_rank" and current[key] != bundle["encoder"][key]:
             raise ValueError(f"Incompatible encoder setting: {key}")

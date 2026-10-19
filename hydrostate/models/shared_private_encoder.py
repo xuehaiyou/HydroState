@@ -25,7 +25,7 @@ from .shared_private_lora import (
 class SharedPrivateOlmoEarthEncoder(MultiLevelTemporalOlmoEarthEncoder):
     def __init__(self, tasks=None, shared_rank=8, private_rank=8,
                  target_modules=("q", "v"), gate_init=0.5, lora_scale=1.0,
-                 gradient_checkpointing=False, **kwargs):
+                 gradient_checkpointing=False, shared_gate_mode="learned", **kwargs):
         # Install checkpoints after adapters, with the task captured explicitly.
         super().__init__(gradient_checkpointing=False, **kwargs)
         self.tasks = tuple(resolve_tasks(tasks))
@@ -40,6 +40,9 @@ class SharedPrivateOlmoEarthEncoder(MultiLevelTemporalOlmoEarthEncoder):
             raise ValueError("Each task requires a shared or private adaptation path")
         if not math.isfinite(gate_init) or not 0 < gate_init < 1:
             raise ValueError("gate_init must be strictly between zero and one")
+        if shared_gate_mode not in ("learned", "fixed_one"):
+            raise ValueError("shared_gate_mode must be learned or fixed_one")
+        self.shared_gate_mode = shared_gate_mode
         if not target_modules or len(set(target_modules)) != len(target_modules):
             raise ValueError("target_modules must be nonempty and unique")
         if not set(target_modules) <= {"q", "k", "v", "proj"}:
@@ -52,7 +55,7 @@ class SharedPrivateOlmoEarthEncoder(MultiLevelTemporalOlmoEarthEncoder):
         self.gates = nn.ParameterDict({
             task: nn.Parameter(torch.full((len(core.blocks),), math.log(gate_init / (1-gate_init))))
             for task in self.tasks
-        } if shared_rank else {})
+        } if shared_rank and shared_gate_mode == "learned" else {})
         for index, block in enumerate(core.blocks):
             for name in self.target_modules:
                 original = getattr(block.attn, name)
@@ -81,6 +84,7 @@ class SharedPrivateOlmoEarthEncoder(MultiLevelTemporalOlmoEarthEncoder):
 
     def adaptation_settings(self):
         return dict(shared_rank=self.shared_rank, private_rank=self.private_ranks,
+                    shared_gate_mode=self.shared_gate_mode,
                     target_modules=list(self.target_modules), lora_scale=self.lora_scale,
                     out_indices=list(self.out_indices), input_profile=self.input_profile,
                     patch_size=self.patch_size, embedding_channels=self.out_channels)

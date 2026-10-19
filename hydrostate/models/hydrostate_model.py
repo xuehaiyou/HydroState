@@ -280,7 +280,10 @@ class HydroStateModel(BaseModel):
 
     def _loss_from_outputs(self, outputs, data_samples, auxiliary=None, auxiliary_weights=None):
         task_specs = getattr(self, "task_specs", None)
-        tasks = tuple(resolve_tasks(task_specs))
+        all_tasks = tuple(resolve_tasks(task_specs))
+        task_specs = {task: spec for task, spec in resolve_tasks(task_specs).items()
+                      if task in outputs}
+        tasks = tuple(task_specs)
         coupling = getattr(self, "water_soil_coupling", None)
         sm_support = (
             coupling.prepare(outputs, data_samples, supervision=True)
@@ -301,7 +304,7 @@ class HydroStateModel(BaseModel):
             names.append(f"loss_aux_{task}")
             sums.append(masked_standardized_mse_sum(
                 plan.project(prediction), plan.target, plan.valid,
-                self.loss_module.target_std[index],
+                self.loss_module.target_std[all_tasks.index(task)],
             ))
             count_indices.append(index)
         values, counts = global_observation_means(
@@ -324,8 +327,10 @@ class HydroStateModel(BaseModel):
         self, inputs: dict[str, torch.Tensor], data_samples: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
         task_specs = getattr(self, "task_specs", None)
-        tasks = tuple(resolve_tasks(task_specs))
         outputs = self._forward(inputs)
+        task_specs = {task: spec for task, spec in resolve_tasks(task_specs).items()
+                      if task in outputs}
+        tasks = tuple(task_specs)
         coupling = getattr(self, "water_soil_coupling", None)
         sm_prediction_support = sm_supervision_support = None
         if coupling is not None and coupling.enabled:

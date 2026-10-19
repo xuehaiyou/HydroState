@@ -16,6 +16,9 @@
 | `hydrostate_shared_private_specialize.py` | 新模型，阶段 B：固定共享参数，指定任务精调 20 epoch |
 | `hydrostate_shared_private_joint50.py` | 对照：共享 / 专属参数持续联合训练 50 epoch |
 | `hydrostate_shared_private_independent.py` | 对照：无 Shared LoRA，Private rank=16，50 epoch |
+| `hydrostate_sharing_ablation_shared.py` | 三组严格对照 A：Shared rank=16，系数固定为 1 |
+| `hydrostate_sharing_ablation_shared_private.py` | 三组严格对照 B：Shared/Private 各 rank=8，系数固定为 1 |
+| `hydrostate_sharing_ablation_independent.py` | 三组严格对照 C：每进程单任务，Private rank=16 |
 | `hydrostate_shared_private_lai.py` | 冻结原有知识，只训练新增 LAI 分支 |
 | `hydrostate_shared_private_lst.py` | 冻结原有知识，只训练新增 LST 分支 |
 
@@ -245,3 +248,58 @@ shared30（30 epoch 共享 / 专属联合训练）
 同一目录拒绝重复提交；若提交中途失败，应检查记录及 Slurm，再补交缺失阶段。
 现有作业和原实验目录不会被覆盖。`logs/` 保存各阶段 stdout/stderr，阶段目录保留
 MMEngine 展开配置、训练日志、checkpoint 和初始化来源。
+
+## 三组共享程度对照
+
+`tools/submit_sharing_ablation.py` 提交三个模型组，各使用 seed=3407/3408/3409。
+每个 seed 有 A（共享）、B（共享＋专属）、C-WF、C-SM、C-ET 五个独立训练进程，
+总计 15 个 GPU 作业；一个 CPU 汇总作业以 `afterok` 依赖全部训练与评估成功。
+这是三组实验，不是只提交三个 Slurm 作业。原有联合/分阶段实验保留各自配置。
+
+三个模型组都冻结同一 OlmoEarth，训练 50 epoch、batch=2、累积 8 步，使用相同
+数据、监督、NLL 和学习率规则。`shared_gate_mode='fixed_one'` 精确使用共享系数 1，
+不创建可学习门控；旧配置默认仍为 `learned`，旧版 adapter bundle 按旧语义加载。
+`branch_init_seed` 保证同一 seed 的输入投影、查询、解码器和头在三组中初值相同，
+不因不同 LoRA rank 消耗随机数而改变预测分支初始化。
+
+共享范围是 **FM 的 LoRA 参数**。所有组保留相同的专属输入投影、时间查询、解码器
+和头，因此 A 不是整个模型、解码器和输出头全共享。A/B/C 每任务的 LoRA 秩上限
+均为 16，但三组总 LoRA 参数量分别与 16/32/48 成正比。这轮没有提交等总参数量
+复核或门控/梯度冲突消融，不能把主实验表述为等总参数预算实验。
+
+C 配置使用 `train_shared=False`、`train_tasks=[task]`、`active_tasks_only=True`：
+每个任务独立优化和裁剪梯度，只前向、计算损失和评估指定任务，其他任务的标签
+不参与该进程的目标。三个任务仍读取同一 manifest 和完整统计合同，以保持采样顺序、
+掩膜和归一化一致。为兼容通用 checkpoint，进程仍构建并冻结其他分支；统计报告区分
+存储参数与实际训练参数，不把 checkpoint 文件大小当作精简部署模型大小。
+
+提交示例（在已提交、干净的 HPC release 中执行）：
+
+```bash
+python tools/submit_sharing_ablation.py \
+  --root /scr/u/xiaoz/HydroState/experiments/sharing_ablation_RUN_ID \
+  --data-root /scr/u/xiaoz/HydroState/samples_merged_v1 \
+  --manifest /scr/u/xiaoz/HydroState/samples_merged_v1/manifests/merged_v1_n20000/samples.parquet \
+  --statistics /scr/u/xiaoz/HydroState/samples_merged_v1/manifests/merged_v1_n20000/target_stats_shared_private_l2_v1.json \
+  --model-path /scr/u/xiaoz/HydroState/pretrained/OlmoEarth-v1_2-Base
+```
+
+提交器先验证训练统计合同和原始 split seed=42 的 5° 地理块划分，再冻结 15 份展开
+配置。运行节点同时验证源码、配置、manifest、统计、FM 权重及 L2 索引/完整标记
+校验和。原生粗分辨率标签 footprint 的跨块重叠没有在此步骤穷尽审计，地理块检查
+不能表述为所有标签绝无泄漏或独立年份泛化验证。
+
+每个训练作业保留最终 epoch=50 和验证选优 checkpoint，随后在同一 GPU 分配内
+运行 `tools/evaluate_sharing_ablation.py`。主结果是固定 epoch=50；补充结果是 A/B
+按验证 `hydro_score`、C 各自按验证 RMSE 选优。测试集不参与选模型。两种选优策略
+天然不同，补充表不能被解释成仅共享参数这一因素的差异。
+
+每次评估输出 `evaluation/metrics.json` 和逐样本误差汇总 `sample_metrics.jsonl`，
+保存样本 ID、有效观测数、误差平方和、绝对误差和等，可按冻结 manifest 关联空间。
+参数归属、配置与 checkpoint 哈希、训练总耗时和评估显存也会记录；训练耗时包含
+验证和保存，不是纯训练吞吐。训练显存与迭代时间仍见原 MMEngine 日志。
+
+CPU 汇总生成运行根目录的 `comparison.json`，报告每任务 RMSE、种子间标准差、
+标准化平均 RMSE、相对独立训练的收益，以及以相同种子和 5° 空间块配对重采样的
+2000 次 bootstrap 区间。先核对测试样本与有效观测支持完全一致，再计算对照；
+区间是探索性区间，未做多重比较校正。单个变量退步必须与综合指标同时报告。
