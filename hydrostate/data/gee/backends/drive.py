@@ -219,7 +219,9 @@ class DriveTransport:
                 folder=self.folder_name,
                 fileNamePrefix=self.prefix(job["id"]),
                 region=area, crs=job["crs"], crsTransform=job["transform"],
-                maxPixels=job["width"] * job["height"] + 1,
+                # GEE may round region edges beyond width * height. The planner
+                # bounds extent and bytes; this is only the export permission cap.
+                maxPixels=1e13,
                 fileFormat="GeoTIFF",
                 fileDimensions=self.settings["file_dimensions"], shardSize=256,
                 skipEmptyTiles=False,
@@ -241,7 +243,7 @@ class DriveTransport:
             region=area,
             crs=job["grid"]["crs"],
             crsTransform=job["transform"],
-            maxPixels=job["width"] * job["height"] + 1,
+            maxPixels=1e13,
             fileFormat="GeoTIFF",
             fileDimensions=self.settings["file_dimensions"],
             shardSize=256,
