@@ -266,7 +266,10 @@ def test_training_and_regional_selection_agree_on_missing_slots(active_slots, mo
     }
 
 
-def test_centered_cloud_selection_uses_aligned_full_window_and_deterministic_ties(monkeypatch):
+@pytest.mark.parametrize("empty", [False, True])
+def test_centered_cloud_selection_uses_aligned_full_window_and_deterministic_ties(
+    monkeypatch, empty,
+):
     from unittest.mock import MagicMock
 
     ee, collection, im, valid = (MagicMock() for _ in range(4))
@@ -280,6 +283,20 @@ def test_centered_cloud_selection_uses_aligned_full_window_and_deterministic_tie
     valid.gt.return_value = valid
     monkeypatch.setattr(samples, "prepare", lambda *_: prepared)
     candidates = [scene(-4), dict(scene(4), asset_id="s2/z"), dict(scene(4), asset_id="s2/a")]
+    if empty:
+        candidates = []
+
+    class Count(int):
+        def max(self, lower):
+            return max(self, lower)
+
+    collection.size.return_value = Count(len(candidates))
+    def to_list(count):
+        if count <= 0:
+            raise ValueError("Collection.toList count must be positive")
+        return MagicMock()
+
+    collection.toList.side_effect = to_list
     ee.FeatureCollection.return_value.getInfo.return_value = dict(
         features=[dict(properties=s) for s in candidates],
     )
@@ -287,7 +304,10 @@ def test_centered_cloud_selection_uses_aligned_full_window_and_deterministic_tie
     selected = samples.select_scene(
         ee, "s2", window, "2024-12-16", "2025-01-17", TARGET, 0.5, centered=True,
     )
-    assert selected["asset_id"] == "s2/a"  # Positive offset wins tie, then asset ID.
+    if empty:
+        assert selected is None
+    else:
+        assert selected["asset_id"] == "s2/a"  # Positive offset wins tie, then asset ID.
     valid.unmask.assert_called_once_with(0, sameFootprint=False)
     grid = valid.reduceRegion.call_args.kwargs
     assert grid["crs"] == window["crs"]

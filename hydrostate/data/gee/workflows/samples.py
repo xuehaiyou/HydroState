@@ -155,7 +155,8 @@ def select_scene(ee, key, sample, start, end, target, minimum, orbit=None, *, ce
 
     c = c.map(score).filter(ee.Filter.gte("valid_fraction", minimum)).sort("distance")
     # A FeatureCollection returns metadata only, never image pixels through getInfo.
-    candidates = c.toList(c.size()) if centered else c.limit(1).toList(1)
+    # GEE requires a positive count even when the collection itself is empty.
+    candidates = c.toList(c.size().max(1)) if centered else c.limit(1).toList(1)
     result = ee.FeatureCollection(
         candidates
         .map(

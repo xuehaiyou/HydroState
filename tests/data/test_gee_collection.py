@@ -144,7 +144,7 @@ def test_interrupted_collection_resumes_and_accepts_missing_labels(tmp_path, mon
 
     called.clear()
     monkeypatch.setattr(collection, "run_command", resume)
-    collection.collect(cfg)
+    collection.collect(dict(cfg, sampling_config="/new/frozen/release/centered8d.json"))
     assert called == ["lst", "validate_ecosystem", "validate_lst"]
     assert file_hash(tmp_path / "samples.parquet") == manifest_hash
     assert file_hash(tmp_path / "labels/ecosystem_v1/metadata.json") == base_hash

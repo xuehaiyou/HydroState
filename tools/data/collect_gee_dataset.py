@@ -170,7 +170,11 @@ def collect(cfg):
     with locked(root / ".collection.lock", blocking=False):
         frozen = root / "collection.json"
         if frozen.exists():
-            if json.loads(frozen.read_text()) != cfg:
+            # Frozen releases have different source paths; compare the resolved
+            # temporal contents, not the location of the source preset file.
+            previous = json.loads(frozen.read_text())
+            if ({k: v for k, v in previous.items() if k != "sampling_config"}
+                    != {k: v for k, v in cfg.items() if k != "sampling_config"}):
                 raise ValueError("Collection configuration changed; use a new output directory")
         else:
             if any(p.name != ".collection.lock" for p in root.iterdir()):
