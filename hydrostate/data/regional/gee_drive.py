@@ -11,10 +11,11 @@ import pandas as pd
 
 from hydrostate.data.gee.catalog import catalog
 from hydrostate.data.gee.contracts import atomic_json, fingerprint, locked
-from hydrostate.data.gee.products import BANDS, slots
+from hydrostate.data.gee.products import BANDS
 from hydrostate.data.gee.selection import epoch
 from hydrostate.data.input_products import LEGACY_PROFILE
 from hydrostate.data.regional.common import _prepare_windows, _publish_table
+from hydrostate.data.regional.temporal import regional_slots
 from hydrostate.inference.planning import windows
 
 LOG = logging.getLogger(__name__)
@@ -153,7 +154,8 @@ def prepare_region_drive(
                         candidate_count = previous.get("candidate_scenes")
                         LOG.info("%s reusing saved selection: %d windows", when, len(table))
                     else:
-                        first, last = slots(when)[0][0], slots(when)[-1][1]
+                        intervals = regional_slots(when, plan["config"])
+                        first, last = intervals[0][0], intervals[-1][1]
                         a, b = epoch(first), epoch(last)
                         years = range(
                             date.fromisoformat(first).year, date.fromisoformat(last).year + 1

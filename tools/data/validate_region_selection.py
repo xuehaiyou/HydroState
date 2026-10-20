@@ -18,10 +18,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from hydrostate.data.gee.backends.pixels import PixelQualityCache
 from hydrostate.data.gee.client import initialize
 from hydrostate.data.gee.contracts import atomic_json
-from hydrostate.data.gee.products import BANDS, slots
+from hydrostate.data.gee.products import BANDS
 from hydrostate.data.gee.region_plan import export_jobs, selected_chunks, selected_export_jobs
 from hydrostate.data.gee.selection import epoch, select_window
 from hydrostate.data.gee.workflows.drive_queue import validate_settings
+from hydrostate.data.regional.temporal import regional_slots
 from hydrostate.storage.scene_cache import SceneCache
 
 LOG = logging.getLogger(__name__)
@@ -46,7 +47,8 @@ def validate(source, output, *, limit=8, workers=4, download_config=None):
         raise ValueError("No saved full-band window selections to compare")
     indices = np.linspace(0, len(saved) - 1, min(limit, len(saved)), dtype=int)
     expected = [saved[i] for i in indices]
-    first, last = slots(period["time"])[0][0], slots(period["time"])[-1][1]
+    intervals = regional_slots(period["time"], plan["config"])
+    first, last = intervals[0][0], intervals[-1][1]
     years = range(date.fromisoformat(first).year, date.fromisoformat(last).year + 1)
     scenes = {
         key: sorted(

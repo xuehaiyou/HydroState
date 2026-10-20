@@ -1,6 +1,6 @@
 """Direct Earth Engine computePixels acquisition; no Drive dependency."""
 
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -11,6 +11,7 @@ from hydrostate.data.gee.contracts import locked
 from hydrostate.data.gee.products import BANDS
 from hydrostate.data.input_products import LEGACY_PROFILE
 from hydrostate.data.regional.common import _prepare_windows
+from hydrostate.data.regional.temporal import regional_slots
 from hydrostate.inference.planning import windows
 
 
@@ -33,8 +34,11 @@ def prepare_date(root, plan, period, *, workers=4, min_free_gib=5):
             raise RuntimeError(
                 "Resume the interrupted regional recency revision before preparation"
             )
-        t = date.fromisoformat(period["time"])
-        years = range((t - timedelta(days=63)).year, t.year + 1)
+        intervals = regional_slots(period["time"], plan["config"])
+        years = range(
+            date.fromisoformat(intervals[0][0]).year,
+            date.fromisoformat(intervals[-1][1]).year + 1,
+        )
         scenes = {
             key: sorted(
                 [s for year in years for s in catalog(root, plan, key, year, ee)],

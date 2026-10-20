@@ -28,6 +28,8 @@ def main():
     parser.add_argument('--local-config', type=Path)
     parser.add_argument('--template-root', type=Path,
                         help='Initialize offline using an existing plan AOI/grid/training overlap')
+    parser.add_argument('--reuse-input-cache', action='store_true',
+                        help='Share template pixel/QA/catalog caches after contract checks')
     parser.add_argument(
         "--download-config",
         type=Path,
@@ -61,12 +63,16 @@ def main():
 
         config = json.loads(Path(args.config).read_text())
         if args.template_root:
-            from hydrostate.data.local.planning import initialize_from_template
+            from hydrostate.data.regional.planning import initialize_from_template
 
             if args.pilot:
                 parser.error('Template geometry is reused exactly; --pilot cannot be combined')
-            plan = initialize_from_template(args.root, args.config, args.template_root)
+            plan = initialize_from_template(
+                args.root, args.config, args.template_root, reuse_input_cache=args.reuse_input_cache
+            )
         else:
+            if args.reuse_input_cache:
+                parser.error('--reuse-input-cache requires --template-root')
             plan = initialize(
                 args.root,
                 args.config,

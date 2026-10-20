@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 
 from hydrostate.data.input_products import L2_PROFILE, LEGACY_PROFILE
+from hydrostate.data.regional.temporal import policy
 
 CONFIG_ROOT = Path(__file__).resolve().parents[3] / "configs/data"
 BACKENDS = ("drive", "pixels", "local")
@@ -49,6 +50,7 @@ def prepare_region(
 ):
     """All backends publish the same offline manifests/cache, within their profile."""
     profile = plan["config"].get("input_profile", LEGACY_PROFILE)
+    sampling = policy(plan["config"])
     if config["input_profile"] != profile:
         raise ValueError(
             f"Input config profile {config['input_profile']} differs from frozen plan {profile}; "
@@ -58,7 +60,8 @@ def prepare_region(
     if backend != "drive" and (drive_token is not None or quota_project is not None):
         raise ValueError("Drive credentials/options require the Drive backend")
     logging.getLogger(__name__).info(
-        "Regional inputs: backend=%s profile=%s root=%s", backend, profile, root
+        "Regional inputs: backend=%s profile=%s temporal=%s root=%s",
+        backend, profile, sampling, root
     )
     kwargs = dict(workers=workers, min_free_gib=min_free_gib)
     if backend == "drive":

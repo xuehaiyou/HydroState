@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader, Dataset
 from hydrostate.data.gee.contracts import atomic_json, locked
 from hydrostate.data.gee.selection import epoch
 from hydrostate.data.regional.common import assemble_inputs
+from hydrostate.data.regional.temporal import CENTERED, policy
 from hydrostate.inference.planning import aoi_mask, output_transform
 from hydrostate.storage.packs import file_hash
 from hydrostate.storage.scene_cache import SceneCache
@@ -283,7 +284,11 @@ def create_product(root, plan, provenance, *, drop_s2=False):
             temporal_support=(
                 "8-day mean daily ET"
                 if task == "et"
-                else "reference-date estimate from preceding 63 days"
+                else (
+                    "reference-date reconstruction from preceding and following observations"
+                    if policy(plan["config"]) == CENTERED
+                    else "reference-date estimate from preceding 63 days"
+                )
             ),
         )
     create(

@@ -134,17 +134,20 @@ def training_records(manifest, crs, geometry):
     return records
 
 
-def overlap_records(grid, window, period, training):
+def overlap_records(grid, window, period, training, *, input_offsets=(-63, 1)):
     footprint = window_geometry(grid, window)
     t = date.fromisoformat(period["time"])
     a, b = date.fromisoformat(period["start"]), date.fromisoformat(period["end"])
+    input_start, input_end = (t + timedelta(days=d) for d in input_offsets)
     spatial, context, target = [], [], []
     for record in training:
         if not footprint.intersects(shape(record["geometry"])):
             continue
         sid, day = record["sample_id"], date.fromisoformat(record["time"])
         spatial.append(sid)
-        if abs((day - t).days) <= 63:
+        # The referenced training samples retain their original [day-63, day+1)
+        # support. Compare full intervals when inference can also look forward.
+        if day - timedelta(days=63) < input_end and input_start < day + timedelta(days=1):
             context.append(sid)
         if a <= day < b:
             target.append(sid)

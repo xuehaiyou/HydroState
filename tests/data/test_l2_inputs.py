@@ -147,6 +147,19 @@ def test_full_local_backend_publishes_only_complete_inputs_and_resumes(tmp_path,
         prepare_region_local(root, changed, plan['periods'], settings, min_free_gib=5)
 
 
+def test_local_centered_catalog_includes_future_scenes(tmp_path, local_setup):
+    plan, settings, _ = local_setup
+    plan['config'].update(temporal_sampling='centered_8d_v1', latest_days=None)
+    sources(tmp_path / 'sources', input_transform(plan['grid']), '20200730')
+    root = tmp_path / 'centered'
+    prepare_region_local(root, plan, plan['periods'], settings, workers=2, min_free_gib=5)
+    table = pd.read_parquet(root / 'manifests/2020-07-15.parquet')
+    choices = json.loads(table.iloc[0]['selections'])
+    assert choices['s2_3'] is not None
+    assert table.iloc[0]['has_after_observation']
+    assert table.iloc[0]['latest_age_days'] < 0
+
+
 def test_s2_baseline_not_acquisition_year_and_requires_offsets(local_setup):
     _, _, paths = local_setup
     params, _, _ = s2_metadata(paths['s2'])

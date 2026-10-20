@@ -17,6 +17,7 @@ from hydrostate.data.gee.contracts import atomic_json, fingerprint, input_shape,
 from hydrostate.data.gee.products import BANDS
 from hydrostate.data.input_products import LANDSAT_SR_BANDS, LANDSAT_SR_OFFSET, LANDSAT_SR_SCALE
 from hydrostate.data.local.index import CatalogCheckpoint
+from hydrostate.data.regional.temporal import regional_slots
 
 VERSION = 'local_l2_catalog_v1'
 LOG = logging.getLogger(__name__)
@@ -161,8 +162,8 @@ def catalog(root, plan, settings):
     height, width = input_shape(plan['grid'])
     tr = input_transform(plan['grid'])
     area = box(tr.c, tr.f - height * 10, tr.c + width * 10, tr.f)
-    start = timestamp(plan['periods'][0]['time']) - 63 * 86400
-    end = timestamp(plan['periods'][-1]['time']) + 86400
+    start = timestamp(regional_slots(plan['periods'][0]['time'], plan['config'])[0][0])
+    end = timestamp(regional_slots(plan['periods'][-1]['time'], plan['config'])[-1][1])
     scenes, seen, excluded = [], set(), []
     progress = dict(status='indexing', sensors={})
     progress_path = Path(root) / 'local_catalog_progress.json'

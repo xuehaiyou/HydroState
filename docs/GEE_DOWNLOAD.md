@@ -32,6 +32,8 @@ Landsat C2 T1 **L1 DN**，不是 `T1_TOA` 或 L2 SR。
 hydrostate/data/regional/
   prepare.py       配置解析、输入合同检查、延迟导入所选 backend
   common.py        窗口选片、SQLite 断点、Parquet 发布、模型输入组装
+  temporal.py      过去四个 16 天槽 / 围绕目标日的四个 8 天槽
+  planning.py      离线复用区域计划，校验后共享影像缓存
   gee_drive.py     GEE 选片、区域导出规划与日期发布
   gee_pixels.py    直接像素获取与日期发布
   local.py         本地目录索引、栅格读取与日期发布
@@ -95,6 +97,47 @@ python tools/data/update_region_recency.py --root /path/to/region --latest-days 
 已有预测产品时拒绝原地改写；已开始的修订必须使用同一参数恢复。
 本工具只修改最终时效门槛，不改变槽宽、前后时间方向或单景选择排序。
 围绕目标日前后的时间槽需要独立的数据/模型实验，不能通过关闭门槛来替代。
+
+## 当前鄱阳湖新方案：围绕目标日的四个 8 天槽
+
+区域配置 `configs/inference/poyang_centered8d.json` 使用
+`temporal_sampling=centered_8d_v1` 和 `latest_days=null`。四槽是左闭右开区间：
+
+```text
+[t-16, t-8)  [t-8, t)  [t, t+8)  [t+8, t+16)
+```
+
+这包含目标日前 16 个日历日、目标日及之后 15 个日历日，共 32 天；
+边界影像只属于一个槽。不再叠加 4 天门槛，仍需至少两个槽有有效观测、
+每景窗口有效比例至少 50%。每个传感器在每槽选距目标日最近的合格单景；
+S1 先以整个时间窗内最近的合格观测确定轨道，再在各槽选同轨影像。
+未来影像不会因为日期更新而自动压过离目标更近的影像。
+
+清单保留每景真实时间，并增加距目标日的正负偏移、最近观测绝对距离、
+是否有目标日前/后观测。`latest_age_days` 在此模式下可以为负，表示最新观测位于
+目标日之后，不把未来影像误记为年龄零。训练输入重叠按新时间范围与原训练样本
+的实际过去 63 天支持区间求交。
+
+```bash
+python tools/predict_region.py init \
+  --root /path/to/poyang_centered8d \
+  --config configs/inference/poyang_centered8d.json \
+  --template-root /path/to/original/poyang \
+  --reuse-input-cache
+python tools/data/prepare_region_inputs.py \
+  --root /path/to/poyang_centered8d \
+  --input-config configs/data/regional/gee_drive.json
+```
+
+新目录拥有独立的 plan、选片数据库、就绪清单和 Drive 任务记录。
+缓存复用先检查波段、输入合同、归一化、网格和块大小相同，再通过目录链接共享
+影像/QA/资产目录；同一个场景的写锁也指向同一实际位置。不会共享旧选片清单。
+目录链接的源缓存需保留，`cache_reuse.json` 记录依赖。初始化 L2 目录时不能复用 L1 缓存。
+
+新方案只准备输入，配置没有默认模型或 checkpoint。旧权重使用过去四个 16 天槽训练，
+采用前后观测的效果需要匹配的新训练/微调与验证；本次不自动提交训练或预测。
+原配置与已有训练实验保留原行为。目标日期仍为原 403 期，但最后一期会读取到
+2026-01-14 之前的观测；三条获取路径均按槽边界获取跨年目录。
 
 ## 以下为 GEE 传输细节及兼容配置
 

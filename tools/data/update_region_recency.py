@@ -69,6 +69,8 @@ def update_recency(root, latest_days):
                 raise ValueError("Resume the pending recency revision with its original limit")
             return _apply(root, record)
         plan = json.loads((root / "plan.json").read_text())
+        if plan["config"].get("temporal_sampling", "past_16d_v1") != "past_16d_v1":
+            raise ValueError("Recency revision only supports past_16d_v1; use a separate plan")
         old = plan["config"]["latest_days"]
         if old == latest_days:
             return dict(changed=False, latest_days=latest_days)

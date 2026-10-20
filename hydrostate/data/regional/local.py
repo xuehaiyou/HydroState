@@ -9,13 +9,14 @@ from pathlib import Path
 import pandas as pd
 
 from hydrostate.data.gee.contracts import atomic_json, fingerprint, input_shape, locked
-from hydrostate.data.gee.products import BANDS, slots
+from hydrostate.data.gee.products import BANDS
 from hydrostate.data.gee.region_plan import selected_chunks
 from hydrostate.data.gee.selection import epoch
 from hydrostate.data.input_products import L2_PROFILE
 from hydrostate.data.local.catalog import catalog
 from hydrostate.data.local.reader import LocalQualityCache, RasterReader
 from hydrostate.data.regional.common import _prepare_windows, _publish_table
+from hydrostate.data.regional.temporal import regional_slots
 from hydrostate.inference.planning import windows
 from hydrostate.storage.scene_cache import SceneCache
 
@@ -60,7 +61,8 @@ def prepare_region_local(root, plan, periods, settings, *, workers=4, min_free_g
                     raise ValueError("Incomplete local date manifest")
                 continue
             started = time.monotonic()
-            first, last = slots(period["time"])[0][0], slots(period["time"])[-1][1]
+            intervals = regional_slots(period["time"], plan["config"])
+            first, last = intervals[0][0], intervals[-1][1]
             scenes = {
                 key: [
                     {k: s[k] for k in ("key", "asset_id", "time", "orbit", "bounds")}
