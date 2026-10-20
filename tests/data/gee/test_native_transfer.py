@@ -219,3 +219,55 @@ def test_layout_config_validation(native_setup):
     settings["export_layout"] = "native_typo"
     with pytest.raises(ValueError, match="export_layout"):
         validate_settings(settings, cache)
+
+
+def test_native_mask_mismatch_cannot_publish_chunk(native_setup):
+    from hydrostate.storage.quality_cache import QualityCache
+
+    cache, scene, job = native_setup("s2")
+    paths = write_parts(cache.root, job)
+    quality = QualityCache(cache)
+    quality.write_tile(scene, 0, 0, np.zeros((120, 120), "u1"))
+    with pytest.raises(ValueError, match="differs from selection"):
+        ingest_export(cache, job, paths)
+    assert not cache.done(scene).any()
+
+
+def test_native_budget_uses_transport_bytes_and_skips_reserved(native_setup):
+    cache, scene, _ = native_setup("s2")
+    tr = input_transform(cache.grid)
+    groups = band_groups(scene, source_info("s2", (tr.c, tr.f)))
+    demand = [dict(scene=scene, chunks={(0, 0)})]
+    # Smaller than one aligned chunk, but enough for the actual native requests.
+    jobs = list(selected_export_jobs(
+        cache, demand, max_export_bytes=300000,
+        job_transform=lambda job: native_job(job, groups),
+    ))
+    assert len(jobs) == 1
+    assert jobs[0]["raw_bytes"] < 300000 < jobs[0]["legacy_raw_bytes"]
+    assert list(selected_export_jobs(
+        cache, demand, max_export_bytes=300000,
+        job_transform=lambda job: native_job(job, groups),
+        reserved_chunks={scene["asset_id"]: {(0, 0)}},
+    )) == []
+
+
+def test_legacy_receipt_schema_migrates_without_changing_payload(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.sqlite"
+    db = sqlite3.connect(path)
+    db.execute("""CREATE TABLE exports (
+        id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL,
+        task_id TEXT, files TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+        updated TEXT NOT NULL, error TEXT)""")
+    job = {"id": "legacy"}
+    db.execute("INSERT INTO exports(id,payload,status,updated) VALUES(?,?,?,?)",
+               ("legacy", json.dumps(job), "submitted", "old"))
+    db.commit()
+    db.close()
+    state = ExportState(path)
+    assert state.get("legacy")["payload"] == job
+    assert state.get("legacy")["part_index"] == 0
+    assert state.get("legacy")["status"] == "submitted"
+    state.close()
