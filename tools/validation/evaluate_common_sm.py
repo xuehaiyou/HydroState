@@ -28,9 +28,10 @@ RUNS = {
 
 
 def sm_collate(batch):
-    # Missing scalar labels cannot contribute to either evaluation protocol.
-    batch = [x for x in batch if x["data_samples"]["soil_moisture_valid"].any()]
-    return hydro_collate(batch) if batch else None
+    # Preserve original batch composition: legacy temporal pooling can depend
+    # on the padded sequence length of other samples in the same batch.
+    return hydro_collate(batch) if any(
+        x["data_samples"]["soil_moisture_valid"].any() for x in batch) else None
 
 
 def metrics(rows, prediction):
@@ -51,7 +52,7 @@ def main():
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     assert torch.cuda.device_count() == 1, "Expose exactly one GPU"
-    torch.set_float32_matmul_precision("high")
+    torch.set_float32_matmul_precision("highest")
     init_default_scope("hydrostate")
     coupling = WaterSoilCoupling(enabled=True, supervision_source="observed",
                                 min_land_fraction=.01, min_window_land_fraction=.01)
@@ -70,7 +71,8 @@ def main():
         model = MODELS.build(cfg.model).cuda().eval()
         checkpoint = args.storage / "checkpoints/sm_common" / run / f"best_hydro_score_epoch_{epoch}.pth"
         load_checkpoint(model, str(checkpoint), map_location="cpu", strict=True)
-        loader = DataLoader(dataset, batch_size=8, shuffle=False, num_workers=2,
+        loader = DataLoader(dataset, batch_size=cfg.val_dataloader.batch_size,
+                            shuffle=False, num_workers=2,
                             collate_fn=sm_collate)
         records = []
         with torch.inference_mode():
@@ -116,6 +118,7 @@ def main():
     result = dict(
         protocol="Observed water fraction; land weights=1-WF; pixel land>0.01; window land>=0.01; complete observed support; intersection of valid sample IDs.",
         checkpoint_selection="Original validation hydro_score best epoch, fixed before reevaluation.",
+        inference="Float32, highest matmul precision; original validation batch size and composition.",
         common_sample_count=len(common_ids),
         common_ids_sha256=hashlib.sha256("\n".join(sorted(common_ids)).encode()).hexdigest(),
         models={run: dict(epoch=RUNS[run],
