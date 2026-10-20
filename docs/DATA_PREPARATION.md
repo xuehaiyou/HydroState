@@ -182,7 +182,8 @@ After collection, `HYDROSTATE_DATA_ROOT` can point
 training-only target statistics before training; do not reuse merged_v1 statistics.
 
 For direct HPC collection, use `configs/data/collection/centered8d_16vars_hpc.py`.
-It writes `/scr/u/xiaoz/HydroState/samples/centered8d_16vars_v1` and reads the
+It collects **20,000 samples**, writes
+`/scr/u/xiaoz/HydroState/samples/centered8d_16vars_n20000_v1`, and reads the
 shared candidate pool at `/scr/u/xiaoz/HydroState/candidates`. Run
 `scripts/run_gee_collection_io.sh` on `hpc2021-io1` or `hpc2021-io2`, with
 `HYDROSTATE_CODE_ROOT`, `HYDROSTATE_SOURCE_HASHES`, and `HYDROSTATE_GEE_PYTHON`

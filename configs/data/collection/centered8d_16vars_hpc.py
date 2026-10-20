@@ -2,5 +2,6 @@
 
 _base_ = ["./centered8d_16vars.py"]
 
-output_dir = "/scr/u/xiaoz/HydroState/samples/centered8d_16vars_v1"
+samples = 20000
+output_dir = "/scr/u/xiaoz/HydroState/samples/centered8d_16vars_n20000_v1"
 candidate_dir = "/scr/u/xiaoz/HydroState/candidates"
