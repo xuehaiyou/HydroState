@@ -1,0 +1,31 @@
+{
+  "backend": "local",
+  "input_profile": "landsat_l2_sr_v1",
+  "options": {
+    "s1_units": "sigma0_db",
+    "roots": {
+      "s1": [
+        "/fossfs/QianWang/Download/Sentinel1/tile/50/R/LS",
+        "/fossfs/QianWang/Download/Sentinel1/tile/50/R/LT",
+        "/fossfs/QianWang/Download/Sentinel1/tile/50/R/LU",
+        "/fossfs/QianWang/Download/Sentinel1/tile/50/R/MS",
+        "/fossfs/QianWang/Download/Sentinel1/tile/50/R/MT",
+        "/fossfs/QianWang/Download/Sentinel1/tile/50/R/MU"
+      ],
+      "s2": [
+        "/fossfs/DATAPOOL/Sentinel2_L2/50/R/LS",
+        "/fossfs/DATAPOOL/Sentinel2_L2/50/R/LT",
+        "/fossfs/DATAPOOL/Sentinel2_L2/50/R/LU",
+        "/fossfs/DATAPOOL/Sentinel2_L2/50/R/MS",
+        "/fossfs/DATAPOOL/Sentinel2_L2/50/R/MT",
+        "/fossfs/DATAPOOL/Sentinel2_L2/50/R/MU"
+      ],
+      "landsat": [
+        "/fossfs/DATAPOOL/Landsat_L2/121/039",
+        "/fossfs/DATAPOOL/Landsat_L2/121/040",
+        "/fossfs/DATAPOOL/Landsat_L2/122/039",
+        "/fossfs/DATAPOOL/Landsat_L2/122/040"
+      ]
+    }
+  }
+}

@@ -167,7 +167,10 @@ def test_scene_selection_locks_orbit_and_accepts_missing_s2(plan):
 
 
 @pytest.mark.parametrize(
-    "age,limit,accepted", [(3.57, 3, False), (3.57, 4, True), (4, 4, True), (4.001, 4, False)]
+    "age,limit,accepted", [
+        (3.57, 3, False), (3.57, 4, True), (4, 4, True), (4.001, 4, False),
+        (10, None, True), (10, 15, True),
+    ]
 )
 def test_recency_gate_uses_configured_days_without_changing_observations(
     plan, age, limit, accepted
@@ -194,6 +197,27 @@ def test_recency_gate_uses_configured_days_without_changing_observations(
     assert row["active_slots"] == 2
     assert row["latest_age_days"] == pytest.approx(age, abs=1 / 86400)
     assert len([s for s in json.loads(row["selections"]).values() if s]) == 2
+
+
+def test_slot_only_selection_still_enforces_slots_quality_and_minimum_count(plan):
+    plan["config"]["latest_days"] = None
+    target = epoch(plan["periods"][0]["time"])
+    scenes = dict(s1=[
+        dict(key="s1", time=target - days * 86400, asset_id=f"S1/{days}",
+             orbit=12, bounds=[399000, 3190000, 410000, 3210000])
+        for days in (20, 40, 64)
+    ], s2=[], landsat=[])
+    cache = SimpleNamespace(read_valid=lambda scene, window: np.ones((120, 120), bool))
+    row = select_window(plan, plan["periods"][0], windows(plan)[0], scenes, cache)
+    assert row["accepted"] and row["latest_age_days"] == 20
+    choices = json.loads(row["selections"])
+    assert choices["s1_3"] is None and choices["s1_0"] is None
+    assert row["active_slots"] == 2
+    scenes["s1"] = scenes["s1"][1:]  # 64-day-old image is outside all slots.
+    assert not select_window(plan, plan["periods"][0], windows(plan)[0], scenes, cache)["accepted"]
+    scenes["s1"] = scenes["s1"][:1]
+    cache.read_valid = lambda scene, window: np.zeros((120, 120), bool)
+    assert not select_window(plan, plan["periods"][0], windows(plan)[0], scenes, cache)["accepted"]
 
 
 def test_cache_reads_require_committed_chunks_and_preserve_offsets(tmp_path, plan):
@@ -224,7 +248,8 @@ def test_download_space_reserve_stops_before_request(tmp_path, plan, monkeypatch
 
 
 def test_preparation_failure_stops_queue_and_resumes_saved_windows(tmp_path, plan, monkeypatch):
-    from hydrostate.inference import gee
+    from hydrostate.data.regional import common
+    from hydrostate.data.regional import gee_pixels as gee
 
     monkeypatch.setitem(
         sys.modules,
@@ -244,7 +269,7 @@ def test_preparation_failure_stops_queue_and_resumes_saved_windows(tmp_path, pla
             raise OSError("simulated disk limit")
         return dict(window, accepted=True)
 
-    monkeypatch.setattr(gee, "select_window", select)
+    monkeypatch.setattr(common, "select_window", select)
     with pytest.raises(OSError, match="simulated disk limit"):
         gee.prepare_date(tmp_path, plan, plan["periods"][0], workers=1)
     assert len(calls) == 2

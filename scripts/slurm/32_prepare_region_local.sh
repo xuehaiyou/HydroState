@@ -22,6 +22,5 @@ export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export GDAL_NUM_THREADS=1 BLOSC_NTHREADS=1 PYTHONUNBUFFERED=1
 export GDAL_CACHEMAX=128
 exec "$PYTHON" -u tools/data/prepare_region_inputs.py \
-  --root "$REGION_ROOT" --backend local \
-  --local-config configs/data/hpc_local_l2.json \
+  --root "$REGION_ROOT" --input-config configs/data/regional/local.json \
   --workers "${SLURM_CPUS_PER_TASK:-4}" --min-free-gib 20 "$@"

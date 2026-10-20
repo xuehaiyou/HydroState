@@ -1,4 +1,102 @@
-# GEE 数据获取：样本像素通道与区域 Drive 通道
+# 数据获取：区域三路径与 GEE 样本通道
+
+## 区域输入的统一入口
+
+区域准备代码集中在 `hydrostate/data/regional/`。用输入配置选择获取路径；
+模型配置和区域 `plan.json` 分别管理模型、网格与筛选规则，不由传输配置修改。
+
+| 获取方式 | 输入配置 | 工作流 |
+|---|---|---|
+| GEE → Google Drive → HPC | `configs/data/regional/gee_drive.json` | `gee_drive.py` |
+| GEE 直接请求像素 | `configs/data/regional/gee_pixels.json` | `gee_pixels.py` |
+| 本地遥感文件处理 | `configs/data/regional/local.json` | `local.py` |
+
+```bash
+python tools/data/prepare_region_inputs.py \
+  --root /path/to/region \
+  --input-config configs/data/regional/gee_drive.json \
+  --workers 4 --min-free-gib 20
+```
+
+将配置替换为另两项即可选择对应路径。直接像素路径实际调用 `computePixels`；
+不经过 Drive。这里的“local”指从已有原始遥感文件生成输入，
+与 Drive 文件下载后在 HPC 做 QA、重采样不是同一个获取路径。
+
+Drive/pixels 当前均为 `olmoearth_l1_v1`：S1 GRD σ0 dB、S2 L2A SR 整数值、
+Landsat C2 T1 **L1 DN**，不是 `T1_TOA` 或 L2 SR。
+本地配置目前读取 Landsat L2，属于 `landsat_l2_sr_v1`；必须使用独立区域目录和
+匹配的模型适配器，入口会在开始获取前拒绝与冻结计划不匹配的输入配置。
+三条路径共享窗口规则、离线缓存接口和就绪清单格式，不表示 L1/L2 数值合同相同。
+
+```text
+hydrostate/data/regional/
+  prepare.py       配置解析、输入合同检查、延迟导入所选 backend
+  common.py        窗口选片、SQLite 断点、Parquet 发布、模型输入组装
+  gee_drive.py     GEE 选片、区域导出规划与日期发布
+  gee_pixels.py    直接像素获取与日期发布
+  local.py         本地目录索引、栅格读取与日期发布
+hydrostate/data/gee/       GEE 产品、目录、客户端、传输与导出队列
+hydrostate/data/local/     本地索引、产品元数据与栅格读取
+hydrostate/storage/        离线输入/有效性缓存
+```
+
+`tools/data/prepare_region_inputs.py` 未指定路径配置时，默认采用新的区域 Drive 配置。
+`tools/predict_region.py prepare` 的无参数旧行为仍为 pixels。
+显式使用旧 `--backend`、`--download-config`、`--local-config` 时继续解析原配置；
+它们不能与 `--input-config` 同时指定，以免配置被静默覆盖。
+旧模块只保留兼容导入，实际工作流已迁入 `data/regional/`。
+训练样本采集入口及旧实验配置保持原行为。
+
+## 当前 Drive 策略：原生网格、优先整景区域导出
+
+新区域配置使用 `export_layout=native_v1`、`export_scope=scene_region`：
+
+1. 按原窗口规则选片，仅对确实被选中且有缺失输入的原始影像创建新导出。
+2. 将该景在区域输入网格内的覆盖矩形扩至缓存块边界，并保留入选窗口的 halo。
+   单位是“原始影像 × 区域覆盖范围 × 原生网格组”，不是一个时间段的合成影像。
+   源有效性掩膜保留不规则影像足迹。
+3. 尽量每景一次区域请求。S2 按 10/20/60 m 三组、Landsat L1 按 15/30 m 两组、
+   S1 按实际原生网格导出。HPC 完成 QA、模型网格对齐和归一化。
+4. 一个区域请求的全部网格组原始字节量最多 2 GiB，另按实际 Drive 可用空间、
+   已登记且可回收的本队列文件和 scratch 余量降低上限；超过上限时自动空间拆分。
+   `file_dimensions=3840` 还可能让同一云任务输出多个 TIFF，这不等于新增云任务。
+5. 同时最多两个实际云任务、在途原始字节最多 4 GiB，Drive 另留 0.5 GiB；
+   实际空间不足以容纳两项时串行推进。不会清理用户其他文件或回收站。
+   每景的原生组依次导出，全部组验证并写入缓存后才删除该次临时文件。
+
+整景模式会把覆盖范围内的缺失块一并入库，供后续日期复用，避免因后来新增窗口需求
+再次导出同一景。它可能比“只存首期入选块”占用更多最终缓存，不能只按传输压缩率
+估算磁盘需求。保留 20 GiB 停止阈值；空间不足时保留断点，不自动删除输入。
+报告的 `missing_chunks` 是当前期必需的缺失块，`new_cache_chunks` 包括整景预取，
+`effective_max_export_gib` 是本次实际规划上限。
+
+原配置 `configs/data/gee_drive.json` 保留 10 m float32 稀疏导出；
+`configs/data/gee_drive_native.json` 保留按缺失块打包的原生导出。
+两者均不默认启用整景预取，可用于复现实验与对照。
+新队列先恢复已有旧格式任务，再以新策略规划缺失输入；不重建已完成缓存。
+
+## 区域时效门槛可选，时间槽仍沿用训练设计
+
+`plan.json` 中 `latest_days=4` 表示整个窗口至少有一景距目标日不超过 4 天，
+不是要求四个时间槽的影像都在 4 天以内。设为 JSON `null` 则关闭这一额外门槛；
+仍需影像落在原四个时间槽内、至少两个槽有效、窗口有效比例至少 50%，并保持 S1 同轨。
+`latest_age_days` 和每景真实时间继续保留，可以按观测年龄评估结果。
+当前训练样本采集的默认 3 天门槛不随区域设置改变。
+
+已有区域不能只编辑 JSON。停止准备进程后，通过带备份和锁的离线修订工具放宽：
+
+```bash
+python tools/data/update_region_recency.py --root /path/to/region --no-recency-limit
+# 或保留原时间槽并要求最近槽有观测：
+python tools/data/update_region_recency.py --root /path/to/region --latest-days 15
+```
+
+工具保留影像缓存和任务 ID，只撤销接受窗口发生变化的日期清单，补齐新需求后重新发布。
+已有预测产品时拒绝原地改写；已开始的修订必须使用同一参数恢复。
+本工具只修改最终时效门槛，不改变槽宽、前后时间方向或单景选择排序。
+围绕目标日前后的时间槽需要独立的数据/模型实验，不能通过关闭门槛来替代。
+
+## 以下为 GEE 传输细节及兼容配置
 
 两条通道共享产品、QA、时间槽、波段顺序和归一化定义。小样本默认使用
 `computePixels`；大范围连续推理按影像和空间矩形批量导出至 Google Drive，
@@ -21,15 +119,15 @@ hydrostate/data/gee/
     drive.py              区域导出、Range 续传、校验、入库和精确清理
   workflows/
     samples.py            样本规划与获取；保留旧 Drive 样本实现
-    region.py             区域准备、缓存复用和日期清单
+    region.py             旧导入兼容层；实际工作流在 data/regional/
     drive_queue.py        有并发数和字节数上限的导出队列
 hydrostate/storage/scene_cache.py  离线 Zarr 读写，无网络请求
 hydrostate/storage/quality_cache.py 离线掩膜 Zarr、已有输入复用和一致性验证
 ```
 
 入口是 `tools/data/prepare_gee_samples.py` 和
-`tools/data/prepare_region_inputs.py`；Drive 调度参数在
-`configs/data/gee_drive.json`。`hydrostate/data/gee_sampling.py`、
+`tools/data/prepare_region_inputs.py`；当前区域配置在
+`configs/data/regional/`，以下命令显式使用旧配置以保留其行为。`hydrostate/data/gee_sampling.py`、
 `hydrostate/inference/gee.py` 和 `tools/predict_region.py prepare` 保留兼容入口。
 推理代码直接读取离线 SceneCache，不需要 GEE/Drive 授权。
 新增产品修改共享产品定义；修改传输方式只改 backend；调度策略在 workflow 中修改。
@@ -58,7 +156,8 @@ python -u tools/data/prepare_region_inputs.py \
   --workers 4 --min-free-gib 20
 ```
 
-此入口默认 Drive。可用 `--dates 2017-04-03` 只准备一期；省略则按日期顺序规划全部期次。
+上面的旧配置命令走 Drive。可用 `--dates 2017-04-03` 只准备一期；
+省略则按日期顺序规划全部期次。
 旧入口仍默认 pixels，使用区域导出时显式加 `--backend drive`。
 本项目 HPC 的 CPU 计算节点无法联网。下载使用官方文件传输节点
 `hpc2021-io1.hku.hk` 或 `hpc2021-io2.hku.hk`，不在主节点 `hpc2021.hku.hk`
@@ -118,7 +217,7 @@ IO 节点不经过 Slurm 排队；使用 `scripts/run_region_download_io.sh` 检
 
 ### 原生网格导出，HPC 完成预处理
 
-新增独立配置，不修改旧实验的默认行为：
+按入选空间块打包的原生配置仍可独立选择：
 
 ```bash
 python -u tools/data/prepare_region_inputs.py \

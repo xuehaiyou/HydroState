@@ -21,7 +21,7 @@ from numcodecs import Blosc
 from pyproj import Transformer
 
 from hydrostate.data import gee_sampling as gs
-from hydrostate.inference.gee import retry
+from hydrostate.data.gee.client import retry
 from hydrostate.inference.planning import input_transform
 
 

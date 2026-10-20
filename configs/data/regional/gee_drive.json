@@ -1,0 +1,16 @@
+{
+  "backend": "drive",
+  "input_profile": "olmoearth_l1_v1",
+  "options": {
+    "export_layout": "native_v1",
+    "export_scope": "scene_region",
+    "max_exports": 2,
+    "max_pending_dates": 4,
+    "download_workers": 2,
+    "file_dimensions": 3840,
+    "max_export_gib": 2.0,
+    "max_pending_gib": 4.0,
+    "drive_reserve_gib": 0.5,
+    "poll_seconds": 30
+  }
+}

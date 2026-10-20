@@ -21,7 +21,7 @@ def validate_settings(settings, cache):
         "drive_reserve_gib",
         "poll_seconds",
     }
-    optional = {"max_padding_fraction", "max_pending_dates", "export_layout"}
+    optional = {"max_padding_fraction", "max_pending_dates", "export_layout", "export_scope"}
     if not required <= set(settings) or set(settings) - required - optional:
         raise ValueError(
             f"Download config requires {sorted(required)}; optional keys: {sorted(optional)}"
@@ -50,6 +50,11 @@ def validate_settings(settings, cache):
         raise ValueError("max_pending_dates must be a positive integer")
     if settings.get("export_layout", "aligned_float32") not in ("aligned_float32", "native_v1"):
         raise ValueError("export_layout must be aligned_float32 or native_v1")
+    if settings.get("export_scope", "selected_chunks") not in ("selected_chunks", "scene_region"):
+        raise ValueError("export_scope must be selected_chunks or scene_region")
+    if (settings.get("export_scope") == "scene_region"
+            and settings.get("export_layout") != "native_v1"):
+        raise ValueError("scene_region exports require native_v1")
     if settings["file_dimensions"] % 256 or settings["file_dimensions"] % cache.chunk:
         raise ValueError("file_dimensions must align to both 256 and the cache chunk")
     if settings["max_pending_gib"] < settings["max_export_gib"]:

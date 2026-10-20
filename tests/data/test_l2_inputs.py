@@ -13,11 +13,11 @@ from shapely.geometry import box, mapping
 from hydrostate.data.gee.contracts import input_transform
 from hydrostate.data.gee.products import BANDS, normalize_pixels
 from hydrostate.data.gee.workflows.landsat_l2 import l2_asset
-from hydrostate.data.gee.workflows.region import assemble_inputs
 from hydrostate.data.input_products import L2_PROFILE, harmonize_s2, landsat_l2_pixels
 from hydrostate.data.local.catalog import inspect_scene, s2_metadata
 from hydrostate.data.local.reader import RasterReader
-from hydrostate.data.local.region import prepare_region_local
+from hydrostate.data.regional.common import assemble_inputs
+from hydrostate.data.regional.local import prepare_region_local
 from hydrostate.storage.scene_cache import SceneCache
 from tools.data.extend_gee_labels import Checkpoint
 from tools.data.extend_gee_landsat_l2 import publish

@@ -129,3 +129,16 @@ def test_revision_refuses_running_writer_and_existing_predictions(root):
     with pytest.raises(ValueError, match="Existing predictions"):
         revision.update_recency(root, 4)
     assert json.loads((root / "plan.json").read_text())["config"]["latest_days"] == 3
+
+
+def test_disable_recency_preserves_age_and_rejects_empty_or_single_slot(root):
+    report = revision.update_recency(root, None)
+    assert report["dates"][0]["accepted_after"] == 3
+    with sqlite3.connect(root / "preparation.sqlite") as db:
+        rows = [json.loads(r[0]) for r in db.execute("SELECT result FROM windows ORDER BY date,id")]
+    assert [r["accepted"] for r in rows] == [True, True, True, False, False, True]
+    assert rows[2]["latest_age_days"] == 4.00001
+    assert json.loads((root / "plan.json").read_text())["config"]["latest_days"] is None
+    assert revision.update_recency(root, None) == dict(changed=False, latest_days=None)
+    with pytest.raises(ValueError, match="only relaxes"):
+        revision.update_recency(root, 15)

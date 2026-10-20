@@ -16,8 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pandas as pd
 
 from hydrostate.data.gee_sampling import atomic_json, fingerprint
-from hydrostate.inference.gee import SceneCache, assemble_inputs
+from hydrostate.data.regional.common import assemble_inputs
 from hydrostate.storage.packs import file_hash
+from hydrostate.storage.scene_cache import SceneCache
 
 
 def main():

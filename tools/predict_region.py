@@ -21,15 +21,16 @@ def main():
     parser.add_argument("--pilot", action="store_true")
     parser.add_argument("--dates", nargs="+", help="Exact nominal dates listed in plan.json")
     parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--backend", choices=["pixels", "drive", "local"], default="pixels")
-    parser.add_argument('--local-config', type=Path,
-                        default=Path('configs/data/hpc_local_l2.json'))
+    parser.add_argument("--input-config", type=Path,
+                        help="Regional acquisition config: configs/data/regional/*.json")
+    parser.add_argument("--backend", choices=["pixels", "drive", "local"],
+                        help="Legacy backend override; prefer --input-config")
+    parser.add_argument('--local-config', type=Path)
     parser.add_argument('--template-root', type=Path,
                         help='Initialize offline using an existing plan AOI/grid/training overlap')
     parser.add_argument(
         "--download-config",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "configs/data/gee_drive.json",
     )
     parser.add_argument("--drive-token", type=Path)
     parser.add_argument("--drive-quota-project")
@@ -78,37 +79,21 @@ def main():
     if args.dates and not set(args.dates).issubset(available):
         parser.error(f"Dates must be in plan.json; available: {sorted(available)}")
     if args.command == "prepare":
-        from hydrostate.data.gee.workflows.region import prepare_date, prepare_region_drive
+        from hydrostate.data.regional.prepare import load_config, prepare_region
 
         periods = [p for p in plan["periods"] if not args.dates or p["time"] in args.dates]
-        if args.backend == 'local':
-            from hydrostate.data.local.region import prepare_region_local
-
-            prepare_region_local(args.root, plan, periods,
-                                 json.loads(args.local_config.read_text()),
-                                 workers=max(1, args.workers), min_free_gib=args.min_free_gib)
-            return
-        if args.backend == "drive":
-            prepare_region_drive(
-                args.root,
-                plan,
-                periods,
-                json.loads(args.download_config.read_text()),
-                workers=max(1, args.workers),
-                min_free_gib=args.min_free_gib,
-                drive_token=args.drive_token,
-                quota_project=args.drive_quota_project,
+        try:
+            acquisition = load_config(
+                args.input_config, backend=args.backend,
+                download_config=args.download_config, local_config=args.local_config,
             )
-            return
-
-        for period in periods:
-            prepare_date(
-                args.root,
-                plan,
-                period,
-                workers=max(1, args.workers),
-                min_free_gib=args.min_free_gib,
-            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        prepare_region(
+            args.root, plan, periods, acquisition,
+            workers=max(1, args.workers), min_free_gib=args.min_free_gib,
+            drive_token=args.drive_token, quota_project=args.drive_quota_project,
+        )
     elif args.command == "predict":
         from hydrostate.inference.predict import predict_dates
 

@@ -204,7 +204,9 @@ def test_verify_requires_full_values_and_detects_mask_mismatch(setup):
 def test_drive_workflow_resumes_selection_and_publishes_only_complete_inputs(setup, monkeypatch):
     from hydrostate.data.gee import client
     from hydrostate.data.gee.backends import drive
-    from hydrostate.data.gee.workflows import drive_queue, region
+    from hydrostate.data.gee.workflows import drive_queue
+    from hydrostate.data.regional import common
+    from hydrostate.data.regional import gee_drive as region
 
     cache, scene = setup
     older = dict(scene, asset_id="older", time=epoch("2025-01-02"))
@@ -223,6 +225,7 @@ def test_drive_workflow_resumes_selection_and_publishes_only_complete_inputs(set
         "catalog",
         lambda root, plan, key, year, ee: [scene, older] if key == "s1" and year == 2025 else [],
     )
+    monkeypatch.setattr(common, "windows", region.windows)
     fake_pixels(monkeypatch, cache, lambda s, y, x, h, w: np.ones((h, w), bool))
     settings = dict(
         max_exports=2,
@@ -257,7 +260,7 @@ def test_drive_workflow_resumes_selection_and_publishes_only_complete_inputs(set
     report = json.loads((cache.root / "reports/preparation_2025-01-21.json").read_text())
     assert report["status"] == "selected" and report["mask_requests"] == 2
     fail = False
-    monkeypatch.setattr(region, "select_window", lambda *a: pytest.fail("Selection already saved"))
+    monkeypatch.setattr(common, "select_window", lambda *a: pytest.fail("Selection already saved"))
     region.prepare_region_drive(cache.root, cache.plan, [period], settings)
     assert pd.read_parquet(cache.root / "manifests/2025-01-21.parquet")["accepted"].all()
     report = json.loads((cache.root / "reports/preparation_2025-01-21.json").read_text())
@@ -276,7 +279,8 @@ def test_drive_dates_fill_idle_slot_deduplicate_and_bound_lookahead(
     from hydrostate.data.gee import client
     from hydrostate.data.gee.backends import drive
     from hydrostate.data.gee.state import ExportState
-    from hydrostate.data.gee.workflows import drive_queue, region
+    from hydrostate.data.gee.workflows import drive_queue
+    from hydrostate.data.regional import gee_drive as region
 
     cache, scene = setup
     scenes = [dict(scene, asset_id=f"scene-{key}") for key in "abc"]

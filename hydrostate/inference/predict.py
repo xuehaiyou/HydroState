@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from hydrostate.data.gee.contracts import atomic_json, locked
 from hydrostate.data.gee.selection import epoch
-from hydrostate.data.gee.workflows.region import assemble_inputs
+from hydrostate.data.regional.common import assemble_inputs
 from hydrostate.inference.planning import aoi_mask, output_transform
 from hydrostate.storage.packs import file_hash
 from hydrostate.storage.scene_cache import SceneCache

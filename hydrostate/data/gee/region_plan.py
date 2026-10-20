@@ -39,7 +39,7 @@ def selected_chunks(cache, rows):
 
 def selected_export_jobs(
     cache, demands, *, max_export_bytes, max_padding_fraction=0.25, reserved_chunks=None,
-    job_transform=None,
+    job_transform=None, export_scope="selected_chunks",
 ):
     """Split sparse demand into rectangles bounded by bytes and extra pixel area.
 
@@ -52,6 +52,8 @@ def selected_export_jobs(
         raise ValueError("Invalid export byte budget")
     if not math.isfinite(max_padding_fraction) or max_padding_fraction < 0:
         raise ValueError("Invalid padding fraction")
+    if export_scope not in ("selected_chunks", "scene_region"):
+        raise ValueError("Invalid export_scope")
     h, w = input_shape(cache.grid)
     chunk, tr = cache.chunk, input_transform(cache.grid)
     reserved_chunks = reserved_chunks or {}
@@ -60,6 +62,13 @@ def selected_export_jobs(
         done = cache.done(scene)
         reserved = reserved_chunks.get(scene["asset_id"], set())
         needed = sorted(c for c in demand["chunks"] if not done[c] and c not in reserved)
+        if not needed:
+            continue
+        if export_scope == "scene_region":
+            # The catalog bounds are already in the regional projected CRS.
+            # Include selected window halos even where they cross the scene edge.
+            cells = scene_region_chunks(cache, scene) | set(needed)
+            needed = sorted(c for c in cells if not done[c] and c not in reserved)
         bands = [*BANDS[scene["key"]], "valid"]
 
         def pack(cells):
@@ -74,7 +83,7 @@ def selected_export_jobs(
                 min(chunk, h - cy * chunk) * min(chunk, w - cx * chunk) for cy, cx in cells
             )
             raw_bytes = area * len(bands) * 4
-            if area <= useful * (1 + max_padding_fraction):
+            if export_scope == "scene_region" or area <= useful * (1 + max_padding_fraction):
                 left, top = map_point(tr, x, y)
                 job = dict(
                     scene=scene,
@@ -92,6 +101,8 @@ def selected_export_jobs(
                     preprocessing="gee_sampling.prepare_v1",
                     version=2,
                 )
+                if export_scope == "scene_region":
+                    job.update(export_scope=export_scope, version=3)
                 job["id"] = fingerprint(job)[:24]
                 if job_transform is not None:
                     job = job_transform(job)
@@ -106,6 +117,24 @@ def selected_export_jobs(
             yield from pack([c for c in cells if c[axis] >= midpoint])
 
         yield from pack(needed)
+
+
+def scene_region_chunks(cache, scene):
+    """Chunk-aligned intersection of the source bounds and regional input grid.
+
+    Cache the entire requested rectangle so later dates can reuse pixels that
+    were not selected by the first date. Source masks retain the true footprint.
+    """
+    left, bottom, right, top = scene["bounds"]
+    if not np.isfinite([left, bottom, right, top]).all() or left >= right or bottom >= top:
+        raise ValueError("Invalid projected scene bounds")
+    h, w = input_shape(cache.grid)
+    tr = input_transform(cache.grid)
+    cy0 = max(0, math.floor((tr.f - top) / (10 * cache.chunk)))
+    cx0 = max(0, math.floor((left - tr.c) / (10 * cache.chunk)))
+    cy1 = min(math.ceil(h / cache.chunk), math.ceil((tr.f - bottom) / (10 * cache.chunk)))
+    cx1 = min(math.ceil(w / cache.chunk), math.ceil((right - tr.c) / (10 * cache.chunk)))
+    return {(cy, cx) for cy in range(cy0, cy1) for cx in range(cx0, cx1)}
 
 
 def export_jobs(cache, scenes, windows, *, max_export_bytes):

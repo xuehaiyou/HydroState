@@ -20,7 +20,7 @@ CRS 和 x/y 坐标转换，导出时也可以重投影。
 
 旧权重没有统一查询时间模块。每期移动过去 63 天的四个时间槽；采用原来的
 S1、S2 SR 和 Landsat L1 波段、QA 掩膜、单景选择、同轨 S1 及归一化。
-每景每窗口至少 50% 有效，至少两个有效时间槽，最近观测不超过 3 天。
+每景每窗口至少 50% 有效，至少两个有效时间槽，当前区域配置最近观测不超过 4 天。
 没有满足条件的窗口保留缺测。最初几期的上下文早于 2017 年 4 月，缺失传感器
 由有效性掩膜表示；以真实 GEE 影像查询结果确认覆盖，不以目录起止日期推定。
 
@@ -59,8 +59,11 @@ python tools/predict_region.py status --root outputs/poyang_201704_202512_pilot
 通过 SSH 单独传输，不能提交到 Git。`client_secret.json` 本身不等于已完成的
 用户授权，直接像素下载实际使用 Earth Engine 凭据。
 
-完整区域现在使用 Drive 批量导出通道；小样本继续使用像素下载。
-区域流程先通过单字节掩膜选片，再仅导出入选影像所需空间块。`selections/`
+完整区域使用 `configs/data/regional/gee_drive.json` 的原生网格 Drive 导出；
+`gee_pixels.json` 选择直接像素请求，`local.json` 选择本地 L2 文件处理。
+三者通过同一个 `--input-config` 入口选择，本地 L2 使用独立输出目录。
+区域 Drive 流程先通过单字节掩膜选片，再优先导出入选原始影像的区域覆盖范围，
+超出 Drive/scratch 容量时拆分。保留原观测身份和时间槽，不做时间合成。`selections/`
 表示选片完成，只有 `manifests/` 中的日期才表示完整输入就绪；推理读取后者。
 代码结构、配置和恢复流程见 [GEE_DOWNLOAD.md](GEE_DOWNLOAD.md)。
 使用已安装 GEE 和本项目依赖的 Python 3.12，在 IO 节点运行。先设置冻结源码目录、
@@ -72,6 +75,7 @@ export HYDROSTATE_SOURCE_HASHES=/path/to/source.sha256
 export HYDROSTATE_GEE_PYTHON=/scr/u/xiaoz/HydroState/environments/gee-download/bin/python
 nohup bash "$HYDROSTATE_CODE_ROOT/scripts/run_region_download_io.sh" \
   --root /scr/u/xiaoz/HydroState/inference/poyang_201704_202512 \
+  --input-config configs/data/regional/gee_drive.json \
   --workers 4 --min-free-gib 20 > /scr/u/xiaoz/HydroState/logs/poyang_inputs.log 2>&1 < /dev/null &
 ```
 

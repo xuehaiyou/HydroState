@@ -45,8 +45,10 @@ def select_window(plan, period, window, scenes, cache):
     latest = max((s["time"] for s in selected.values() if s), default=0)
     # Match the training requirement at day resolution (acquisitions on t are allowed).
     age = max(0, (epoch(period["time"]) - latest) / 86400) if latest else None
+    limit = cfg["latest_days"]
     accepted = (
-        len(active) >= cfg["min_active_slots"] and age is not None and age <= cfg["latest_days"]
+        len(active) >= cfg["min_active_slots"] and age is not None
+        and (limit is None or age <= limit)
     )
     return dict(
         window,
