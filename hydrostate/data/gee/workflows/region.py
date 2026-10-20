@@ -183,7 +183,7 @@ def prepare_region_drive(
     drive_token=None,
     quota_project=None,
 ):
-    """Select with byte masks, export required rectangles, then publish ready inputs."""
+    """Pipeline dates through one bounded queue and publish only complete inputs."""
     if plan['config'].get('input_profile', LEGACY_PROFILE) != LEGACY_PROFILE:
         raise ValueError('Regional Drive currently supports the legacy L1 profile only')
     from hydrostate.data.gee.backends.drive import DriveTransport
@@ -199,10 +199,13 @@ def prepare_region_drive(
     cache = OfflineSceneCache(root, plan, min_free_gib=min_free_gib)
     validate_settings(settings, cache)
     padding = settings.get("max_padding_fraction", 0.25)
+    max_pending_dates = settings.get("max_pending_dates", 4)
     LOG.info(
-        "Regional packing: max_export_gib=%.2f, max_padding_fraction=%.2f",
+        "Regional packing: max_export_gib=%.2f, max_padding_fraction=%.2f, "
+        "max_pending_dates=%d",
         settings["max_export_gib"],
         padding,
+        max_pending_dates,
     )
     transport = DriveTransport(
         ee,
@@ -223,96 +226,155 @@ def prepare_region_drive(
         atomic_json(contract_path, contract)
         state = ExportState(root / "exports.sqlite")
         try:
-            # Recover previous submissions/commits even if their date manifest exists.
-            run_jobs(transport, state, cache, [], settings)
+            for record in state.pending():
+                job = record["payload"]
+                if (job["contract"] != cache.contract or job["grid"] != cache.grid
+                        or job["chunk"] != cache.chunk):
+                    raise ValueError("Pending export has a different cache contract")
             quality = PixelQualityCache(cache, ee=ee)
             todo = windows(plan)
-            for period in periods:
-                dest = root / "manifests" / f"{period['time']}.parquet"
-                if dest.exists():
-                    if len(pd.read_parquet(dest)) != len(todo):
-                        raise ValueError("Incomplete date manifest")
-                    continue
-                first, last = slots(period["time"])[0][0], slots(period["time"])[-1][1]
-                a, b = epoch(first), epoch(last)
-                years = range(date.fromisoformat(first).year, date.fromisoformat(last).year + 1)
-                scenes = {
-                    key: sorted(
-                        [
-                            s
-                            for year in years
-                            for s in catalog(root, plan, key, year, ee)
-                            if a <= s["time"] < b
-                        ],
-                        key=lambda s: (s["time"], s["asset_id"]),
-                        reverse=True,
+            pending_dates = {}
+            (root / "reports").mkdir(exist_ok=True)
+
+            def publish_ready():
+                # Reuse each scene bitmap within this poll, but reread after commits.
+                done = {}
+                for when, entry in list(pending_dates.items()):
+                    complete = True
+                    for demand in entry["demands"]:
+                        scene = demand["scene"]
+                        if scene["asset_id"] not in done:
+                            done[scene["asset_id"]] = cache.done(scene)
+                        bitmap = done[scene["asset_id"]]
+                        if any(not bitmap[c] for c in demand["chunks"]):
+                            complete = False
+                            break
+                    if not complete:
+                        continue
+                    report = entry["report"]
+                    report["mask_verified_chunks"] = quality.verify_full(entry["demands"])
+                    dest = root / "manifests" / f"{when}.parquet"
+                    _publish_table(pd.read_parquet(entry["selection"]), dest)
+                    report.update(
+                        status="ready",
+                        transfer_wait_seconds=time.monotonic() - entry["started"],
                     )
-                    for key in BANDS
-                }
-                candidates = [s for group in scenes.values() for s in group]
-                LOG.info(
-                    "%s region preparation: %d candidate scenes, %d windows",
-                    period["time"],
-                    len(candidates),
-                    len(todo),
-                )
-                quality.refresh_full()
-                started = time.monotonic()
-                mask_requests, mask_bytes = quality.requests, quality.response_bytes
-                table = _prepare_windows(
-                    root, plan, period, scenes, quality, workers, min_free_gib, publish=False
-                )
-                demands = selected_chunks(cache, table.to_dict("records"))
-                jobs = list(
-                    selected_export_jobs(
-                        cache,
-                        demands,
+                    atomic_json(entry["report_path"], report)
+                    del pending_dates[when]
+                    LOG.info("%s inputs ready: %s", when, dest)
+
+            def jobs_by_date():
+                for period in periods:
+                    when = period["time"]
+                    dest = root / "manifests" / f"{when}.parquet"
+                    if dest.exists():
+                        if len(pd.read_parquet(dest)) != len(todo):
+                            raise ValueError("Incomplete date manifest")
+                        continue
+                    while len(pending_dates) >= max_pending_dates:
+                        # Return control to polling; None does not exhaust the source.
+                        yield None
+                    quality.refresh_full()
+                    started = time.monotonic()
+                    mask_requests, mask_bytes = quality.requests, quality.response_bytes
+                    selection = root / "selections" / f"{when}.parquet"
+                    report_path = root / "reports" / f"preparation_{when}.json"
+                    reused = selection.exists()
+                    previous = json.loads(report_path.read_text()) if report_path.exists() else {}
+                    if reused:
+                        table = pd.read_parquet(selection)
+                        if len(table) != len(todo):
+                            raise ValueError("Incomplete date selection")
+                        candidate_count = previous.get("candidate_scenes")
+                        LOG.info("%s reusing saved selection: %d windows", when, len(table))
+                    else:
+                        first, last = slots(when)[0][0], slots(when)[-1][1]
+                        a, b = epoch(first), epoch(last)
+                        years = range(
+                            date.fromisoformat(first).year, date.fromisoformat(last).year + 1
+                        )
+                        scenes = {
+                            key: sorted(
+                                [
+                                    s
+                                    for year in years
+                                    for s in catalog(root, plan, key, year, ee)
+                                    if a <= s["time"] < b
+                                ],
+                                key=lambda s: (s["time"], s["asset_id"]),
+                                reverse=True,
+                            )
+                            for key in BANDS
+                        }
+                        candidate_count = sum(len(group) for group in scenes.values())
+                        LOG.info(
+                            "%s region preparation: %d candidate scenes, %d windows; "
+                            "%d earlier dates pending",
+                            when, candidate_count, len(todo), len(pending_dates),
+                        )
+                        table = _prepare_windows(
+                            root, plan, period, scenes, quality, workers, min_free_gib,
+                            publish=False,
+                        )
+                    demands = selected_chunks(cache, table.to_dict("records"))
+                    reserved = {}
+                    for record in state.pending():
+                        job = record["payload"]
+                        reserved.setdefault(job["scene"]["asset_id"], set()).update(
+                            map(tuple, job["chunks"])
+                        )
+                    jobs = list(selected_export_jobs(
+                        cache, demands,
                         max_export_bytes=settings["max_export_gib"] * 1024**3,
                         max_padding_fraction=padding,
+                        reserved_chunks=reserved,
+                    ))
+                    report = dict(
+                        time=when, status="selected", selection_reused=reused,
+                        packing=dict(
+                            max_export_gib=settings["max_export_gib"],
+                            max_padding_fraction=padding,
+                        ),
+                        max_pending_dates=max_pending_dates,
+                        candidate_scenes=candidate_count,
+                        selected_scenes=len(demands),
+                        windows=len(table),
+                        accepted_windows=int(table["accepted"].sum()),
+                        required_chunks=sum(len(d["chunks"]) for d in demands),
+                        missing_chunks=sum(len(job["chunks"]) for job in jobs),
+                        reserved_chunks=sum(
+                            len(d["chunks"] & reserved.get(d["scene"]["asset_id"], set()))
+                            for d in demands
+                        ),
+                        new_exports=len(jobs),
+                        export_raw_bytes=sum(j["raw_bytes"] for j in jobs),
+                        mask_requests=quality.requests - mask_requests,
+                        mask_response_bytes=quality.response_bytes - mask_bytes,
+                        selection_seconds=time.monotonic() - started,
                     )
+                    atomic_json(report_path, report)
+                    LOG.info(
+                        "%s selected %d/%d windows, %d scenes; %d missing chunks, "
+                        "%d reserved chunks, %d new exports, %.2f GiB raw",
+                        when, report["accepted_windows"], len(table), len(demands),
+                        report["missing_chunks"], report["reserved_chunks"], len(jobs),
+                        report["export_raw_bytes"] / 1024**3,
+                    )
+                    pending_dates[when] = dict(
+                        demands=demands, selection=selection, report=report,
+                        report_path=report_path, started=time.monotonic(),
+                    )
+                    publish_ready()  # A date may already be fully cached.
+                    yield from jobs
+
+            # Recovery and new dates share one queue: no startup or date-level drain.
+            run_jobs(
+                transport, state, cache, jobs_by_date(), settings, on_progress=publish_ready
+            )
+            publish_ready()
+            if pending_dates:
+                raise RuntimeError(
+                    f"Exports drained but dates remain incomplete: {list(pending_dates)}"
                 )
-                report = dict(
-                    time=period["time"],
-                    status="selected",
-                    packing=dict(
-                        max_export_gib=settings["max_export_gib"], max_padding_fraction=padding
-                    ),
-                    candidate_scenes=len(candidates),
-                    selected_scenes=len(demands),
-                    windows=len(table),
-                    accepted_windows=int(table["accepted"].sum()),
-                    required_chunks=sum(len(d["chunks"]) for d in demands),
-                    missing_chunks=sum(len(job["chunks"]) for job in jobs),
-                    new_exports=len(jobs),
-                    export_raw_bytes=sum(j["raw_bytes"] for j in jobs),
-                    mask_requests=quality.requests - mask_requests,
-                    mask_response_bytes=quality.response_bytes - mask_bytes,
-                    selection_seconds=time.monotonic() - started,
-                )
-                reports = root / "reports"
-                reports.mkdir(exist_ok=True)
-                report_path = reports / f"preparation_{period['time']}.json"
-                atomic_json(report_path, report)
-                LOG.info(
-                    "%s selected %d/%d windows, %d/%d scenes; %d missing chunks, "
-                    "%d exports, %.2f GiB raw; masks=%d (%.1f MiB)",
-                    period["time"],
-                    report["accepted_windows"],
-                    len(table),
-                    len(demands),
-                    len(candidates),
-                    report["missing_chunks"],
-                    len(jobs),
-                    report["export_raw_bytes"] / 1024**3,
-                    report["mask_requests"],
-                    report["mask_response_bytes"] / 1024**2,
-                )
-                started = time.monotonic()
-                run_jobs(transport, state, cache, jobs, settings)
-                report["mask_verified_chunks"] = quality.verify_full(demands)
-                _publish_table(table, dest)
-                report.update(status="ready", download_seconds=time.monotonic() - started)
-                atomic_json(report_path, report)
-                LOG.info("%s inputs ready: %s", period["time"], dest)
         finally:
             state.close()

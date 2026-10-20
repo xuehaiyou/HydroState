@@ -37,11 +37,14 @@ def selected_chunks(cache, rows):
     return [demands[key] for key in sorted(demands)]
 
 
-def selected_export_jobs(cache, demands, *, max_export_bytes, max_padding_fraction=0.25):
+def selected_export_jobs(
+    cache, demands, *, max_export_bytes, max_padding_fraction=0.25, reserved_chunks=None
+):
     """Split sparse demand into rectangles bounded by bytes and extra pixel area.
 
     The budget and padding apply to actual pixels, including partial edge chunks.
-    Completed chunks and scenes used only by rejected windows are never demanded.
+    Completed chunks and chunks reserved by recoverable in-flight exports are
+    never demanded. This also deduplicates overlapping dates before completion.
     The low-level default preserves the previous policy; workflows pass their config.
     """
     if not math.isfinite(max_export_bytes) or max_export_bytes <= 0:
@@ -50,10 +53,12 @@ def selected_export_jobs(cache, demands, *, max_export_bytes, max_padding_fracti
         raise ValueError("Invalid padding fraction")
     h, w = input_shape(cache.grid)
     chunk, tr = cache.chunk, input_transform(cache.grid)
+    reserved_chunks = reserved_chunks or {}
     for demand in demands:
         scene = demand["scene"]
         done = cache.done(scene)
-        needed = sorted(c for c in demand["chunks"] if not done[c])
+        reserved = reserved_chunks.get(scene["asset_id"], set())
+        needed = sorted(c for c in demand["chunks"] if not done[c] and c not in reserved)
         bands = [*BANDS[scene["key"]], "valid"]
 
         def pack(cells):

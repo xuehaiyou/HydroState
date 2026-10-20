@@ -171,7 +171,28 @@ def test_zero_padding_and_legacy_config_are_valid(setup):
     settings["max_padding_fraction"] = 0
     validate_settings(settings, cache)
     del settings["max_padding_fraction"]
+    del settings["max_pending_dates"]
     validate_settings(settings, cache)
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, float("nan"), "4", True])
+def test_invalid_pending_dates_rejected(setup, value):
+    cache, _, _ = setup
+    settings = json.loads(Path("configs/data/gee_drive.json").read_text())
+    settings["max_pending_dates"] = value
+    with pytest.raises(ValueError, match="max_pending_dates"):
+        validate_settings(settings, cache)
+
+
+def test_planner_excludes_inflight_chunks(setup):
+    cache, scene, _ = setup
+    demands = [dict(scene=scene, chunks={(0, 0), (0, 1), (1, 0)})]
+    jobs = list(selected_export_jobs(
+        cache, demands, max_export_bytes=1e8,
+        reserved_chunks={scene["asset_id"]: {(0, 0), (0, 1)}},
+    ))
+    assert [c for j in jobs for c in j["chunks"]] == [[1, 0]]
+    assert not cache.done(scene).any(), "Reservation must not mark inputs as complete"
 
 
 def test_resumes_range_and_retries_truncated_range(tmp_path, monkeypatch):

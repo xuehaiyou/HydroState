@@ -236,9 +236,8 @@ def test_drive_workflow_resumes_selection_and_publishes_only_complete_inputs(set
     )
     fail = True
 
-    def run(transport, state, full, jobs, settings):
-        if not jobs:
-            return
+    def run(transport, state, full, jobs, settings, *, on_progress):
+        jobs = list(jobs)
         assert (cache.root / "selections/2025-01-21.parquet").exists()
         assert not (cache.root / "manifests/2025-01-21.parquet").exists()
         # A three-chunk L shape merges into one rectangle per scene only with 50% padding.
@@ -249,6 +248,7 @@ def test_drive_workflow_resumes_selection_and_publishes_only_complete_inputs(set
         for job in jobs:
             for cy, cx in job["chunks"]:
                 write_full(full, job["scene"], cy, cx, np.ones((480, 480), bool))
+        on_progress()
 
     monkeypatch.setattr(drive_queue, "run_jobs", run)
     with pytest.raises(OSError, match="interrupted"):
@@ -266,3 +266,129 @@ def test_drive_workflow_resumes_selection_and_publishes_only_complete_inputs(set
     assert report["packing"] == dict(max_export_gib=0.5, max_padding_fraction=0.5)
     for s in (scene, older):
         assert not cache.done(s)[1, 1]
+
+
+@pytest.mark.parametrize("recover", [False, True])
+@pytest.mark.parametrize("lookahead", [1, 2, 4])
+def test_drive_dates_fill_idle_slot_deduplicate_and_bound_lookahead(
+    setup, monkeypatch, recover, lookahead
+):
+    from hydrostate.data.gee import client
+    from hydrostate.data.gee.backends import drive
+    from hydrostate.data.gee.state import ExportState
+    from hydrostate.data.gee.workflows import drive_queue, region
+
+    cache, scene = setup
+    scenes = [dict(scene, asset_id=f"scene-{key}") for key in "abc"]
+    periods = [dict(time=when) for when in ("2025-01-21", "2025-01-29", "2025-02-06")]
+    # The second date shares the slow first scene and adds its own independent scene.
+    selected = [[scenes[0]], scenes[:2], [scenes[2]]]
+    tables = {
+        period["time"]: pd.DataFrame([dict(
+            window_id="0_0", row=0, col=0, accepted=True,
+            selections=json.dumps({str(i): s for i, s in enumerate(group)}),
+        )])
+        for period, group in zip(periods, selected, strict=True)
+    }
+    planned, submitted, cleaned, polls = [], [], [], {}
+    settings = dict(
+        max_exports=2, max_pending_dates=lookahead, download_workers=2,
+        file_dimensions=3840, max_export_gib=0.5, max_pending_gib=1,
+        drive_reserve_gib=0.5, poll_seconds=0.001,
+    )
+    monkeypatch.setattr(client, "initialize", lambda _: object())
+    monkeypatch.setattr(region, "windows", lambda _: [dict(window_id="0_0", row=0, col=0)])
+    monkeypatch.setattr(region, "catalog", lambda *a: [])
+    monkeypatch.setattr(drive_queue.time, "sleep", lambda _: None)
+    fake_pixels(monkeypatch, cache, lambda *a: pytest.fail("Saved selections need no masks"))
+
+    def prepare(root, plan, period, *args, **kwargs):
+        when = period["time"]
+        unpublished = [
+            d for d in planned if not (root / "manifests" / f"{d}.parquet").exists()
+        ]
+        assert len(unpublished) < lookahead
+        planned.append(when)
+        region._publish_table(tables[when], root / "selections" / f"{when}.parquet")
+        return tables[when]
+
+    monkeypatch.setattr(region, "_prepare_windows", prepare)
+    requests = {}
+    if recover:
+        job = next(selected_export_jobs(
+            cache, [dict(scene=scenes[0], chunks={(0, 0)})], max_export_bytes=1e8
+        ))
+        state = ExportState(cache.root / "exports.sqlite")
+        state.add(job)
+        state.update(job["id"], status="submitted", task_id="retained-task")
+        state.close()
+        requests["retained-task"] = job
+
+    def submit(job, task_id):
+        asset = job["scene"]["asset_id"]
+        assert asset not in submitted
+        if recover:
+            assert asset != "scene-a", "Existing cloud export must not be resubmitted"
+        submitted.append(asset)
+        requests[task_id] = job
+        return task_id
+
+    def status(task_id):
+        asset = requests[task_id]["scene"]["asset_id"]
+        polls[asset] = polls.get(asset, 0) + 1
+        assert polls[asset] < 20, "Scheduler stalled instead of using the idle export slot"
+        if asset == "scene-a":
+            if lookahead == 1:
+                assert planned == [periods[0]["time"]]
+                complete = polls[asset] >= 3
+            else:
+                complete = "scene-b" in cleaned and polls[asset] >= 4
+                if "scene-b" in cleaned and lookahead == 2:
+                    assert planned == [p["time"] for p in periods[:2]]
+                if "scene-c" in cleaned:
+                    assert (cache.root / "manifests/2025-02-06.parquet").exists()
+                    assert not (cache.root / "manifests/2025-01-21.parquet").exists()
+            return dict(state="COMPLETED" if complete else "RUNNING")
+        return dict(state="COMPLETED")
+
+    def ingest(full, job, paths):
+        asset = job["scene"]["asset_id"]
+        if asset == "scene-b" and lookahead > 1:
+            assert "scene-a" not in cleaned
+            assert not list((cache.root / "manifests").glob("*.parquet"))
+        for cy, cx in job["chunks"]:
+            write_full(full, job["scene"], cy, cx, np.ones((480, 480), bool))
+
+    transport = SimpleNamespace(
+        ensure_folder=lambda: None, available_bytes=lambda: 10 * 1024**3,
+        ee=SimpleNamespace(data=SimpleNamespace(
+            newTaskId=lambda: [f"task-{len(submitted)}"],
+        )),
+        submit=submit, status=status,
+        inventory=lambda jid: [dict(id=jid, size="1")],
+        fetch=lambda *a: [],
+        cleanup=lambda record: cleaned.append(record["payload"]["scene"]["asset_id"]),
+    )
+    monkeypatch.setattr(drive, "DriveTransport", lambda *a, **k: transport)
+    monkeypatch.setattr(drive_queue, "ingest_export", ingest)
+    region.prepare_region_drive(cache.root, cache.plan, periods, settings, min_free_gib=5)
+    assert sorted(submitted) == (["scene-b", "scene-c"] if recover else [
+        "scene-a", "scene-b", "scene-c"
+    ])
+    assert cleaned == {
+        1: ["scene-a", "scene-b", "scene-c"],
+        2: ["scene-b", "scene-a", "scene-c"],
+        4: ["scene-b", "scene-c", "scene-a"],
+    }[lookahead]
+    for period in periods:
+        report = json.loads((
+            cache.root / "reports" / f"preparation_{period['time']}.json"
+        ).read_text())
+        assert report["status"] == "ready"
+        assert (cache.root / "manifests" / f"{period['time']}.parquet").exists()
+    report = json.loads((cache.root / "reports/preparation_2025-01-29.json").read_text())
+    assert report["reserved_chunks"] == (1 if lookahead > 1 else 0)
+    assert report["new_exports"] == 1
+    state = ExportState(cache.root / "exports.sqlite")
+    assert not state.pending()
+    state.close()

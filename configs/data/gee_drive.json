@@ -1,5 +1,6 @@
 {
   "max_exports": 2,
+  "max_pending_dates": 4,
   "download_workers": 2,
   "file_dimensions": 3840,
   "max_export_gib": 0.5,
