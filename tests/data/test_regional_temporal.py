@@ -100,6 +100,18 @@ def test_overlap_uses_future_input_support_against_original_training_support():
     assert result["training_context_ids"] == ["2025-01-05", "2025-04-09"]
 
 
+def test_overlap_respects_centered_training_context():
+    p = plan()
+    records = [
+        dict(sample_id=day, time=day, geometry=p["geometry"], input_offsets=(-16, 16))
+        for day in ("2024-12-20", "2024-12-21", "2025-02-21", "2025-02-22")
+    ]
+    result = overlap_records(
+        p["grid"], windows(p)[0], p["periods"][0], records, input_offsets=(-16, 16),
+    )
+    assert result["training_context_ids"] == ["2024-12-21", "2025-02-21"]
+
+
 def test_template_reuses_only_contract_matched_caches(tmp_path):
     source = tmp_path / "old"
     source.mkdir()

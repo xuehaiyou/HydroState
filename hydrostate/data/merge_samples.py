@@ -19,6 +19,11 @@ from hydrostate.data.sampling_manifest import (
     sample_key,
     source_contract,
 )
+from hydrostate.data.temporal_sampling import (
+    LEGACY_SAMPLE_CONFIG,
+    sample_row_config,
+    sample_temporal_config,
+)
 from hydrostate.storage import Schema
 
 LOG = logging.getLogger(__name__)
@@ -43,6 +48,11 @@ def validate_shards(row, root, contract):
         if missing := set(COMPATIBILITY).difference(attrs):
             raise ValueError(f'{path}: missing preprocessing metadata {sorted(missing)}')
         current = {key: attrs[key] for key in COMPATIBILITY}
+        current["input_temporal_config"] = sample_temporal_config(
+            attrs.get("input_temporal_config", LEGACY_SAMPLE_CONFIG)
+        )
+        if current["input_temporal_config"] != sample_row_config(row):
+            raise ValueError(f"{path}: sample temporal metadata differs from manifest")
         if current['schema_version'] != schema.version:
             raise ValueError(f'{path}: incompatible schema version')
         if contract and current != contract:
@@ -81,11 +91,16 @@ def merge(sources, output, split_seed=42, max_dates=4, copy_zarr=False):
     constraints = SamplingConstraints()
     duplicates = 0
     source_counts = {}
+    temporal_config = None
     for source in sources:
         source = Path(source).resolve()
         table = read_manifest(source, split_seed)
         source_counts[str(source)] = len(table)
         for row in table.to_dict('records'):
+            current_temporal = sample_row_config(row)
+            if temporal_config is not None and current_temporal != temporal_config:
+                raise ValueError("Cannot merge samples with different temporal sampling contracts")
+            temporal_config = current_temporal
             key = sample_key(row)
             sid = row['sample_id']
             if sid in ids and ids[sid] != key:

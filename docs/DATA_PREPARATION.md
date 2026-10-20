@@ -95,6 +95,103 @@ shapes, observation support, provenance checks and current adapter boundaries.
 
 ## Environment and launch
 
+### New centered-eight-day library: satellites and all 16 tasks
+
+Run the complete workflow from the repository with one command:
+
+```bash
+# Offline preview; no GEE calls or dataset directories are created.
+bash scripts/run_gee_collection.sh --dry-run
+
+# Collect and validate the complete new library.
+bash scripts/run_gee_collection.sh
+```
+
+The MMEngine-style configuration is
+`configs/data/collection/centered8d_16vars.py`. Defaults are 10,000 samples,
+2019–2024, selection seed 43, and geographic split seed 42. It writes a new
+subfolder `/mnt/d/Hydrostate/samples/centered8d_16vars_v1`. To change the count,
+choose another output version at the same time:
+
+```bash
+bash scripts/run_gee_collection.sh \
+  --samples 20000 \
+  --output /mnt/d/Hydrostate/samples/centered8d_16vars_n20000_v1
+```
+
+For a background WSL run, keep the launcher log outside the new dataset folder:
+
+```bash
+mkdir -p outputs/collection
+nohup bash scripts/run_gee_collection.sh \
+  > outputs/collection/centered8d_16vars_v1.log 2>&1 < /dev/null &
+```
+
+The launcher uses `computePixels` for these small windows. It sequentially runs
+satellite/base-label collection, ecosystem label collection, acquisition-time
+LST extension, and two local validators. It never submits training jobs.
+Landsat is **LC08/LC09 C2 T1 L1 DN**, S1 is GRD VV/VH sigma-zero dB, and S2 is
+L2A SR Harmonized. These inputs match the current regional GEE L1 contract.
+Downloading L2 surface temperature for the LST label does not change Landsat
+input bands into L2 surface reflectance.
+
+The 16 tasks are the nine DW cover fractions (water/WF, trees, grass, flooded
+vegetation, crops, shrub and scrub, built, bare, snow and ice), SM, ET, LAI, GPP,
+black-sky albedo, white-sky albedo, and LST. All are attempted for every sample;
+missing observations keep false masks. The collector does **not** require all
+three sensors or all 16 valid labels in each sample.
+
+Inputs use the centered four 8-day slots, at least two distinct active slots,
+50% scene/window validity, and no extra recency gate. Input acquisition times
+and label instants/product intervals are preserved; coarse labels retain their
+native spatial support. LST retains the existing <=2 K uncertainty threshold
+and may use a paired input acquisition date.
+
+```text
+centered8d_16vars_v1/
+  collection.json                frozen complete workflow configuration
+  collection_sampling.json       frozen 4 x 8 day / >=2 slot selection policy
+  config.json                    base sampler's frozen configuration
+  sample_index.parquet            selected sample plan
+  samples.parquet                 committed input/base-label manifest
+  zarr/<sample_id>/inputs.zarr    S1, S2, Landsat, masks and real timestamps
+  zarr/<sample_id>/labels.zarr    WF, SM and ET
+  labels/ecosystem_v1/            nine cover classes + LAI/GPP/albedos/baseline LST
+  labels/lst_observation_v1/      selected LST with its actual acquisition time
+  labels/.*.work/                 resumable label download checkpoints
+  logs/                          samples/ecosystem/lst/validation logs
+  reports/                       local validation reports
+  collection_state.json          active stage and pinned completed manifest
+  _COLLECTION_SUCCESS.json       written after all stages and validators pass
+```
+
+Monitor the active stage in `collection_state.json` and read its matching log,
+for example `tail -f .../logs/samples.log`. Re-run the identical command to
+resume. The launcher verifies manifest identity and full pack sample-ID coverage,
+skips completed downloads, and repeats the local validators. By default,
+pixel-level audits inspect 64 samples; set `validation_limit = 0` in a separate
+collection config for all-sample pixel audits. The LST training-support/backward
+check remains limited to 64 samples. These are data checks, not model accuracy tests.
+Changes to frozen configuration require a new folder. Existing datasets are
+refused, and a lock prevents duplicate collection in the same output directory.
+Only the spatial candidate pool is shared; old selected scenes and old labels
+are not inherited.
+
+After collection, `HYDROSTATE_DATA_ROOT` can point
+`configs/hydrostate_ecosystem_temporal.py` at this library. Compute new
+training-only target statistics before training; do not reuse merged_v1 statistics.
+
+For direct HPC collection, use `configs/data/collection/centered8d_16vars_hpc.py`.
+It writes `/scr/u/xiaoz/HydroState/samples/centered8d_16vars_v1` and reads the
+shared candidate pool at `/scr/u/xiaoz/HydroState/candidates`. Run
+`scripts/run_gee_collection_io.sh` on `hpc2021-io1` or `hpc2021-io2`, with
+`HYDROSTATE_CODE_ROOT`, `HYDROSTATE_SOURCE_HASHES`, and `HYDROSTATE_GEE_PYTHON`
+set to the verified frozen release, its checksum list, and the existing GEE
+interpreter. The wrapper restricts the process and its children to two CPUs,
+nice 10 and one numerical-library thread. This network acquisition runs on an
+IO node, outside Slurm; retain its hostname, PID, commit, output and log in the
+submission record. Do not put it on offline compute nodes.
+
 ### Add ecosystem labels to the existing 20,000 merged_v1 samples
 
 The producer uses `computePixels` directly and never changes base samples or
@@ -247,7 +344,8 @@ Use the project's Python 3.12 environment:
 pip install -e ".[geo,gee,dev]"
 earthengine authenticate
 export GEE_PROJECT=your-registered-project
-export OUTPUT_DIR=/mnt/d/Hydrostate/samples/batch_seed43_n10000
+export OUTPUT_DIR=/mnt/d/Hydrostate/samples/centered8d_seed43_n10000
+export SAMPLING_CONFIG=configs/data/sampling/centered8d.json
 export SEED=43
 export CANDIDATE_DIR=/mnt/d/Hydrostate/candidates
 # Authorized-user OAuth JSON with Drive scope, not the Earth Engine token file.
@@ -262,19 +360,47 @@ with permission to list, download and delete this account's GEE exports. Tokens
 are never written into the run configuration. Supply START_YEAR, END_YEAR, SAMPLES,
 SEED, BATCH_SIZE, CONCURRENCY and PYTHON as environment variables if needed.
 
-Default period: 2019–2024. Each input is 120×120 at 10 m. Four 16-day slots cover
-[t−63,t] inclusive; each sensor contributes at most one scene per slot. Selection
-uses window-valid fraction (default 0.5), proximity to the slot's latest date, and
-consistent S1 relative orbit where available. At least two slots must be present;
-the latest input must be within 3 days of the target DW observation.
+Default period: 2019–2024. Each input is 120×120 at 10 m. New runs default to
+`configs/data/sampling/centered8d.json`: four half-open UTC slots
+`[t−16,t−8), [t−8,t), [t,t+8), [t+8,t+16)`, where t is the DW target UTC date.
+At least two distinct slots must contain a qualified sensor observation. Empty
+slots are allowed; two sensors in one slot still count as only one active slot.
+Each sensor contributes at most one scene per slot; all three need not be present.
+There is no additional nearest/recent-observation threshold. Selection retains
+the 50% window-valid fraction, existing QA masks, and the nearest qualified scene
+to t within each slot. S1 uses the orbit of the nearest qualified S1 scene over
+the full 32-day support, then selects only that orbit in every slot.
+Training and regional preparation share the slot/orbit selector and acceptance
+function. Centered sample selection evaluates QA on the same window-aligned 30 m
+centres as regional masks, counting uncovered area as invalid. Equal-distance
+candidates prefer the newer acquisition, then the lexicographically first asset.
+
+Each new manifest row records `temporal_sampling`, `input_temporal_config`,
+`slot_intervals`, and `observation_times_utc` (JSON fields for the latter three).
+The original `inputs.<sensor_slot>.system:time_start` retains UTC milliseconds.
+Zarr `observation_time` retains UTC epoch seconds with shape `(N,4,3)` in
+S1/S2/Landsat order. Missing sensors have zero times and false validity, rather
+than a copied observation. The encoder and time-query model read actual times,
+including observations after t; slot centres are never substituted for them.
+
+The original 20,000 samples and existing model experiments remain historical.
+To resume an old collection, explicitly use `configs/data/sampling/past16d.json`:
+four 16-day slots, at least two active slots, and a three-day recency limit.
+Changing a preset requires a new output directory. Merging rejects different
+temporal contracts, including duplicate physical windows; re-ingestion cannot
+turn historical images into centered observations. New centered inputs must be
+selected and collected again, and L2/label packs must reference the new manifest.
+This temporal change does not alter satellite products: base collection still
+uses Landsat L1; an L2 training experiment requires its same-acquisition L2 pack.
 
 ## Reuse a shared candidate pool
 
 `scripts/run_gee_sampling.sh` defaults to `/mnt/d/Hydrostate/candidates` for the
-shared pool and `/mnt/d/Hydrostate/samples/batch_seed${SEED}_n${SAMPLES}` for each sample run.
+shared pool and `/mnt/d/Hydrostate/samples/centered8d_seed${SEED}_n${SAMPLES}` for each new run.
 The defaults are 10,000 samples and selection seed 43, creating a separate dataset
 from the original seed-42 run in `/mnt/d/Hydrostate/samples`. Explicitly set
-`OUTPUT_DIR=/mnt/d/Hydrostate/samples SEED=42` to resume that original run.
+`OUTPUT_DIR=/mnt/d/Hydrostate/samples SEED=42
+SAMPLING_CONFIG=configs/data/sampling/past16d.json` to resume that original run.
 `CANDIDATE_SEED` (default 42) controls pool generation; `SEED` controls candidate
 ranking and target dates. `SPLIT_SEED` (shell default 42) independently controls
 geographic split assignment. The Python CLI defaults its split seed to `--seed`
@@ -291,7 +417,7 @@ SAMPLES=30000 SEED=42 bash scripts/run_gee_sampling.sh
 SAMPLES=50000 SEED=123 bash scripts/run_gee_sampling.sh
 ```
 
-The current producer continues at `/mnt/d/Hydrostate/samples` unchanged.
+The historical dataset remains at `/mnt/d/Hydrostate/samples` unchanged.
 `/mnt/d/Hydrostate/candidates` links to its `samples/candidates`, and
 `/mnt/d/Hydrostate/samples_10000` links to `samples`. Neither link copies or moves
 files. Do not delete the original `samples` directory: these links use its data.

@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 
 from shapely.geometry import box
 
-from hydrostate.data.regional.temporal import CENTERED, context_offsets, policy, regional_slots
+from hydrostate.data.temporal_sampling import (
+    CENTERED,
+    accept_observations,
+    context_offsets,
+    policy,
+    scene_order,
+    select_observations,
+)
 from hydrostate.inference.planning import overlap_records, window_geometry
 
 from .products import BANDS
@@ -16,18 +23,18 @@ def epoch(day):
 
 
 def select_window(plan, period, window, scenes, cache):
-    cfg, selected, orbit = plan["config"], {}, None
+    cfg = plan["config"]
     footprint = window_geometry(plan["grid"], window)
-    intervals = regional_slots(period["time"], cfg)
     target = epoch(period["time"])
     centered = policy(cfg) == CENTERED
     if centered:
         scenes = {
-            key: sorted(group, key=lambda s: (abs(s["time"] - target), -s["time"], s["asset_id"]))
+            key: sorted(group, key=lambda s: scene_order(s["time"], s["asset_id"], target))
             for key, group in scenes.items()
         }
 
     def choose(key, a, b, orbit):
+        a, b = epoch(a), epoch(b)
         for scene in scenes[key]:
             if not a <= scene["time"] < b:
                 continue
@@ -45,29 +52,17 @@ def select_window(plan, period, window, scenes, cache):
                 return dict(scene, valid_fraction=fraction)
         return None
 
-    if centered:
-        # Anchor the shared S1 orbit to the nearest qualified observation, not to
-        # the farthest future slot just because the legacy loop runs backwards.
-        anchor = choose("s1", epoch(intervals[0][0]), epoch(intervals[-1][1]), None)
-        if anchor:
-            orbit = anchor["orbit"]
-    for slot, (start, end) in reversed(list(enumerate(intervals))):
-        a, b = epoch(start), epoch(end)
-        for key in BANDS:
-            choice = choose(key, a, b, orbit)
-            selected[f"{key}_{slot}"] = choice
-            if key == "s1" and choice:
-                orbit = choice["orbit"]
+    selected = select_observations(
+        period["time"], cfg, BANDS, choose, lambda s: s.get("orbit"),
+    )
     active = {name.rsplit("_", 1)[1] for name, item in selected.items() if item}
     latest = max((s["time"] for s in selected.values() if s), default=0)
     # Match the training requirement at day resolution (acquisitions on t are allowed).
     age = (target - latest) / 86400 if latest else None
     if age is not None and not centered:
         age = max(0, age)
-    limit = cfg["latest_days"]
-    accepted = (
-        len(active) >= cfg["min_active_slots"] and age is not None
-        and (limit is None or age <= limit)
+    accepted = accept_observations(
+        {k: s["time"] for k, s in selected.items() if s}, target, cfg,
     )
     diagnostics = {}
     if centered:

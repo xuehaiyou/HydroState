@@ -1,8 +1,8 @@
 """Canonical products, QA masks and normalization shared by both transports."""
 
-from datetime import date, timedelta
-
 import numpy as np
+
+from hydrostate.data.temporal_sampling import observation_slots
 
 BANDS = {
     "s1": ["VV", "VH"],
@@ -19,11 +19,8 @@ MODALITIES = {"s1": "sentinel1", "s2": "sentinel2_l2a", "landsat": "landsat"}
 
 
 def slots(target):
-    t = date.fromisoformat(target)
-    return [
-        ((t + timedelta(days=a)).isoformat(), (t + timedelta(days=b)).isoformat())
-        for a, b in [(-63, -47), (-47, -31), (-31, -15), (-15, 1)]
-    ]
+    """Legacy API: existing callers retain their original historical support."""
+    return observation_slots(target, {})
 
 
 def prepare(ee, key, image):

@@ -6,6 +6,9 @@ export PYTHON="${PYTHON:-/home/xiaoz/miniconda3/envs/hydrostate/bin/python}"
 export SAMPLES="${SAMPLES:-10000}"
 export SEED="${SEED:-43}"
 export SPLIT_SEED="${SPLIT_SEED:-42}"
+# This script expands the historical library. Centered sampling is a new
+# independent version, not an append to these old inputs.
+export SAMPLING_CONFIG="${SAMPLING_CONFIG:-configs/data/sampling/past16d.json}"
 export OUTPUT_DIR="${OUTPUT_DIR:-/mnt/d/Hydrostate/samples/batch_seed${SEED}_n${SAMPLES}}"
 OLD_MANIFEST="${OLD_MANIFEST:-/mnt/d/Hydrostate/samples/samples.parquet}"
 MERGED_DIR="${MERGED_DIR:-/mnt/d/Hydrostate/samples/merged_v1}"

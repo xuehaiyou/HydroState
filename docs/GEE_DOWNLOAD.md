@@ -47,7 +47,7 @@ hydrostate/storage/        离线输入/有效性缓存
 显式使用旧 `--backend`、`--download-config`、`--local-config` 时继续解析原配置；
 它们不能与 `--input-config` 同时指定，以免配置被静默覆盖。
 旧模块只保留兼容导入，实际工作流已迁入 `data/regional/`。
-训练样本采集入口及旧实验配置保持原行为。
+旧实验配置保持原行为；新训练采样默认采用下文的 centered8d 规则。
 
 ## 当前 Drive 策略：原生网格、优先整景区域导出
 
@@ -83,7 +83,7 @@ hydrostate/storage/        离线输入/有效性缓存
 不是要求四个时间槽的影像都在 4 天以内。设为 JSON `null` 则关闭这一额外门槛；
 仍需影像落在原四个时间槽内、至少两个槽有效、窗口有效比例至少 50%，并保持 S1 同轨。
 `latest_age_days` 和每景真实时间继续保留，可以按观测年龄评估结果。
-当前训练样本采集的默认 3 天门槛不随区域设置改变。
+历史训练样本的 3 天门槛不随区域设置改变；新训练采样采用下文的独立 centered8d 配置。
 
 已有区域不能只编辑 JSON。停止准备进程后，通过带备份和锁的离线修订工具放宽：
 
@@ -115,8 +115,8 @@ S1 先以整个时间窗内最近的合格观测确定轨道，再在各槽选�
 
 清单保留每景真实时间，并增加距目标日的正负偏移、最近观测绝对距离、
 是否有目标日前/后观测。`latest_age_days` 在此模式下可以为负，表示最新观测位于
-目标日之后，不把未来影像误记为年龄零。训练输入重叠按新时间范围与原训练样本
-的实际过去 63 天支持区间求交。
+目标日之后，不把未来影像误记为年龄零。训练输入重叠按双方记录的时间范围求交；
+无版本字段的旧训练样本仍按 `[t-63,t+1)` 解释，新样本使用其声明的时间策略。
 
 ```bash
 python tools/predict_region.py init \
@@ -138,6 +138,14 @@ python tools/data/prepare_region_inputs.py \
 采用前后观测的效果需要匹配的新训练/微调与验证；本次不自动提交训练或预测。
 原配置与已有训练实验保留原行为。目标日期仍为原 403 期，但最后一期会读取到
 2026-01-14 之前的观测；三条获取路径均按槽边界获取跨年目录。
+
+新训练采样默认使用 `configs/data/sampling/centered8d.json`，与区域准备共用
+`hydrostate/data/temporal_sampling.py` 中的槽边界、轨道选择和样本保留判断。
+训练与区域推理均要求至少两个不同槽有合格影像，允许其他槽为空；同槽多个传感器
+仍只算一个有效槽。两者均取消最近观测门槛，记录各槽各传感器的实际 UTC 时间，
+保持 50% 有效比例。新训练选片按同一固定 30 m 网格统计，并将未覆盖部分计为无效。
+当前已启动的区域准备同样满足上述至少两槽配置。既有 20,000 个训练样本不会自动改变。
+新训练数据需另建版本，不能将旧选片清单改名为新策略。详见 `DATA_PREPARATION.md`。
 
 ## 以下为 GEE 传输细节及兼容配置
 
@@ -176,6 +184,21 @@ hydrostate/storage/quality_cache.py 离线掩膜 Zarr、已有输入复用和一
 新增产品修改共享产品定义；修改传输方式只改 backend；调度策略在 workflow 中修改。
 
 ## 样本通道
+
+新建同时包含三类卫星输入与全部 16 个任务标签的独立样本库：
+
+```bash
+bash scripts/run_gee_collection.sh --dry-run  # 仅查看配置和各阶段命令
+bash scripts/run_gee_collection.sh           # 正式采集，可用同一命令续跑
+```
+
+默认目录为 `/mnt/d/Hydrostate/samples/centered8d_16vars_v1`，配置为
+`configs/data/collection/centered8d_16vars.py`。它依次采集输入/基础标签、生态变量、
+真实观测时间 LST，再做本地校验。仍为 Landsat L1、S1 GRD、S2 L2A；
+不要求每个样本三类传感器或 16 个标签全部有效。目录、后台启动、断点及完整变量表见
+`DATA_PREPARATION.md` 的 “New centered-eight-day library” 小节。
+
+只采集卫星输入与 WF/SM/ET 基础标签时，保留原入口：
 
 ```bash
 python tools/data/prepare_gee_samples.py \
@@ -327,7 +350,8 @@ Drive 流程的整体加速倍数。新配置不会自动恢复被用户暂停�
 
 鄱阳湖三变量推理的 `configs/inference/poyang_3vars.json` 使用 `latest_days=4`：
 最近一次入选观测到目标日期最多相隔 4 天；窗口有效像元比例仍为 50%，至少两个
-时间槽有观测。样本采集的默认 3 天规则保持不变。
+时间槽有观测。这是历史区域配置；旧训练样本的 3 天规则可通过
+`configs/data/sampling/past16d.json` 复现，新训练采样使用上面的 centered8d 配置。
 
 已有区域的参数保存在 `plan.json`，修改源配置不会自动改变运行断点。需要放宽
 观测时效时，先停止该区域的准备进程，执行离线修订，再用原命令恢复下载：

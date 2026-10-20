@@ -1,0 +1,6 @@
+{
+  "temporal_sampling": "past_16d_v1",
+  "min_active_slots": 2,
+  "min_valid": 0.5,
+  "latest_days": 3
+}

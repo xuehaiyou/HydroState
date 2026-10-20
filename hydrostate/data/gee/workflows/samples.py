@@ -22,13 +22,24 @@ from pathlib import Path
 
 from hydrostate.data.gee.backends.drive import download, drive_client, list_files
 from hydrostate.data.gee.contracts import atomic_json, fingerprint
-from hydrostate.data.gee.products import BANDS, MODALITIES, collection, prepare, slots
+from hydrostate.data.gee.products import BANDS, MODALITIES, collection, prepare
 from hydrostate.data.gee.products import COLLECTIONS as COLLECTIONS
+from hydrostate.data.gee.products import slots as slots
 from hydrostate.data.sampling_manifest import (
     SamplingConstraints,
     geographic_split,
     read_manifest,
     source_contract,
+)
+from hydrostate.data.temporal_sampling import (
+    CENTERED,
+    LEGACY_SAMPLE_CONFIG,
+    accept_observations,
+    observation_slots,
+    sample_row_config,
+    sample_temporal_config,
+    scene_order,
+    select_observations,
 )
 
 LOG = logging.getLogger(__name__)
@@ -108,16 +119,30 @@ def region(ee, sample):
     return ee.Geometry.Rectangle([tr[2], tr[5] - 1200, tr[2] + 1200, tr[5]], sample["crs"], False)
 
 
-def select_scene(ee, key, sample, start, end, target, minimum, orbit=None):
+def select_scene(ee, key, sample, start, end, target, minimum, orbit=None, *, centered=False):
     c = collection(ee, key).filterBounds(region(ee, sample)).filterDate(start, end)
     if orbit is not None:
         c = c.filter(ee.Filter.eq("relativeOrbitNumber_start", orbit))
     target_ms = ee.Date(target).millis()
 
     def score(im):
-        valid = prepare(ee, key, im).mask().reduce(ee.Reducer.min()).unmask(0)
+        valid = prepare(ee, key, im).mask().reduce(ee.Reducer.min())
+        reduction_grid = dict(scale=30)
+        if centered:
+            # Same 30 m pixel centres as regional masks [1::3, 1::3].
+            # Missing scene coverage must count as invalid in the full window.
+            valid = valid.unmask(0, sameFootprint=False).gt(0)
+            tr = sample["transform"]
+            reduction_grid = dict(
+                crs=sample["crs"],
+                crsTransform=[tr[0]*3, tr[1]*3, tr[2], tr[3]*3, tr[4]*3, tr[5]],
+            )
+        else:
+            valid = valid.unmask(0)
         fraction = (
-            valid.reduceRegion(ee.Reducer.mean(), region(ee, sample), scale=30, maxPixels=20000)
+            valid.reduceRegion(
+                ee.Reducer.mean(), region(ee, sample), maxPixels=20000, **reduction_grid
+            )
             .values()
             .get(0)
         )
@@ -130,9 +155,9 @@ def select_scene(ee, key, sample, start, end, target, minimum, orbit=None):
 
     c = c.map(score).filter(ee.Filter.gte("valid_fraction", minimum)).sort("distance")
     # A FeatureCollection returns metadata only, never image pixels through getInfo.
+    candidates = c.toList(c.size()) if centered else c.limit(1).toList(1)
     result = ee.FeatureCollection(
-        c.limit(1)
-        .toList(1)
+        candidates
         .map(
             lambda im: ee.Feature(
                 None,
@@ -150,7 +175,85 @@ def select_scene(ee, key, sample, start, end, target, minimum, orbit=None):
             ).set("asset_id", ee.Image(im).get("asset_id"))
         )
     ).getInfo()["features"]
+    if centered:
+        target_seconds = datetime.fromisoformat(target).replace(tzinfo=UTC).timestamp()
+        return min(
+            (feature["properties"] for feature in result),
+            key=lambda s: scene_order(
+                s["system:time_start"] / 1000, s["asset_id"], target_seconds,
+            ),
+            default=None,
+        )
     return result[0]["properties"] if result else None
+
+
+def select_inputs(ee, args, sample, target):
+    """One qualified scene per sensor/slot, with one S1 orbit per sample."""
+    config = sample_temporal_config(vars(args))
+    centered = config["temporal_sampling"] == CENTERED
+
+    def choose(key, start, end, orbit):
+        options = dict(centered=True) if centered else {}
+        return select_scene(
+            ee, key, sample, start, end, target, args.min_valid, orbit, **options,
+        )
+
+    return select_observations(
+        target, config, BANDS, choose, lambda s: s.get("relativeOrbitNumber_start"),
+    )
+
+
+def eligible_inputs(inputs, target_ms, config):
+    config = sample_temporal_config(config)
+    return accept_observations(
+        {k: v["system:time_start"] / 1000 for k, v in inputs.items() if v},
+        target_ms / 1000, config,
+    )
+
+
+def input_time_metadata(target, inputs, config):
+    """Readable per-observation UTC times alongside the original millisecond stamps."""
+    return dict(
+        temporal_sampling=config["temporal_sampling"],
+        input_temporal_config=config,
+        slot_intervals=observation_slots(target, config),
+        observation_times_utc={
+            key: (datetime.fromtimestamp(scene["system:time_start"] / 1000, UTC)
+                  .isoformat().replace("+00:00", "Z") if scene else None)
+            for key, scene in inputs.items()
+        },
+    )
+
+
+def resolve_sampling_config(args):
+    """Apply a versioned preset before checking immutable run configuration."""
+    path = args.sampling_config
+    if path is None and args.reingest_from:
+        configs = [
+            sample_temporal_config(json.loads((source / "config.json").read_text()))
+            for source in args.reingest_from
+        ]
+        if any(c != configs[0] for c in configs):
+            raise ValueError("Cannot re-ingest mixed temporal policies into one dataset")
+        config = configs[0]
+    else:
+        path = path or (
+            Path(__file__).resolve().parents[4] / "configs/data/sampling/centered8d.json"
+        )
+        config = json.loads(path.read_text())
+        if set(config) != set(LEGACY_SAMPLE_CONFIG):
+            raise ValueError(f"Sampling config requires {sorted(LEGACY_SAMPLE_CONFIG)}")
+    for key in ("min_valid", "min_active_slots", "latest_days"):
+        if hasattr(args, key):
+            config[key] = getattr(args, key)
+    config = sample_temporal_config(config)
+    if args.reingest_from:
+        for source in args.reingest_from:
+            original = sample_temporal_config(json.loads((source / "config.json").read_text()))
+            if original != config:
+                raise ValueError("Re-ingestion cannot change observation dates; collect new inputs")
+    for key, value in config.items():
+        setattr(args, key, value)
 
 
 def screen_block(ee, kg, area):
@@ -395,28 +498,9 @@ def plan(ee, args, root):
                         atomic_json(cache_file, None)
                         continue
                     t = datetime.fromtimestamp(dw["system:time_start"] / 1000, UTC).date()
-                    inputs, orbit = {}, None
-                    for slot, (a, b) in reversed(list(enumerate(slots(str(t))))):
-                        for key in BANDS:
-                            selected = select_scene(
-                                ee,
-                                key,
-                                s,
-                                a,
-                                b,
-                                str(t),
-                                args.min_valid,
-                                orbit if key == "s1" else None,
-                            )
-                            inputs[f"{key}_{slot}"] = selected
-                            if key == "s1" and selected:
-                                orbit = selected.get("relativeOrbitNumber_start")
-                    active = {k.rsplit("_", 1)[1] for k, v in inputs.items() if v}
-                    latest = max((v["system:time_start"] for v in inputs.values() if v), default=0)
-                    if (
-                        len(active) < 2
-                        or (dw["system:time_start"] - latest) / 86400000 > args.latest_days
-                    ):
+                    inputs = select_inputs(ee, args, s, str(t))
+                    temporal_config = sample_temporal_config(vars(args))
+                    if not eligible_inputs(inputs, dw["system:time_start"], temporal_config):
                         atomic_json(cache_file, None)
                         continue
                     sm = select_scene(
@@ -451,6 +535,10 @@ def plan(ee, args, root):
                     s.update(
                         target_time=str(t), inputs=inputs, labels={"dw": dw, "sm": sm, "pml": pml}
                     )
+                    # Preserve historical sample identities when explicitly resuming
+                    # old plans. New centered samples carry their full time contract.
+                    if temporal_config != LEGACY_SAMPLE_CONFIG:
+                        s.update(input_time_metadata(str(t), inputs, temporal_config))
                     s["sample_id"] = fingerprint(s)[:24]
                     atomic_json(cache_file, s)
                     rows.append(s)
@@ -473,6 +561,7 @@ def plan(ee, args, root):
             "candidate_population": counts,
             "frequency_quotas": quota(args.samples, FREQUENCY_BINS),
             "sampling_strategy": SAMPLING_STRATEGY,
+            "input_temporal_config": sample_temporal_config(vars(args)),
         },
     )
     if len(rows) < args.samples and not args.allow_shortfall:
@@ -490,6 +579,11 @@ def plan(ee, args, root):
             inputs=json.dumps(s["inputs"]),
             labels=json.dumps(s["labels"]),
             transform=json.dumps(s["transform"]),
+            **{
+                key: json.dumps(s[key])
+                for key in ("input_temporal_config", "slot_intervals", "observation_times_utc")
+                if key in s
+            },
         )
         for s in rows
     ]
@@ -636,6 +730,7 @@ def ingest(path, sample, names, root):
     from hydrostate.storage import SampleShardWriter, Schema
 
     schema = Schema()
+    temporal_config = sample_row_config(sample)
     base = root / "zarr" / sample["sample_id"]
     inp, lab = base / "inputs.zarr", base / "labels.zarr"
     # Recover finalize() interrupted between its two atomic renames.
@@ -646,6 +741,11 @@ def ingest(path, sample, names, root):
     if all((p / "_SUCCESS.json").exists() for p in [inp, lab]):
         for p, specs in [(inp, schema.inputs), (lab, schema.targets)]:
             group = zarr.open_group(str(p), mode="r")
+            stored_config = sample_temporal_config(
+                group.attrs.get("input_temporal_config", LEGACY_SAMPLE_CONFIG)
+            )
+            if stored_config != temporal_config:
+                raise ValueError("Committed sample has a different temporal sampling contract")
             if p == lab:
                 if "et_native/0" not in group:
                     raise ValueError(
@@ -745,6 +845,7 @@ def ingest(path, sample, names, root):
             "water_encoding": "dynamic_world_label_eq_0",
             "coarse_labels": "et_native_area_mean; smap_window_mean_weak",
             "et_temporal_support": "containing_8day_mean_daily_et",
+            "input_temporal_config": temporal_config,
         },
     )
     writer.write(inputs, targets)
@@ -1047,6 +1148,10 @@ def main():
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--drive-token", help="Google authorized-user OAuth JSON with Drive scope")
     p.add_argument("--backend", choices=["pixels", "drive"], default="pixels")
+    p.add_argument(
+        "--sampling-config", type=Path,
+        help="Sampling preset; new runs default to configs/data/sampling/centered8d.json",
+    )
     p.add_argument("--plan-only", action="store_true")
     p.add_argument(
         "--reingest-from",
@@ -1075,13 +1180,23 @@ def main():
     p.add_argument("--climate-band")
     p.add_argument("--candidates-per-class", type=int, default=16)
     p.add_argument("--max-dates-per-location", type=int, default=4)
-    p.add_argument("--min-valid", type=float, default=0.5)
-    p.add_argument("--latest-days", type=int, default=3)
+    p.add_argument("--min-valid", type=float, default=argparse.SUPPRESS)
+    p.add_argument("--min-active-slots", type=int, default=argparse.SUPPRESS)
+    recency = p.add_mutually_exclusive_group()
+    recency.add_argument("--latest-days", type=int, default=argparse.SUPPRESS)
+    recency.add_argument(
+        "--no-recency-limit", dest="latest_days", action="store_const", const=None,
+        default=argparse.SUPPRESS,
+    )
     p.add_argument("--sm-days", type=int, default=3)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--concurrency", type=int, default=2)
     p.add_argument("--poll-seconds", type=int, default=30)
     args = p.parse_args()
+    try:
+        resolve_sampling_config(args)
+    except ValueError as exc:
+        p.error(str(exc))
     if args.split_seed is None:
         args.split_seed = args.seed
     args.exclude_manifest = [path.resolve() for path in args.exclude_manifest]
@@ -1101,7 +1216,7 @@ def main():
         < 1
     ):
         p.error("Invalid years/counts")
-    if not 0 < args.min_valid <= 1 or min(args.sm_days, args.latest_days) < 0:
+    if args.sm_days < 0:
         p.error("Invalid quality threshold or date tolerance")
     if (
         args.backend == "drive"
@@ -1127,6 +1242,7 @@ def main():
             if k
             not in [
                 "exclude_manifest",
+                "sampling_config",
                 "reingest_from",
                 "drive_token",
                 "plan_only",
@@ -1152,6 +1268,8 @@ def main():
             previous.setdefault("candidate_dir", str((root / "candidates").resolve()))
             previous.setdefault("split_seed", previous["seed"])
             previous.setdefault("exclude_manifest", [])
+            previous.setdefault("temporal_sampling", LEGACY_SAMPLE_CONFIG["temporal_sampling"])
+            previous.setdefault("min_active_slots", LEGACY_SAMPLE_CONFIG["min_active_slots"])
             if previous != config:
                 raise RuntimeError("Configuration changed: use a new output directory")
         atomic_json(cfg, config)

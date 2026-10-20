@@ -21,6 +21,7 @@ from hydrostate.data.gee.contracts import (
 )
 from hydrostate.data.gee.contracts import input_shape as input_shape
 from hydrostate.data.gee.contracts import input_transform as input_transform
+from hydrostate.data.temporal_sampling import context_offsets, sample_row_config
 from hydrostate.storage.packs import file_hash
 
 
@@ -129,6 +130,7 @@ def training_records(manifest, crs, geometry):
                     sample_id=row["sample_id"],
                     time=str(row["target_time"])[:10],
                     geometry=mapping(footprint),
+                    input_offsets=context_offsets(sample_row_config(row)),
                 )
             )
     return records
@@ -145,9 +147,11 @@ def overlap_records(grid, window, period, training, *, input_offsets=(-63, 1)):
             continue
         sid, day = record["sample_id"], date.fromisoformat(record["time"])
         spatial.append(sid)
-        # The referenced training samples retain their original [day-63, day+1)
-        # support. Compare full intervals when inference can also look forward.
-        if day - timedelta(days=63) < input_end and input_start < day + timedelta(days=1):
+        # Old plans have historical training context; new manifests declare theirs.
+        train_start, train_end = (
+            day + timedelta(days=d) for d in record.get("input_offsets", (-63, 1))
+        )
+        if train_start < input_end and input_start < train_end:
             context.append(sid)
         if a <= day < b:
             target.append(sid)

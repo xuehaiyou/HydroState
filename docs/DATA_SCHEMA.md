@@ -35,6 +35,16 @@ OlmoEarth preprocessing version stored in group attributes. A missing
 modality/time is zero-filled and marked false in `sensor_valid`; it must never
 be filled by duplicating another observation.
 
+New centered sample runs declare `temporal_sampling=centered_8d_v1` and store
+`input_temporal_config`, `slot_intervals`, and `observation_times_utc` as JSON
+manifest columns. The four UTC intervals are `[t−16,t−8)`, `[t−8,t)`, `[t,t+8)`,
+`[t+8,t+16)`, and at least two distinct slots require a qualified sensor.
+Other slots may be empty; no recency gate is imposed. Timestamps belong to each
+sensor observation, not to the slot centre;
+the model-facing `(N,4,3)` epoch-second array is unchanged. Zarr attributes retain
+the temporal contract. Unversioned old samples retain their historical four
+16-day slots; temporal policies cannot be mixed by the dataset merger.
+
 S2 canonical band order is:
 
 `B02,B03,B04,B08,B05,B06,B07,B8A,B11,B12,B01,B09`.
