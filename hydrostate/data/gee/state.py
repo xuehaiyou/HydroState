@@ -16,7 +16,9 @@ class ExportState:
         self.db.execute("""CREATE TABLE IF NOT EXISTS exports (
             id TEXT PRIMARY KEY, payload TEXT NOT NULL, status TEXT NOT NULL,
             task_id TEXT, files TEXT, attempts INTEGER NOT NULL DEFAULT 0,
-            updated TEXT NOT NULL, error TEXT)""")
+            updated TEXT NOT NULL, error TEXT, part_index INTEGER NOT NULL DEFAULT 0)""")
+        if "part_index" not in {r[1] for r in self.db.execute("PRAGMA table_info(exports)")}:
+            self.db.execute("ALTER TABLE exports ADD COLUMN part_index INTEGER NOT NULL DEFAULT 0")
         self.db.commit()
 
     def add(self, job):
@@ -43,7 +45,9 @@ class ExportState:
         return [self.get(row[0]) for row in ids.fetchall()]
 
     def update(self, job_id, **fields):
-        if not fields or not set(fields) <= {"status", "task_id", "files", "attempts", "error"}:
+        if not fields or not set(fields) <= {
+            "status", "task_id", "files", "attempts", "error", "part_index"
+        }:
             raise ValueError("Unsupported export state fields")
         if fields.get("status") == "cleaned" and self.get(job_id)["status"] != "committed":
             raise RuntimeError("Remote deletion requires a committed cache receipt")

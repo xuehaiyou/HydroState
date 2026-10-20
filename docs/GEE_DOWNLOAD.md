@@ -9,6 +9,7 @@
 ```text
 hydrostate/data/gee/
   products.py             产品、波段、QA、影像表达式和归一化
+  native.py               原生网格分组、原生导出表达式、HPC 重采样与 QA
   contracts.py            网格、稳定请求身份、锁与原子元数据写入
   client.py               GEE 初始化与有限重试
   catalog.py              可复用的影像元数据目录
@@ -114,6 +115,56 @@ IO 节点不经过 Slurm 排队；使用 `scripts/run_region_download_io.sh` 检
 未指定 `max_padding_fraction` 的旧配置仍按 25% 处理；
 未指定 `max_pending_dates` 时默认 4。重启时用原任务 ID 恢复在途任务，同时按新参数
 规划后续缺失块。已有缓存不需要重建，稳定的导出身份也不因配置名称改变。
+
+### 原生网格导出，HPC 完成预处理
+
+新增独立配置，不修改旧实验的默认行为：
+
+```bash
+python -u tools/data/prepare_region_inputs.py \
+  --root /path/to/existing/region \
+  --download-config configs/data/gee_drive_native.json \
+  --workers 4 --min-free-gib 20
+```
+
+`export_layout=native_v1` 将完整波段传输改为：
+
+- 从每个资产的真实元数据读取 CRS 和仿射变换，按完全相同的网格分组。
+  S2 通常为 10/20/60 m 三组；当前 Landsat L1 为 15/30 m 两组；S1 一组。
+- 光学数据及 QA 用 uint16，S1 保留 float32。GEE 只选择波段、保留每组源有效性、
+  填零和导出，不在此阶段应用云/饱和 QA，也不展开为模型的 10 m 网格。
+  每组的 source_valid 不能由值是否为零推断；组间有效性交集在 HPC 计算。
+- HPC 按目标像元中心取源像元，使用最近邻，保留当前 SCL 排除值和
+  QA_PIXEL/QA_RADSAT 规则，随后复用原有归一化与缓存写入。
+  不使用 `scale` 猜原点，也不将原始 DN 当作反射率。此配置仍属于原 L1 输入合同，
+  不会把 Landsat 偷换成 L2。
+- 原生空间请求保留一圈源像元覆盖目标边界；整数类型、波段身份、网格、完整覆盖
+  和无重叠性都通过后才允许入库。已有选片掩膜存在时，入库前逐像元核对。
+- 一个逻辑导出包含多个网格组，依次提交，每个任务 ID、当前组序号和文件清单持久化。
+  `max_exports=2` 仍限制实际在途任务为两个，不因三分辨率组增至六个。
+  收齐所有组并提交最终 Zarr 后才清理 Drive 和临时文件，中途可续传且不会重复提交。
+
+选片阶段仍保留已缓存的单字节掩膜请求，避免下载最终不会采用的多波段影像；
+本优化针对完整波段的导出量和 GEE 端网格变换，并非移除所有云端运算。
+`max_export_gib` 按各原生组原始字节总量限制，矩形额外面积在新配置中限制为 25%。
+报告同时记录逻辑导出数 `new_exports` 和实际任务数 `new_cloud_tasks`。
+未指定 `export_layout` 时仍走旧的 `aligned_float32` 路径；新队列能接收尚未结束的
+旧格式任务，再对新的缺失块使用新配置。更换配置需要退出旧进程并用新代码启动；
+对已 SIGSTOP 的旧进程发送 SIGCONT 不会加载新代码。
+
+小规模验证使用独立目录，生产缓存只读：
+
+```bash
+python tools/data/validate_native_transfer.py \
+  --source /path/to/existing/region --output /path/to/native_validation \
+  --chunks-per-sensor 2
+```
+
+比较三类传感器中同时包含有效与无效像元的空间块：原生请求 + HPC 处理、
+原 GEE 表达式直接请求、已存档缓存，要求最终掩膜和 float16 输入逐值一致。
+可加 `--drive-sensor s2` 对一个 S2 块执行实际三组 Drive 导出、恢复、下载、入库
+与清理验证。结果写入 `validation.json`；原始字节缩减和小请求耗时不代表批量
+Drive 流程的整体加速倍数。新配置不会自动恢复被用户暂停的生产下载。
 
 ## 恢复与数据安全
 

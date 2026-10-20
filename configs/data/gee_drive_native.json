@@ -1,0 +1,12 @@
+{
+  "export_layout": "native_v1",
+  "max_exports": 2,
+  "max_pending_dates": 4,
+  "download_workers": 2,
+  "file_dimensions": 3840,
+  "max_export_gib": 0.5,
+  "max_padding_fraction": 0.25,
+  "max_pending_gib": 1.0,
+  "drive_reserve_gib": 0.5,
+  "poll_seconds": 30
+}

@@ -199,6 +199,20 @@ def prepare_region_drive(
     cache = OfflineSceneCache(root, plan, min_free_gib=min_free_gib)
     validate_settings(settings, cache)
     padding = settings.get("max_padding_fraction", 0.25)
+    layout = settings.get("export_layout", "aligned_float32")
+    transform_job = None
+    if layout == "native_v1":
+        from hydrostate.data.gee.native import native_job, source_groups
+
+        metadata = {}
+
+        def transform_job(job):
+            asset = job["scene"]["asset_id"]
+            if asset not in metadata:
+                metadata[asset] = source_groups(ee, root, job["scene"])
+            return native_job(job, metadata[asset])
+
+    LOG.info("Regional export layout: %s", layout)
     max_pending_dates = settings.get("max_pending_dates", 4)
     LOG.info(
         "Regional packing: max_export_gib=%.2f, max_padding_fraction=%.2f, "
@@ -328,9 +342,11 @@ def prepare_region_drive(
                         max_export_bytes=settings["max_export_gib"] * 1024**3,
                         max_padding_fraction=padding,
                         reserved_chunks=reserved,
+                        job_transform=transform_job,
                     ))
                     report = dict(
                         time=when, status="selected", selection_reused=reused,
+                        export_layout=layout,
                         packing=dict(
                             max_export_gib=settings["max_export_gib"],
                             max_padding_fraction=padding,
@@ -347,6 +363,7 @@ def prepare_region_drive(
                             for d in demands
                         ),
                         new_exports=len(jobs),
+                        new_cloud_tasks=sum(len(j.get("parts", [j])) for j in jobs),
                         export_raw_bytes=sum(j["raw_bytes"] for j in jobs),
                         mask_requests=quality.requests - mask_requests,
                         mask_response_bytes=quality.response_bytes - mask_bytes,

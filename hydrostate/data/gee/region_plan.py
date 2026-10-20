@@ -38,7 +38,8 @@ def selected_chunks(cache, rows):
 
 
 def selected_export_jobs(
-    cache, demands, *, max_export_bytes, max_padding_fraction=0.25, reserved_chunks=None
+    cache, demands, *, max_export_bytes, max_padding_fraction=0.25, reserved_chunks=None,
+    job_transform=None,
 ):
     """Split sparse demand into rectangles bounded by bytes and extra pixel area.
 
@@ -73,7 +74,7 @@ def selected_export_jobs(
                 min(chunk, h - cy * chunk) * min(chunk, w - cx * chunk) for cy, cx in cells
             )
             raw_bytes = area * len(bands) * 4
-            if raw_bytes <= max_export_bytes and area <= useful * (1 + max_padding_fraction):
+            if area <= useful * (1 + max_padding_fraction):
                 left, top = map_point(tr, x, y)
                 job = dict(
                     scene=scene,
@@ -92,8 +93,11 @@ def selected_export_jobs(
                     version=2,
                 )
                 job["id"] = fingerprint(job)[:24]
-                yield job
-                return
+                if job_transform is not None:
+                    job = job_transform(job)
+                if job["raw_bytes"] <= max_export_bytes:
+                    yield job
+                    return
             if len(cells) == 1:
                 raise ValueError("Export byte budget is smaller than one requested chunk")
             axis = 0 if cy1 - cy0 >= cx1 - cx0 else 1

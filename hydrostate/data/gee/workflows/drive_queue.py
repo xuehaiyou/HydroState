@@ -21,7 +21,7 @@ def validate_settings(settings, cache):
         "drive_reserve_gib",
         "poll_seconds",
     }
-    optional = {"max_padding_fraction", "max_pending_dates"}
+    optional = {"max_padding_fraction", "max_pending_dates", "export_layout"}
     if not required <= set(settings) or set(settings) - required - optional:
         raise ValueError(
             f"Download config requires {sorted(required)}; optional keys: {sorted(optional)}"
@@ -48,6 +48,8 @@ def validate_settings(settings, cache):
     pending_dates = settings.get("max_pending_dates", 4)
     if isinstance(pending_dates, bool) or not isinstance(pending_dates, int) or pending_dates < 1:
         raise ValueError("max_pending_dates must be a positive integer")
+    if settings.get("export_layout", "aligned_float32") not in ("aligned_float32", "native_v1"):
+        raise ValueError("export_layout must be aligned_float32 or native_v1")
     if settings["file_dimensions"] % 256 or settings["file_dimensions"] % cache.chunk:
         raise ValueError("file_dimensions must align to both 256 and the cache chunk")
     if settings["max_pending_gib"] < settings["max_export_gib"]:
@@ -68,18 +70,38 @@ def run_jobs(transport, state, cache, jobs, settings, *, on_progress=None):
     source = iter(chain((r["payload"] for r in existing), jobs))
     end = object()
     active, seen, waiting, exhausted = {}, set(), None, False
+
+    def request(job, record):
+        return job["parts"][record["part_index"]] if "parts" in job else job
+
+    def submit(job, record):
+        part = request(job, record)
+        tid = transport.ee.data.newTaskId()[0]
+        state.update(job["id"], task_id=tid, status="submitted", attempts=record["attempts"] + 1)
+        actual = transport.submit(part, tid)
+        state.update(job["id"], task_id=actual)
+        LOG.info("Submitted export %s part=%s task=%s raw=%.1f MiB",
+                 job["id"], part["id"], actual, part["raw_bytes"] / 1024**2)
+
     while active or not exhausted or waiting is not None:
         changed = False
         # Reap and commit before occupying more Drive or scratch space.
         for jid in list(active):
             record = state.get(jid)
             job = record["payload"]
+            part = request(job, record)
+            # Native groups are sequential within each logical job: max_exports
+            # still bounds actual cloud tasks, including after a restart.
+            if record["status"] == "planned":
+                submit(job, record)
+                changed = True
+                continue
             if record["status"] == "submitted":
                 status = retry(lambda: transport.status(record["task_id"]))
                 phase = status["state"]
                 if phase in ("UNKNOWN", "UNSUBMITTED"):
-                    found = retry(lambda: transport.reconcile(jid))
-                    tid = found or transport.submit(job, record["task_id"])
+                    found = retry(lambda: transport.reconcile(part["id"]))
+                    tid = found or transport.submit(part, record["task_id"])
                     state.update(jid, task_id=tid)
                     continue
                 if phase in ("READY", "RUNNING"):
@@ -93,7 +115,7 @@ def run_jobs(transport, state, cache, jobs, settings, *, on_progress=None):
             if record["status"] == "exported":
                 started = time.monotonic()
                 try:
-                    files = transport.inventory(jid)
+                    files = transport.inventory(part["id"])
                 except IncompleteExport:
                     LOG.info("Export %s files are not fully published yet", jid)
                     continue
@@ -101,20 +123,58 @@ def run_jobs(transport, state, cache, jobs, settings, *, on_progress=None):
                     LOG.info("Export %s completed; awaiting Drive files", jid)
                     continue
                 # Once observed, a blob's identity and checksum may not change.
-                previous = {f["id"]: f for f in record["files"]}
+                native = "parts" in job
+                if native:
+                    files = [dict(f, export_id=part["id"]) for f in files]
+                earlier = [
+                    f for f in record["files"]
+                    if native and f["export_id"] != part["id"]
+                ]
+                previous = {
+                    f["id"]: f for f in record["files"]
+                    if not native or f["export_id"] == part["id"]
+                }
                 current = {f["id"]: f for f in files}
                 if any(current.get(fid) != value for fid, value in previous.items()):
                     raise RuntimeError("An export artifact changed after it was recorded")
-                state.update(jid, files=files)
-                required = sum(int(f["size"]) for f in files)
+                all_files = [*earlier, *files]
+                state.update(jid, files=all_files)
+                required = sum(int(f["size"]) for f in all_files)
                 if shutil.disk_usage(cache.root).free < cache.min_free_gib * 1024**3 + required * 2:
                     raise OSError("Insufficient scratch space for verified export ingestion")
                 LOG.info("Downloading %s: %d files, %.1f MiB", jid, len(files), required / 1024**2)
                 download_started = time.monotonic()
-                paths = transport.fetch(jid, files)
+                paths = transport.fetch(part["id"], files)
                 download_seconds = time.monotonic() - download_started
                 ingest_started = time.monotonic()
                 try:
+                    if native:
+                        from contextlib import ExitStack
+
+                        import rasterio
+
+                        from hydrostate.data.gee.native import validate_part
+
+                        with ExitStack() as stack:
+                            validate_part(part, [
+                                stack.enter_context(rasterio.open(p)) for p in paths
+                            ])
+                        if record["part_index"] + 1 < len(job["parts"]):
+                            state.update(
+                                jid, status="planned", task_id=None,
+                                part_index=record["part_index"] + 1,
+                            )
+                            LOG.info("Verified native part %s; retaining files until full commit",
+                                     part["id"])
+                            changed = True
+                            continue
+                        # Verify/recover previous local files before assembling;
+                        # their remote copies remain until the entire cache commit.
+                        paths = {
+                            p["id"]: transport.fetch(p["id"], [
+                                f for f in all_files if f["export_id"] == p["id"]
+                            ]) for p in job["parts"]
+                        }
                     ingest_export(cache, job, paths)
                 except IncompleteExport:
                     LOG.info("Export %s awaiting remaining GeoTIFF parts", jid)
@@ -179,17 +239,7 @@ def run_jobs(transport, state, cache, jobs, settings, *, on_progress=None):
                             "Drive/scratch capacity below export budget; receipts retained"
                         )
                     break
-                tid = transport.ee.data.newTaskId()[0]
-                state.update(jid, task_id=tid, status="submitted", attempts=record["attempts"] + 1)
-                actual = transport.submit(job, tid)
-                state.update(jid, task_id=actual)
-                LOG.info(
-                    "Submitted regional export %s task=%s raw=%.1f MiB chunks=%d",
-                    jid,
-                    actual,
-                    job["raw_bytes"] / 1024**2,
-                    len(job["chunks"]),
-                )
+                submit(job, record)
             active[jid] = job
             seen.add(jid)
             waiting = None

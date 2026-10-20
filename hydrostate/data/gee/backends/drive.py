@@ -202,6 +202,31 @@ class DriveTransport:
         from hydrostate.data.gee.products import scene_expression
 
         ee = self.ee
+        if job.get("layout") == "native_v1":
+            from affine import Affine
+
+            from hydrostate.data.gee.native import native_expression
+
+            tr = Affine(*job["transform"])
+            corners = [tr * p for p in [
+                (0, 0), (job["width"], 0),
+                (job["width"], job["height"]), (0, job["height"]), (0, 0)
+            ]]
+            area = ee.Geometry.Polygon([corners], job["crs"], False)
+            task = ee.batch.Export.image.toDrive(
+                image=native_expression(ee, job),
+                description=self.prefix(job["id"]),
+                folder=self.folder_name,
+                fileNamePrefix=self.prefix(job["id"]),
+                region=area, crs=job["crs"], crsTransform=job["transform"],
+                maxPixels=job["width"] * job["height"] + 1,
+                fileFormat="GeoTIFF",
+                fileDimensions=self.settings["file_dimensions"], shardSize=256,
+                skipEmptyTiles=False,
+            )
+            task._request_id = task_id
+            task.start()
+            return task.id
         left, top = job["transform"][2], job["transform"][5]
         area = ee.Geometry.Rectangle(
             [left, top - job["height"] * 10, left + job["width"] * 10, top],
@@ -259,7 +284,8 @@ class DriveTransport:
         return sorted(files, key=lambda f: f["name"])
 
     def local_path(self, job_id, remote):
-        return self.root / "staging" / "drive" / job_id / (remote["id"] + ".tif")
+        export_id = remote.get("export_id", job_id)
+        return self.root / "staging" / "drive" / export_id / (remote["id"] + ".tif")
 
     def fetch(self, job_id, files):
         from concurrent.futures import ThreadPoolExecutor
@@ -280,8 +306,12 @@ class DriveTransport:
 
         if receipt["status"] != "committed":
             raise RuntimeError("Refusing to delete exports before cache commit")
-        prefix = self.prefix(receipt["id"])
+        allowed = {receipt["id"], *(p["id"] for p in receipt["payload"].get("parts", []))}
         for remote in receipt["files"]:
+            export_id = remote.get("export_id", receipt["id"])
+            if export_id not in allowed:
+                raise RuntimeError("Refusing deletion outside recorded native export parts")
+            prefix = self.prefix(export_id)
             try:
                 actual = (
                     self.service.files()
@@ -307,6 +337,10 @@ class DriveTransport:
 
 def ingest_export(cache, job, paths):
     """Validate the entire export coverage before committing any new scene chunks."""
+    if job.get("layout") == "native_v1":
+        from hydrostate.data.gee.native import ingest_native
+
+        return ingest_native(cache, job, paths)
     from contextlib import ExitStack
 
     import numpy as np
