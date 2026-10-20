@@ -108,12 +108,13 @@ def native_expression(ee, part):
 
 
 def validate_part(part, rasters):
-    """Reject missing, overlapping, shifted, mistyped or misidentified TIFF parts."""
+    """Require exact interior coverage, allowing GEE's one-pixel outer rounding."""
     import rasterio
 
     from hydrostate.data.gee.backends.drive import IncompleteExport
 
     areas = []
+    covered_area = 0
     expected = Affine(*part["transform"])
     for src in rasters:
         if src.crs != rasterio.crs.CRS.from_string(part["crs"]):
@@ -130,13 +131,20 @@ def validate_part(part, rasters):
         if max(abs(relative.c - col), abs(relative.f - row)) > 1e-5:
             raise ValueError("Native export origin is not aligned")
         box = (col, row, col + src.width, row + src.height)
-        if min(col, row) < 0 or box[2] > part["width"] or box[3] > part["height"]:
+        # GEE region reprojection can round an outer edge outward by one cell.
+        # Keep the requested grid fixed; NativeReader uses these integer offsets
+        # and reads only requested sample centres, never the extra border.
+        if min(col, row) < -1 or box[2] > part["width"] + 1 or box[3] > part["height"] + 1:
             raise ValueError("Native export exceeds requested extent")
         if any(min(box[2], c) > max(col, a) and min(box[3], d) > max(row, b)
                for a, b, c, d in areas):
             raise ValueError("Overlapping/duplicate native export parts")
         areas.append(box)
-    if sum(src.width * src.height for src in rasters) != part["width"] * part["height"]:
+        covered_area += (
+            max(0, min(box[2], part["width"]) - max(col, 0))
+            * max(0, min(box[3], part["height"]) - max(row, 0))
+        )
+    if covered_area != part["width"] * part["height"]:
         raise IncompleteExport("Missing native export parts")
 
 

@@ -54,16 +54,26 @@ def native_setup(tmp_path):
     return make
 
 
-def write_parts(root, job, *, split=False, invalid=False):
+def write_parts(root, job, *, split=False, invalid=False, border=(0, 0, 0, 0),
+                coordinates=False):
     paths = {}
+    left, top, right, bottom = border
     for part in job["parts"]:
         paths[part["id"]] = []
-        cuts = [0, part["width"]//2, part["width"]] if split else [0, part["width"]]
+        cuts = [-left, part["width"] + right]
+        if split:
+            cuts.insert(1, part["width"] // 2)
         for start, end in zip(cuts, cuts[1:]):
             path = root / f"{part['id']}_{start}.tif"
-            values = np.full((len(part["bands"]), part["height"], end-start),
+            height = part["height"] + top + bottom
+            values = np.full((len(part["bands"]), height, end-start),
                              100, part["dtype"])
             for i, name in enumerate(part["bands"]):
+                if coordinates and name in BANDS[job["scene"]["key"]]:
+                    yy, xx = np.indices((height, end-start))
+                    yy, xx = yy-top, xx+start
+                    inside = (yy >= 0) & (yy < part["height"]) & (xx >= 0) & (xx < part["width"])
+                    values[i] = np.where(inside, 1000 + yy * 100 + xx, 65000)
                 if name == "source_valid":
                     values[i] = 1
                 elif name == "SCL":
@@ -75,14 +85,46 @@ def write_parts(root, job, *, split=False, invalid=False):
                     if invalid:
                         values[i, :, :max(1, (end-start)//2)] = 8
             with rasterio.open(
-                path, "w", driver="GTiff", width=end-start, height=part["height"],
+                path, "w", driver="GTiff", width=end-start, height=height,
                 count=len(part["bands"]), dtype=part["dtype"], crs=part["crs"],
-                transform=Affine(*part["transform"]) * Affine.translation(start, 0),
+                transform=Affine(*part["transform"]) * Affine.translation(start, -top),
             ) as dst:
                 dst.write(values)
                 dst.descriptions = tuple(part["bands"])
             paths[part["id"]].append(path)
     return paths
+
+
+@pytest.mark.parametrize("key", ["s1", "s2", "landsat"])
+@pytest.mark.parametrize("border", [(0, 1, 0, 0), (1, 1, 1, 1)])
+def test_native_rounded_border_preserves_exact_pixel_values(native_setup, key, border):
+    cache, scene, job = native_setup(key)
+    paths = write_parts(cache.root, job, split=True, coordinates=True)
+    with NativeReader(job, paths) as reader:
+        expected, mask = reader.read(job["transform"], 120, 120)
+    paths = write_parts(cache.root, job, split=True, coordinates=True, border=border)
+    with NativeReader(job, paths) as reader:
+        actual, valid = reader.read(job["transform"], 120, 120)
+    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_array_equal(valid, mask)
+    ingest_export(cache, job, paths)
+    assert cache.done(scene).all()
+
+
+@pytest.mark.parametrize("problem", ["large_border", "missing", "overlap"])
+def test_border_tolerance_cannot_hide_bad_parts(native_setup, problem):
+    cache, scene, job = native_setup("s1")
+    paths = write_parts(
+        cache.root, job, split=True, border=(0, 2 if problem == "large_border" else 1, 0, 0),
+    )
+    files = paths[job["parts"][0]["id"]]
+    if problem == "missing":
+        files.pop()
+    elif problem == "overlap":
+        files.append(files[0])
+    with pytest.raises((ValueError, IncompleteExport)):
+        ingest_export(cache, job, paths)
+    assert not cache.done(scene).any()
 
 
 @pytest.mark.parametrize("key,parts", [("s1", 1), ("s2", 3), ("landsat", 2)])
