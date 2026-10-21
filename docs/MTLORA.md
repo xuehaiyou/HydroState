@@ -42,7 +42,7 @@ cross-task interaction gate, or intermediate auxiliary prediction loss.
 | Update scale | 1.0 (direct multiplier, not implicitly divided by rank) |
 | Original attention and MLP linear weights/biases | Frozen |
 | LayerNorm affine parameters | Trainable |
-| Input patch embeddings | Trainable |
+| S1/S2/Landsat input patch embeddings | Trainable; unused modalities stay frozen |
 | Position/time encodings and RoPE frequencies | Frozen |
 | Unused pretraining projector | Frozen |
 | Query, fusion, decoder, output heads, loss weighting | Trainable |

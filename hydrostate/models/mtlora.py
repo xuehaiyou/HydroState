@@ -18,6 +18,7 @@ from hydrostate.tasks import resolve_tasks, task_config
 
 from .multilevel_encoder import multilevel_features
 from .multilevel_temporal_model import MultiLevelTemporalOlmoEarthEncoder
+from .olmoearth_encoder import MODALITIES
 from .shared_private_lora import LowRankUpdate
 from .temporal_model import TemporalHydroStateModel
 from .water_soil_coupling import WaterSoilCoupling
@@ -102,7 +103,10 @@ class MTLoRAOlmoEarthEncoder(MultiLevelTemporalOlmoEarthEncoder):
         core = self.backbone.model
         core.requires_grad_(False)
         if train_patch_embedding:
-            core.patch_embeddings.requires_grad_(True)
+            # The pretrained encoder also contains embeddings for modalities
+            # this retrieval pipeline never supplies. Keep those frozen.
+            for name in MODALITIES:
+                core.patch_embeddings.per_modality_embeddings[name].requires_grad_(True)
         if train_layer_norm:
             for module in core.modules():
                 if isinstance(module, nn.LayerNorm):
