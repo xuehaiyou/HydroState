@@ -109,6 +109,25 @@ Controls are available through:
 Alternatively override individual values using `--cfg-options`, for example
 `model.encoder.shared_rank=16 model.encoder.private_rank=4`.
 
+### HPC resources and data readiness
+
+`scripts/slurm/38_train_mtlora.sh mtlora` and the same script with `lora`
+select the private-branch model and shared TA-LoRA control, respectively.
+Both request one L40S GPU and six CPU cores, use four loader workers, and
+limit numerical-library threads to one. This respects the SPG-5 guidance of
+at most six CPU cores per GPU. Existing jobs are not reconfigured.
+
+Use a committed, immutable Git release and set the required source checksum,
+data, statistics, and separate work-directory environment variables shown in
+the script. Create log directories before submission and pass explicit Slurm
+output/error paths. Generate temporal training statistics in a CPU preparation
+job first; GPU jobs may depend on its successful completion with `afterok`.
+Do not submit against a collection that is still downloading: require
+`_COLLECTION_SUCCESS.json`, validate the samples/packs, and verify the training
+data contract before submission. The launcher repeats completion and manifest
+hash checks on the allocated node. It does not wait for data or automatically
+submit jobs when a collection finishes.
+
 ## Verification
 
 `tests/test_mtlora.py` uses a real small OlmoEarth encoder and tests a single
