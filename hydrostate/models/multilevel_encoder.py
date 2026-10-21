@@ -32,7 +32,7 @@ def pool_modalities(tokens, masks):
 
 
 def multilevel_features(core, sample, patch_size, out_indices, input_res=10,
-                        retain_tokens=False):
+                        retain_tokens=False, branch_tasks=None):
     """Return normalized BCHW features, ordered shallow to deep.
 
     Always retain a key-validity mask, also in eval, so padded observations
@@ -65,20 +65,30 @@ def multilevel_features(core, sample, patch_size, out_indices, input_res=10,
         tokens, attention_mask = core.add_register_tokens_and_masks(tokens, attention_mask)
         if positions is not None:
             positions = core.add_register_positions(positions)
-    features = []
+    features = [] if branch_tasks is None else {task: [] for task in branch_tasks}
     for index, block in enumerate(core.blocks):
-        tokens = block(
+        result = block(
             x=tokens, cu_seqlens=None, max_seqlen=None,
             attn_mask=attention_mask, rope_positions=positions,
         )
+        if branch_tasks is not None and index in out_indices:
+            tokens, *branches = result
+            if len(branches) != len(branch_tasks):
+                raise ValueError("Stage outputs disagree with configured tasks")
+        else:
+            tokens = result
         if index not in out_indices:
             continue
-        spatial = core.pop_register_tokens(tokens)[0] if core.has_register_tokens else tokens
-        restored, _ = core.add_removed_tokens(core.norm(spatial), indices, valid)
-        modality_tokens = core.split_and_expand_per_modality(restored, shapes)
-        features.append((modality_tokens, masks) if retain_tokens else
-                        pool_modalities(modality_tokens, masks).to(tokens.dtype))
-    return tuple(features)
+        selected = [(None, tokens)] if branch_tasks is None else zip(branch_tasks, branches)
+        for task, value in selected:
+            spatial = core.pop_register_tokens(value)[0] if core.has_register_tokens else value
+            restored, _ = core.add_removed_tokens(core.norm(spatial), indices, valid)
+            modality_tokens = core.split_and_expand_per_modality(restored, shapes)
+            feature = ((modality_tokens, masks) if retain_tokens else
+                       pool_modalities(modality_tokens, masks).to(tokens.dtype))
+            (features if task is None else features[task]).append(feature)
+    return (tuple(features) if branch_tasks is None else
+            {task: tuple(values) for task, values in features.items()})
 
 
 @MODELS.register_module()

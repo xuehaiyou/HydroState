@@ -12,6 +12,7 @@ from .multilevel_temporal_model import (
     MultiLevelTemporalOlmoEarthEncoder,
 )
 from .olmoearth_encoder import OlmoEarthEncoder
+from .mtlora import MTLoRAFusionDecoder, MTLoRAHydroStateModel, MTLoRAOlmoEarthEncoder
 from .query_time import TargetTimeQuery
 from .shared_private_encoder import SharedPrivateOlmoEarthEncoder
 from .shared_private_model import SharedPrivateHydroStateModel
@@ -29,6 +30,9 @@ __all__ = [
     "MultiLevelTemporalHydroStateModel",
     "MultiLevelTemporalOlmoEarthEncoder",
     "OlmoEarthEncoder",
+    "MTLoRAFusionDecoder",
+    "MTLoRAHydroStateModel",
+    "MTLoRAOlmoEarthEncoder",
     "RegressionHead",
     "SharedUNetDecoder",
     "SharedPrivateHydroStateModel",

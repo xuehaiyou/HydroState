@@ -73,11 +73,16 @@ class TemporalOlmoEarthEncoder(OlmoEarthEncoder):
             mask = mask.masked_fill(~pixels.permute(0, 2, 3, 1)[..., None], MaskValue.MISSING.value)
             sample = sample._replace(**{modality + "_mask": mask})
 
-        core = self.backbone.model
-        levels = multilevel_features(
-            core, sample, self.patch_size, out_indices, retain_tokens=True)
-        return tuple(self._restore_observations(tokens, masks, present, gather, inputs, device)
-                     for tokens, masks in levels)
+        levels = self._extract_levels(sample, out_indices)
+        def restore(values):
+            return tuple(self._restore_observations(tokens, masks, present, gather, inputs, device)
+                         for tokens, masks in values)
+        return ({task: restore(values) for task, values in levels.items()}
+                if isinstance(levels, dict) else restore(levels))
+
+    def _extract_levels(self, sample, out_indices):
+        return multilevel_features(self.backbone.model, sample, self.patch_size,
+                                   out_indices, retain_tokens=True)
 
     @staticmethod
     def _restore_observations(tokens, masks, present, gather, inputs, device):
