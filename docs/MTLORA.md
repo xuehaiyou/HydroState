@@ -128,6 +128,26 @@ data contract before submission. The launcher repeats completion and manifest
 hash checks on the allocated node. It does not wait for data or automatically
 submit jobs when a collection finishes.
 
+For an explicitly authorized deferred submission, run
+`tools/watch_mtlora_collection.py <run-root>/submission.json` from the frozen
+release under `nohup` on the login host. The record supplies `code_root`,
+`data_root`, `environment`, and an initially empty `jobs` mapping. It polls every
+five minutes without reserving GPUs. `scripts/slurm/39_prepare_mtlora.sh` checks
+the complete 20,000-sample collection and label packs, creates training-only
+moments, checks both model contracts, and reads representative train/validation/
+test samples. Only successful preparation permits the two GPU submissions.
+The watcher respects GPU submission quotas and records every submission intent
+before calling Slurm. Ambiguous submissions or failed preparation stop it for
+inspection instead of blindly retrying. Check its PID, heartbeat, receipt and
+log after a host restart; this `nohup` process is not a system-managed service.
+
+The new collection uses `centered_8d_v1`: four half-open windows relative to the
+target date, `[-16,-8), [-8,0), [0,8), [8,16)` days. Each modality contributes
+at most one qualified scene per slot; at least two slots must be active. Both
+models consume actual observation timestamps and missing-data masks, rather
+than hard-coding an 8- or 16-day spacing. Historical four-slot data are not
+automatically reinterpreted as this new 32-day context.
+
 ## Verification
 
 `tests/test_mtlora.py` uses a real small OlmoEarth encoder and tests a single
