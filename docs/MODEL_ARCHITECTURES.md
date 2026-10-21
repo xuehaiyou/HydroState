@@ -4,6 +4,9 @@
 `configs/hydrostate_shared_private.py` 选择，注册类为 `SharedPrivateHydroStateModel`。
 它冻结 OlmoEarth 基础权重，支持分阶段训练与新增变量适配；下文旧配置保持原行为。
 
+规划中的[小型 CNN 独立专家权重空间实验](CNN_EXPERT_WEIGHT_SPACE_EXPERIMENT_PLAN.md)
+比较仅 OlmoEarth 与多 FM 来源的 CNN 初始化；该方案尚未实现，不属于下列可运行架构。
+
 默认模型仍为 `HydroStateModel`。`StagedHydroStateModel` 实现三阶段任务分支、
 交互前辅助头和一次同步门控交互。两者使用同一个 OlmoEarth 编码器、数据合同、
 30 m 输出、产品/站点监督支持、训练集标准化统计和最终 NLL；评估和预测 API 相同。
