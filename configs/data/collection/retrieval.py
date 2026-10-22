@@ -16,7 +16,8 @@ climate_asset = "users/xiaozhen6666666/cloud/Beck_KG_V1_present_0p0083"
 max_dates_per_location = 4
 min_date_gap_days = 40
 split_margin_m = 35000
-concurrency = 2
+# Bounded in-flight samples; IO launcher still uses only two CPU cores.
+concurrency = 4
 min_active_slots = 2
 min_input_fraction = 0.5
 water_confidence = 0.35

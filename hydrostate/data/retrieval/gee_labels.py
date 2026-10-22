@@ -1,10 +1,13 @@
 """Fetch product labels and explicit support quality, separately from imagery."""
 
 from hydrostate.data.gee.backends.pixels import compute_pixels
+from hydrostate.data.gee.contracts import fingerprint
 from hydrostate.data.gee.products import collection
 
+from .catalog import cached_json
 from .composites import QUALITY, cover_composite
 from .contract import COVER, INPUT_SIZE
+from .labels import sm_support_eligible
 
 
 def pixels(ee, image, names, sample):
@@ -37,9 +40,9 @@ def cover_quality(ee, cover, geometry):
     return {key: (result.get(key) or 0) / total if total else 0 for key in ("known", "water_ice")}
 
 
-def smap_label(ee, sample, cover, start, end):
-    point = ee.Geometry.Point([sample["lon"], sample["lat"]])
-    images = collection(ee, "sm").filterDate(start, end).filterBounds(point)
+def smap_label(ee, sample, cover, start, end, config, cache):
+    # SMAP images cover the global publication grid; window metadata is shared.
+    images = collection(ee, "sm").filterDate(start, end)
 
     def prepare(image):
         value = image.select("soil_moisture_am")
@@ -48,10 +51,20 @@ def smap_label(ee, sample, cover, start, end):
 
     # Use the actual GEE publication grid (v005 is geographic), not the fine
     # tile grid or an assumed original EASE-Grid projection.
-    if images.size().getInfo() == 0:
+    def metadata():
+        size = images.size().getInfo()
+        return dict(
+            size=size,
+            projection=(
+                images.first().select("soil_moisture_am").projection().getInfo() if size else None
+            ),
+        )
+
+    meta = cached_json(cache / "smap_metadata" / f"{fingerprint([start, end])}.json", metadata)
+    if meta["size"] == 0:
         return {"valid_days": 0}
-    projection = images.first().select("soil_moisture_am").projection()
-    grid = projection.getInfo()
+    grid = meta["projection"]
+    projection = ee.Projection(grid["crs"], grid["transform"])
     import math
 
     from affine import Affine
@@ -76,9 +89,13 @@ def smap_label(ee, sample, cover, start, end):
             {"date": image.date().format("YYYY-MM-dd"), "asset_id": image.get("asset_id")}
         )
 
-    observed = ee.FeatureCollection(images.toList(images.size()).map(observation)).getInfo()[
-        "features"
-    ]
+    cell_key = fingerprint([grid, col, row])
+    observed = cached_json(
+        cache / "smap_observations" / f"{fingerprint([cell_key, start, end])}.json",
+        lambda: ee.FeatureCollection(images.toList(meta["size"]).map(observation)).getInfo()[
+            "features"
+        ],
+    )
     from collections import defaultdict
 
     daily = defaultdict(list)
@@ -94,18 +111,34 @@ def smap_label(ee, sample, cover, start, end):
     if not daily:
         return result
     result["value"] = sum(sum(v) / len(v) for v in daily.values()) / len(daily)
-    result["grid"] = cover_quality(ee, cover, cell)
+    result["support"] = dict(grid=grid, cell=[col, row], footprint="33km_diameter_disk_approx")
+    # Hash the complete cover expression: scene IDs, interval, thresholds and
+    # projection must all match before neighbouring tiles reuse a quality check.
+    quality_key = fingerprint([cell_key, cover.serialize()])
     # Explicit approximate footprint: quality screening, NOT a claim of exact
     # SMAP antenna response or scale-matched tile supervision.
-    result["footprint"] = cover_quality(ee, cover, centre.buffer(16500))
-    result["support"] = dict(grid=grid, cell=[col, row], footprint="33km_diameter_disk_approx")
+    for name, geometry in (("grid", cell), ("footprint", centre.buffer(16500))):
+        result[name] = cached_json(
+            cache / "smap_quality" / f"{quality_key}_{name}.json",
+            lambda: cover_quality(ee, cover, geometry),
+        )
+        if not sm_support_eligible(
+            result[name], config["min_known_fraction"], config["max_water_ice_fraction"]
+        ):
+            result["skipped"] = f"{name}_quality"
+            return result
     # Conservative terrain proxy for local representativeness; configurable
     # weighting is stored separately from the binary supervision mask.
     elevation = ee.ImageCollection("COPERNICUS/DEM/GLO30_2024_1").select("DEM").mosaic()
-    terrain = (
-        elevation.reduceRegion(ee.Reducer.stdDev(), cell, scale=90, maxPixels=100000, tileScale=4)
-        .getInfo()
-        .get("DEM")
+    terrain = cached_json(
+        cache / "smap_terrain" / f"{cell_key}.json",
+        lambda: (
+            elevation.reduceRegion(
+                ee.Reducer.stdDev(), cell, scale=90, maxPixels=100000, tileScale=4
+            )
+            .getInfo()
+            .get("DEM")
+        ),
     )
     result["terrain_std_m"] = terrain
     result["representativeness"] = 1.0 if terrain is None else 1 / (1 + (terrain / 100.0) ** 2)
@@ -130,7 +163,7 @@ def fetch_cover(ee, sample, config, dw_ids):
     return cover, {name: raw[name] for name in raw.dtype.names}
 
 
-def fetch_products(ee, sample, cover, pml_scene):
+def fetch_products(ee, sample, cover, pml_scene, config, cache, *, sm_enabled):
     start, end = sample["target_time"], sample["target_end"]
     pml = None
     if pml_scene:
@@ -140,6 +173,13 @@ def fetch_products(ee, sample, cover, pml_scene):
         expression = ee.Image.cat([masked, masked.mask().gt(0).rename(names[2:])]).unmask(0, False)
         array = pixels(ee, expression, names, sample)
         pml = {name: array[name] for name in names}
-        pml["projection"] = image.select("ET").projection().getInfo()
-    sm = smap_label(ee, sample, cover, start, end)
+        pml["projection"] = cached_json(
+            cache / "pml_projection" / f"{fingerprint(pml_scene['asset_id'])}.json",
+            lambda: image.select("ET").projection().getInfo(),
+        )
+    sm = (
+        smap_label(ee, sample, cover, start, end, config, cache)
+        if sm_enabled
+        else dict(valid_days=0, skipped="tile_land_fraction")
+    )
     return pml, sm

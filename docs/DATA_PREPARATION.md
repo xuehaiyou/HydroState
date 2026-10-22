@@ -18,7 +18,7 @@ bash scripts/run_gee_sampling.sh
 
 统一参数文件为 `configs/data/collection/retrieval.py`。
 `--dry-run` 只解析参数和生产代码哈希，不创建输出目录或连接 GEE。
-可用 `--samples`、`--output`、`--candidate-dir`、`--project` 覆盖参数；
+可用 `--samples`、`--output`、`--candidate-dir`、`--project`、`--concurrency` 覆盖参数；
 `COLLECTION_CONFIG` 可指定另一份完整的当前配置，不接受旧 `_base_` 采样配置。
 已开始采样的目录绑定配置和代码，参数改变后使用新目录。
 
@@ -26,6 +26,18 @@ HPC 在联网 IO 节点执行 `scripts/run_gee_collection_io.sh`。
 该脚本额外要求 `HYDROSTATE_CODE_ROOT`、`HYDROSTATE_SOURCE_HASHES`，并使用上述
 Python、样本目录和候选目录；校验冻结代码后调用同一个 `run_gee_sampling.sh`。
 不能将 WSL 的 `/mnt/d` 默认路径用于 HPC。
+
+默认同时采集 4 个样本；IO 启动器仍限制为 2 CPU、单线程数学库，不使用 GPU。
+每个传感器的五个时槽合成一次像素请求（最多 3 次输入请求/样本），
+保留逐景 QA、逐日去重均值和各槽有效观测次数、时间统计。
+工作线程完成即补位；在途样本也预留频率配额、位置日期及邻近图块约束，
+样本不合格时释放预留，网络失败仍报错并保留断点。
+
+SM 监督先用原有规则检查图块陆地比例，不合格时仅跳过 SMAP 请求；
+合格图块依次检查 SMAP 网格及近似 33 km 支持范围，任一失败便跳过后续检查。
+产品元数据、同格同周期 SM 观测和地形统计使用带锁缓存；覆盖质量缓存还绑定完整
+GEE 覆盖表达式（来源影像、日期、阈值和投影），不会仅凭空间邻近复用。
+所有覆盖和 ET 标签的计算规则保持一致。
 
 ## 2. 审计与训练统计
 

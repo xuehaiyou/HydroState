@@ -33,13 +33,21 @@ def cover_targets(raw, threshold=0.95):
     return targets
 
 
+def sm_support_eligible(values, threshold=0.95, water_ice_limit=0.05):
+    known = values.get("known", 0)
+    contamination = values.get("water_ice", 1) + (1 - known)
+    return known > threshold and contamination < water_ice_limit
+
+
+def sm_tile_eligible(targets, config):
+    tile_land = float((targets["land"] * targets["cover_known"]).mean())
+    return tile_land > config["min_tile_land_fraction"]
+
+
 def sm_eligible(quality, threshold=0.95, water_ice_limit=0.05):
     """Both 9 km grid and approximate wider footprint must pass independently."""
     for support in ("grid", "footprint"):
-        values = quality.get(support, {})
-        known = values.get("known", 0)
-        contamination = values.get("water_ice", 1) + (1 - known)
-        if known <= threshold or contamination >= water_ice_limit:
+        if not sm_support_eligible(quality.get(support, {}), threshold, water_ice_limit):
             return False
     return quality.get("valid_days", 0) > 0 and np.isfinite(quality.get("value", np.nan))
 
@@ -59,9 +67,8 @@ def build_targets(sample, cover, pml, sm, config):
     targets.update(cover_targets(cover, config["min_known_fraction"]))
     land_known = targets["land_valid"].astype(bool)
     targets["soil_moisture_domain_valid"] = land_known.astype(np.uint8)
-    tile_land = float((targets["land"] * targets["cover_known"]).mean())
     eligible = sm_eligible(sm, config["min_known_fraction"], config["max_water_ice_fraction"])
-    eligible &= tile_land > config["min_tile_land_fraction"]
+    eligible &= sm_tile_eligible(targets, config)
     targets["soil_moisture_valid"][:] = eligible
     targets["soil_moisture"][:] = sm.get("value", 0) if eligible else 0
     # Heterogeneous cover/terrain downweights only SM, never the whole tile.

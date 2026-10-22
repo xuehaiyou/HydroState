@@ -24,8 +24,9 @@ from .catalog import candidate_blocks, catalog, pml_calendar
 from .composites import QUALITY, normalize, sensor_composite
 from .contract import PROFILE, VERSION, RetrievalSchema, intervals, product_end
 from .gee_labels import fetch_cover, fetch_products
-from .labels import build_targets, cover_targets
+from .labels import build_targets, cover_targets, sm_tile_eligible
 from .sampling import SamplingLedger, location_key, quotas
+from .scheduling import completed_samples
 from .validation import validate_arrays
 
 LOG = logging.getLogger(__name__)
@@ -53,8 +54,10 @@ def input_arrays(ee, sample, cache, norm, config):
         min(orbit_counts, key=lambda key: (-orbit_counts[key], str(key))) if orbit_counts else None
     )
     scenes = {}
-    for slot, (start, end) in enumerate(slots):
-        for modality, sensor in enumerate(BANDS):
+    for modality, sensor in enumerate(BANDS):
+        chunks, packed_names, present = [], [], []
+        names = [*BANDS[sensor], *QUALITY]
+        for slot, (start, end) in enumerate(slots):
             selected = [
                 s
                 for s in catalogs[sensor]
@@ -68,17 +71,26 @@ def input_arrays(ee, sample, cache, norm, config):
             scenes[f"{sensor}_{slot}"] = ids
             if not ids:
                 continue
-            names = [*BANDS[sensor], *QUALITY]
             expression = sensor_composite(ee, sensor, ids, start)
-            raw = compute_pixels(
-                ee,
-                expression,
-                names,
-                sample["crs"],
-                sample["transform"],
-                schema.width,
-                schema.height,
-            )
+            renamed = [f"t{slot}_{name}" for name in names]
+            chunks.append(expression.rename(renamed))
+            packed_names.extend(renamed)
+            present.append(slot)
+        if not chunks:
+            continue
+        # One bounded request per sensor, preserving each slot's QA and dates.
+        packed = compute_pixels(
+            ee,
+            ee.Image.cat(chunks),
+            packed_names,
+            sample["crs"],
+            sample["transform"],
+            schema.width,
+            schema.height,
+        )
+        for slot in present:
+            start, end = slots[slot]
+            raw = {name: packed[f"t{slot}_{name}"] for name in names}
             valid = raw["days"] > 0
             arrays[sensor][slot] = normalize(
                 sensor, np.stack([raw[name] for name in BANDS[sensor]]), valid, norm
@@ -124,7 +136,8 @@ def collect_sample(ee, sample, root, config, norm, calendar):
     dw = catalog(ee, root / "cache", "dw", sample, start, end)
     dw_ids = [s["asset_id"] for s in dw]
     cover_expression, cover = fetch_cover(ee, sample, config, dw_ids)
-    reliable = cover_targets(cover, config["min_known_fraction"])["water_valid"].sum()
+    coverage = cover_targets(cover, config["min_known_fraction"])
+    reliable = coverage["water_valid"].sum()
     if reliable < config["min_cover_pixels"]:
         return reject("no reliable coverage labels")
     checkpoint = root / "cache" / "inputs" / f"{sid}.npz"
@@ -150,7 +163,15 @@ def collect_sample(ee, sample, root, config, norm, calendar):
         os.replace(temporary, checkpoint)
     if not eligible:
         return reject("insufficient input slot coverage")
-    pml, sm = fetch_products(ee, sample, cover_expression, calendar[start])
+    pml, sm = fetch_products(
+        ee,
+        sample,
+        cover_expression,
+        calendar[start],
+        config,
+        root / "cache",
+        sm_enabled=sm_tile_eligible(coverage, config),
+    )
     targets = build_targets(sample, cover, pml, sm, config)
     if targets["water_valid"].sum() < config["min_cover_pixels"]:
         return reject("no reliable coverage labels")
@@ -279,33 +300,15 @@ def collect(config):
                             tried.add(identity)
                             proposals.append(dict(candidate, target_time=day))
                             break
-                    # Bounded batches, reserving frequency and overlap constraints.
-                    while proposals:
-                        batch = []
-                        reserved = SamplingLedger(
-                            (), config["max_dates_per_location"], config["min_date_gap_days"]
-                        )
-                        while proposals and len(batch) < config["concurrency"]:
-                            sample = proposals.popleft()
-                            fb = sample["frequency_bin"]
-                            if (
-                                ledger.counts[fb] + reserved.counts[fb] < target[fb]
-                                and ledger.allows(sample, sample["target_time"])
-                                and reserved.allows(sample, sample["target_time"])
-                            ):
-                                batch.append(sample)
-                                reserved.add(sample)
-                        futures = [
-                            workers.submit(collect_sample, ee, s, root, config, norm, calendar)
-                            for s in batch
-                        ]
-                        for future in futures:
-                            row = (
-                                future.result()
-                            )  # Network failures stop; they are never cached as rejection.
-                            if row is not None:
-                                rows.append(row)
-                                ledger.add(row)
+
+                    def collect_one(sample):
+                        return collect_sample(ee, sample, root, config, norm, calendar)
+
+                    for row in completed_samples(
+                        workers, proposals, ledger, target, config["concurrency"], collect_one
+                    ):
+                        if row is not None:
+                            rows.append(row)
                         if rows and time.monotonic() - last_publish >= 60:
                             publish(root, rows, config, complete=False)
                             last_publish = time.monotonic()

@@ -20,6 +20,7 @@ def resolve_config(args):
         ("samples", args.samples),
         ("project", args.project),
         ("candidate_dir", getattr(args, "candidate_dir", None)),
+        ("concurrency", getattr(args, "concurrency", None)),
     ):
         if value is not None:
             config[key] = str(value) if isinstance(value, Path) else value
@@ -96,6 +97,9 @@ def main():
     parser.add_argument("--samples", type=int)
     parser.add_argument("--project")
     parser.add_argument("--candidate-dir", type=Path)
+    parser.add_argument(
+        "--concurrency", type=int, help="Maximum in-flight samples (default: config)"
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     config = resolve_config(args)
