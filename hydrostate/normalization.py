@@ -8,9 +8,9 @@ import json
 import math
 from pathlib import Path
 
-from hydrostate.tasks import DEFAULT_TASKS, resolve_tasks, task_config
+from hydrostate.tasks import LEGACY_TASKS, resolve_tasks, task_config
 
-TASKS = tuple(DEFAULT_TASKS)
+LEGACY_TASK_NAMES = tuple(LEGACY_TASKS)
 SUPPORT_VERSION = "water30_smap_center_pml_native_observed_v1"
 CONFIGURED_SUPPORT_VERSION = "configured_observation_support_v1"
 
@@ -28,7 +28,7 @@ def training_fingerprint(table, data_contract=None) -> str:
     return hashlib.sha256(content.encode()).hexdigest()
 
 
-def load_target_statistics(source: str | dict, tasks=None) -> dict:
+def load_target_statistics(source: str | dict, tasks=LEGACY_TASKS) -> dict:
     report = (
         json.loads(Path(source).read_text()) if isinstance(source, str) else copy.deepcopy(source)
     )
@@ -49,7 +49,7 @@ def load_target_statistics(source: str | dict, tasks=None) -> dict:
     fingerprint = report.get("training_fingerprint", "")
     if len(fingerprint) != 64 or any(c not in "0123456789abcdef" for c in fingerprint):
         raise ValueError("Target statistics require a SHA256 training fingerprint")
-    if version == 1 and specs != DEFAULT_TASKS:
+    if version == 1 and specs != LEGACY_TASKS:
         raise ValueError("Configured tasks require version 2 target statistics")
     if version == 2 and report.get("task_specs") != task_config(specs):
         raise ValueError("Target statistics disagree with configured task supports")

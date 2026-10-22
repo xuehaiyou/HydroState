@@ -56,6 +56,14 @@ class OlmoEarthEncoder(nn.Module):
         self.input_profile = input_profile
         self.input_keys = input_keys(input_profile)
         self.landsat_l2_adapter = None
+        self.landsat_toa_adapter = None
+        from hydrostate.data.retrieval.contract import PROFILE
+        if input_profile == PROFILE:
+            if not inputs_are_normalized:
+                raise ValueError("TOA composites require explicit physical normalization")
+            self.landsat_toa_adapter = nn.Conv2d(11, 11, 1)
+            nn.init.eye_(self.landsat_toa_adapter.weight[:, :, 0, 0])
+            nn.init.zeros_(self.landsat_toa_adapter.bias)
         if input_profile == L2_PROFILE:
             if not inputs_are_normalized:
                 raise ValueError("L2 adapter requires already-normalized S1/S2 inputs")
@@ -122,7 +130,7 @@ class OlmoEarthEncoder(nn.Module):
         if metadata is None:
             # Compatibility for direct encoder calls that bypass preprocessing.
             metadata, indices = prepare_temporal_metadata(
-                inputs["sensor_valid"], inputs["observation_time"]
+                inputs["sensor_valid"], inputs["observation_time"], inputs.get("slot_bounds")
             )
             indices = indices.to(device=inputs["s1"].device)
         else:
@@ -147,6 +155,9 @@ class OlmoEarthEncoder(nn.Module):
                         image = self.landsat_l2_adapter(image, pixel_valid)
                     else:
                         image = image.masked_fill(~pixel_valid.bool(), 0)
+                        if input_key == "landsat" and self.landsat_toa_adapter is not None:
+                            image = self.landsat_toa_adapter(image).masked_fill(
+                                ~pixel_valid.bool(), 0)
                 image = image.permute(1, 0, 2, 3).contiguous()  # C,Tv,H,W
                 sample[modality] = RasterImage(image=image, timestamps=list(item.timestamps))
             if not sample:

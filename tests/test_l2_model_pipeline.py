@@ -13,11 +13,13 @@ from mmengine.config import Config
 from hydrostate.cli import configure_data_contract
 from hydrostate.data.input_products import L2_PROFILE, landsat_l2_spec
 from hydrostate.data.model_inputs import prepare_model_inputs
-from hydrostate.datasets.zarr_dataset import HydroStateZarrDataset, hydro_collate
+from hydrostate.datasets.collate import hydro_collate
+from hydrostate.legacy.dataset import HydroStateZarrDataset
 from hydrostate.inference.predict import RegionDataset, load_model, masked_outputs
 from hydrostate.models.data_preprocessor import HydroDataPreprocessor
 from hydrostate.registry import MODELS
-from hydrostate.storage import SampleShardWriter, Schema, VariablePackWriter
+from hydrostate.storage import SampleShardWriter, VariablePackWriter
+from hydrostate.legacy.schema import LegacySchema as Schema
 
 
 @pytest.fixture
@@ -91,10 +93,10 @@ def test_uncollected_l2_records_fail_before_training(l2_samples):
 
 
 def test_mask_only_statistics_match_full_image_reads(l2_samples, monkeypatch):
-    from hydrostate.tasks import task_config
-    from tools.data import compute_target_statistics as statistics
+    from hydrostate.tasks import LEGACY_TASKS, task_config
+    from hydrostate.legacy import statistics
 
-    tasks = {k: v for k, v in task_config().items() if k != 'et'}
+    tasks = {k: v for k, v in task_config(LEGACY_TASKS).items() if k != 'et'}
     options = dict(tasks=tasks, input_profile=L2_PROFILE, input_packs=[dict(path='l2')],
                    num_workers=0)
     fast = statistics.compute_statistics(l2_samples.manifest_path, l2_samples.data_root, **options)
@@ -124,7 +126,7 @@ def test_l2_gradient_checkpoint_reload_and_regional_queries(
 
     init_default_scope('hydrostate')
     tiny_backbone(monkeypatch)
-    cfg = Config.fromfile('configs/hydrostate_multilevel_temporal_l2.py')
+    cfg = Config.fromfile('configs/experiments/legacy/hydrostate_multilevel_temporal_l2.py')
     configure_data_contract(cfg)
     cfg.model.target_statistics = target_statistics
     cfg.model.encoder.update(model_path=str(tmp_path), embedding_channels=32,
@@ -186,7 +188,7 @@ def test_l2_gradient_checkpoint_reload_and_regional_queries(
 @pytest.mark.parametrize('name,count', [('multilevel_temporal', 3),
                                        ('ecosystem_multilevel_temporal', 16)])
 def test_l2_configs_preserve_tasks_and_architecture(name, count):
-    cfg = Config.fromfile(f'configs/hydrostate_{name}_l2.py')
+    cfg = Config.fromfile(f'configs/experiments/legacy/hydrostate_{name}_l2.py')
     configure_data_contract(cfg)
     assert len(cfg.model.heads) == count
     assert cfg.model.encoder.out_indices == [3, 7, 11]

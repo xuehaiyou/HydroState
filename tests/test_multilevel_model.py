@@ -11,7 +11,7 @@ from torch import nn
 
 from hydrostate.models.multilevel_encoder import MultiLevelOlmoEarthEncoder, pool_modalities
 from hydrostate.models.multilevel_model import OutputTaskAdapter
-from hydrostate.normalization import TASKS
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS
 from hydrostate.registry import MODELS
 
 
@@ -104,7 +104,7 @@ def test_adapter_starts_as_identity_but_learns_a_task_adjustment():
 
 
 def make_model(config_name, statistics, small=False):
-    cfg = Config.fromfile(f"configs/{config_name}.py")
+    cfg = Config.fromfile(f"configs/experiments/legacy/{config_name}.py")
     cfg.model.encoder = dict(type="MultiLevelTestEncoder")
     cfg.model.target_statistics = statistics
     if small:

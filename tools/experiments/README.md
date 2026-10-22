@@ -1,6 +1,9 @@
+> Historical experiment protocol. Current data and launch instructions are in
+> [DATA_PREPARATION](../../docs/DATA_PREPARATION.md).
+
 # SM paired experiments
 
-Protocol: [SM_CAUSAL_EXPERIMENT_PLAN.md](../../docs/SM_CAUSAL_EXPERIMENT_PLAN.md).
+Protocol: [SM_CAUSAL_EXPERIMENT_PLAN.md](../../docs/history/SM_CAUSAL_EXPERIMENT_PLAN.md).
 Components are opt-in under `hydrostate.experiments.sm_causal`; existing training
 configurations and the running v2 job do not import them.
 
@@ -34,7 +37,7 @@ PY=/home/xiaoz/miniconda/envs/hydrostate/bin/python
 ROOT=/home/xiaoz/HydroState/outputs/sm_causal_NEW
 mkdir -p "$ROOT"
 $PY tools/experiments/prepare_sm_causal.py --out "$ROOT" --stage screen --steps 2340
-sbatch --parsable scripts/slurm/14_sm_causal_gate.sh "$ROOT"
+sbatch --parsable scripts/legacy/slurm/14_sm_causal_gate.sh "$ROOT"
 # After this GPU job passes, supply its returned job ID:
 $PY tools/experiments/submit_sm_causal.py "$ROOT" --gate-job JOB_ID
 ```

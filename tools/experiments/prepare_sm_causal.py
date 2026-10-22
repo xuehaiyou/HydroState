@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from mmengine.config import Config
-from hydrostate.normalization import TASKS, training_fingerprint
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS, training_fingerprint
 
 BASE = Path('/home/xiaoz/HydroState/outputs/diagnostics_v2_4107932/frozen_epoch32')
 

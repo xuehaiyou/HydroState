@@ -19,7 +19,7 @@ from hydrostate.models.hydrostate_model import (
     prepare_supervision,
 )
 from hydrostate.models.water_soil_coupling import WaterSoilCoupling
-from hydrostate.normalization import TASKS
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS
 
 
 def example():

@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import box, mapping
 
-from hydrostate.data.gee_sampling import BANDS, MODALITIES
+from hydrostate.legacy.sampling import BANDS, MODALITIES
 from hydrostate.inference.gee import SceneCache, epoch, normalize_pixels, select_window
 from hydrostate.inference.planning import (
     input_shape,

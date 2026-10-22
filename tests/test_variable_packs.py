@@ -12,7 +12,8 @@ from torch import nn
 from torch.nn import functional as F
 
 from hydrostate.cli import configure_data_contract, configure_target_statistics
-from hydrostate.datasets.zarr_dataset import HydroStateZarrDataset, hydro_collate
+from hydrostate.datasets.collate import hydro_collate
+from hydrostate.legacy.dataset import HydroStateZarrDataset
 from hydrostate.engine.layer_decay_constructor import olmoearth_layer_id
 from hydrostate.engine.visualization_hook import HydroVisualizationHook, _cpu_sample
 from hydrostate.evaluation.hydro_metrics import HydroStateMetric
@@ -21,11 +22,12 @@ from hydrostate.models.data_preprocessor import HydroDataPreprocessor
 from hydrostate.models.hydrostate_model import prepare_supervision, supervision_values
 from hydrostate.normalization import load_target_statistics
 from hydrostate.registry import MODELS
-from hydrostate.storage import SampleShardWriter, Schema, VariablePackWriter
+from hydrostate.storage import SampleShardWriter, VariablePackWriter
+from hydrostate.legacy.schema import LegacySchema as Schema
 from hydrostate.storage.packs import VariablePack
-from hydrostate.tasks import resolve_tasks, task_config
-from tools.data.build_variable_pack import build_pack
-from tools.data.compute_target_statistics import compute_statistics
+from hydrostate.tasks import LEGACY_TASKS, resolve_tasks, task_config
+from tools.legacy.data.build_variable_pack import build_pack
+from hydrostate.legacy.statistics import compute_statistics
 
 
 @MODELS.register_module(force=True)
@@ -91,7 +93,7 @@ def publish_extensions(manifest):
             writer.write(sid, dict(temperature=value, temperature_valid=valid))
         writer.finalize()
     return dict(
-        tasks=task_config() | {"temperature": dict(support="pixel", grid="output")},
+        tasks=task_config(LEGACY_TASKS) | {"temperature": dict(support="pixel", grid="output")},
         input_packs=[dict(path="terrain_v1", variables=["elevation"])],
         label_packs=[dict(path="temperature_v1", variables=["temperature"])],
     )
@@ -197,7 +199,8 @@ def test_stats_and_config_pin_pack_versions_and_supports(library):
     cfg = Config(dict(
         **options,
         model=dict(target_statistics=report, input_fusion=dict(inputs=dict(elevation={}))),
-        train_dataloader=dict(dataset=dict(manifest=str(manifest), split="train")),
+        train_dataloader=dict(dataset=dict(
+            type="HydroStateZarrDataset", manifest=str(manifest), split="train")),
         val_evaluator=dict(type="HydroStateMetric"),
     ))
     configure_target_statistics(cfg, training=True)
@@ -260,7 +263,7 @@ def test_npz_import_and_example_configuration(library):
                                  grid="input"))), manifest.parent / "rain_v1")
     pack = VariablePack(output, pd.read_parquet(manifest), kind="input")
     assert pack.variables["rain"]["temporal"] == "sequence"
-    cfg = Config.fromfile("configs/hydrostate_extended.py")
+    cfg = Config.fromfile("configs/experiments/legacy/hydrostate_extended.py")
     configure_data_contract(cfg)
     assert set(cfg.model.heads) == set(cfg.model.tasks)
     assert cfg.train_dataloader.dataset.label_packs == cfg.label_packs
@@ -288,7 +291,8 @@ def test_label_times_roundtrip_missing_rows_and_temporal_data_contract(library):
     manifest, table = library
     table["labels"] = json.dumps(dict(dw={"system:time_start": 1577870000000},
                                      sm={"system:time_start": 1577880000000},
-                                     pml=dict(interval_start="2020-01-01", interval_end="2020-01-09")))
+                                     pml=dict(interval_start="2020-01-01",
+                                              interval_end="2020-01-09")))
     table.to_parquet(manifest, index=False)
     with VariablePackWriter(
         manifest.parent / "lst_v1", manifest, kind="label", source="fixture", version="1",
@@ -302,7 +306,7 @@ def test_label_times_roundtrip_missing_rows_and_temporal_data_contract(library):
             writer.write("a", dict(value, lst_time=np.array([1577600000, 1577600001])))
         writer.write("a", value)
         writer.finalize()
-    options = dict(tasks=task_config() | {"lst": dict(support="pixel", grid="output")},
+    options = dict(tasks=task_config(LEGACY_TASKS) | {"lst": dict(support="pixel", grid="output")},
                    label_packs=[dict(path="lst_v1")], target_time_queries=True)
     dataset = HydroStateZarrDataset(str(manifest), "train", **options)
     a, b = dataset[0], dataset[1]
@@ -349,7 +353,7 @@ def test_arbitrary_new_variable_can_supply_an_interval_query(library):
 
 
 def test_support_validator_preserves_all_real_input_masks_and_times(library):
-    from tools.data.validate_gee_lst import SupportDataset
+    from tools.legacy.data.validate_gee_lst import SupportDataset
 
     manifest, _ = library
     reference = HydroStateZarrDataset(str(manifest), "train")[0]

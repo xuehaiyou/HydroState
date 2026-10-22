@@ -70,7 +70,7 @@ def advance(path, record):
         return False
     env = {k: v for k, v in os.environ.items() if not k.startswith('HYDROSTATE_')}
     env.update(record['environment'])
-    job = submit(path, record, 'prepare', 'scripts/slurm/39_prepare_mtlora.sh', env)
+    job = submit(path, record, 'prepare', 'scripts/slurm/prepare_retrieval.sh', env)
     accounting = subprocess.check_output([
         'sacct', '-nP', '-X', '-j', job, '--format=JobIDRaw,State,ExitCode'], text=True)
     rows = [row.split('|') for row in accounting.splitlines() if row.startswith(job + '|')]
@@ -90,7 +90,7 @@ def advance(path, record):
             record['status'] = 'waiting_for_gpu_submission_capacity'
             return False
         stage_env = dict(env, HYDROSTATE_WORK_DIR=str(root / stage))
-        submit(path, record, stage, 'scripts/slurm/38_train_mtlora.sh', stage_env, stage)
+        submit(path, record, stage, 'scripts/slurm/train_retrieval.sh', stage_env, stage)
     record['status'] = 'both_training_jobs_submitted'
     return True
 

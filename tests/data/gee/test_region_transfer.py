@@ -159,7 +159,7 @@ def test_more_padding_merges_jobs_but_ingests_only_required_chunks(setup, tmp_pa
 @pytest.mark.parametrize("padding", [-0.1, float("nan"), float("inf"), "0.5", True])
 def test_invalid_padding_config_rejected(setup, padding):
     cache, _, _ = setup
-    settings = json.loads(Path("configs/data/gee_drive.json").read_text())
+    settings = json.loads(Path("configs/experiments/legacy/data/gee_drive.json").read_text())
     settings["max_padding_fraction"] = padding
     with pytest.raises(ValueError, match="max_padding_fraction"):
         validate_settings(settings, cache)
@@ -167,7 +167,7 @@ def test_invalid_padding_config_rejected(setup, padding):
 
 def test_zero_padding_and_legacy_config_are_valid(setup):
     cache, _, _ = setup
-    settings = json.loads(Path("configs/data/gee_drive.json").read_text())
+    settings = json.loads(Path("configs/experiments/legacy/data/gee_drive.json").read_text())
     settings["max_padding_fraction"] = 0
     validate_settings(settings, cache)
     del settings["max_padding_fraction"]
@@ -178,7 +178,7 @@ def test_zero_padding_and_legacy_config_are_valid(setup):
 @pytest.mark.parametrize("value", [0, -1, 1.5, float("nan"), "4", True])
 def test_invalid_pending_dates_rejected(setup, value):
     cache, _, _ = setup
-    settings = json.loads(Path("configs/data/gee_drive.json").read_text())
+    settings = json.loads(Path("configs/experiments/legacy/data/gee_drive.json").read_text())
     settings["max_pending_dates"] = value
     with pytest.raises(ValueError, match="max_pending_dates"):
         validate_settings(settings, cache)
@@ -296,7 +296,7 @@ def test_commit_survives_cleanup_interruption(setup, tmp_path):
     state.update(job["id"], status="committed", files=[])
     state.close()
     state = ExportState(tmp_path / "exports.sqlite")
-    settings = json.loads(Path("configs/data/gee_drive.json").read_text())
+    settings = json.loads(Path("configs/experiments/legacy/data/gee_drive.json").read_text())
     calls = []
     transport = SimpleNamespace(ensure_folder=lambda: None, cleanup=lambda r: calls.append(r["id"]))
     run_jobs(transport, state, cache, [], settings)
@@ -306,7 +306,7 @@ def test_commit_survives_cleanup_interruption(setup, tmp_path):
 
 
 def test_sample_pixels_use_verified_named_bands_and_resume(tmp_path, monkeypatch):
-    from hydrostate.data.gee.workflows import samples
+    from hydrostate.legacy import sampling as samples
 
     row = dict(
         sample_id="sample",
@@ -343,7 +343,7 @@ def test_sample_pixels_use_verified_named_bands_and_resume(tmp_path, monkeypatch
 
 def test_capacity_failure_preserves_planned_receipt_without_submission(setup, tmp_path):
     cache, scene, job = setup
-    settings = json.loads(Path("configs/data/gee_drive.json").read_text())
+    settings = json.loads(Path("configs/experiments/legacy/data/gee_drive.json").read_text())
     state = ExportState(tmp_path / "exports.sqlite")
     transport = SimpleNamespace(
         ensure_folder=lambda: None,

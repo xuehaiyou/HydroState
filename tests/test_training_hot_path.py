@@ -26,7 +26,7 @@ from hydrostate.models.hydrostate_model import (
 )
 from hydrostate.models.olmoearth_encoder import INPUT_KEYS, MODALITIES, OlmoEarthEncoder
 from hydrostate.models.temporal_metadata import prepare_temporal_metadata
-from hydrostate.normalization import TASKS
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS
 
 
 def temporal_inputs(mask_channels=True):
@@ -87,6 +87,7 @@ def capture_encoder():
     encoder = OlmoEarthEncoder.__new__(OlmoEarthEncoder)
     nn.Module.__init__(encoder)
     encoder.backbone = CaptureBackbone()
+    encoder.landsat_toa_adapter = None
     encoder.out_channels = 1
     return encoder
 
@@ -327,6 +328,7 @@ def test_causal_grouping_handles_prepared_cpu_metadata(condition):
     encoder = CausalOlmoEarthEncoder.__new__(CausalOlmoEarthEncoder)
     nn.Module.__init__(encoder)
     encoder.backbone = CaptureBackbone()
+    encoder.landsat_toa_adapter = None
     encoder.backbone.timestamp_error_tolerance = timedelta(days=15)
     encoder.out_channels = 1
     encoder.time_condition = condition

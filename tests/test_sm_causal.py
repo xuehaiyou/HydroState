@@ -11,7 +11,7 @@ from hydrostate.experiments.sm_causal import (
     CausalHydroStateModel, CausalNLL, FixedGlobalBatchSampler,
     filter_temporal_inputs, temporal_signature,
 )
-from hydrostate.normalization import TASKS
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS
 from hydrostate.registry import MODELS
 
 

@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 
 import hydrostate
 from hydrostate.cli import configure_target_statistics
-from hydrostate.datasets.zarr_dataset import hydro_collate
+from hydrostate.datasets.collate import hydro_collate
 from hydrostate.models.hydrostate_model import supervision_values
 from hydrostate.models.water_soil_coupling import WaterSoilCoupling
 from hydrostate.registry import DATASETS, MODELS

@@ -115,7 +115,7 @@ def training_records(manifest, crs, geometry):
             footprint = box(*map_point(tr, 0, 120), *map_point(tr, 120, 0))
             source = row["crs"]
         else:
-            from hydrostate.data.gee_sampling import grid as sample_grid
+            from hydrostate.data.spatial import grid as sample_grid
 
             source, values = sample_grid(row["lon"], row["lat"])
             tr = Affine(*values)

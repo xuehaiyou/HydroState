@@ -8,8 +8,10 @@ from mmengine.config import Config
 
 from hydrostate.cli import configure_target_statistics
 from hydrostate.normalization import load_target_statistics, training_fingerprint
-from hydrostate.storage import SampleShardWriter, Schema
-from tools.data.compute_target_statistics import RunningMoments, compute_statistics
+from hydrostate.storage import SampleShardWriter
+from hydrostate.legacy.schema import LegacySchema as Schema
+from hydrostate.statistics import RunningMoments
+from hydrostate.legacy.statistics import compute_statistics
 
 
 def test_population_moments_and_degenerate_labels():

@@ -10,7 +10,7 @@ from mmengine.config import Config
 from mmengine.registry import init_default_scope
 from torch.utils.data import DataLoader
 from hydrostate.experiments.sm_causal import CausalDataset, CausalPreprocessor
-from hydrostate.datasets.zarr_dataset import hydro_collate
+from hydrostate.datasets.collate import hydro_collate
 
 
 def main():

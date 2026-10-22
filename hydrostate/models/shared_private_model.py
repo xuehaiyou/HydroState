@@ -9,7 +9,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from hydrostate.registry import MODELS
-from hydrostate.tasks import DEFAULT_TASKS, task_config
+from hydrostate.tasks import LEGACY_TASKS, task_config
 
 from .hydrostate_model import HydroStateModel
 from .multilevel_model import MultiLevelFusionDecoder
@@ -44,9 +44,9 @@ class SharedPrivateHydroStateModel(HydroStateModel):
             raise ValueError("Shared/private v1 has no shared auxiliary-input fusion")
         # MMEngine's expanded Python config sorts mapping keys. Keep loss buffers
         # and checkpoint task order stable across source and expanded configs.
-        specs = task_config(kwargs.get("tasks"))
-        order = [task for task in DEFAULT_TASKS if task in specs]
-        order += sorted(set(specs) - set(DEFAULT_TASKS))
+        specs = task_config(kwargs.get("tasks", LEGACY_TASKS))
+        order = [task for task in LEGACY_TASKS if task in specs]
+        order += sorted(set(specs) - set(LEGACY_TASKS))
         tasks = kwargs["tasks"] = {task: specs[task] for task in order}
         encoder = copy.deepcopy(encoder)
         if "tasks" in encoder and encoder["tasks"] != tasks:

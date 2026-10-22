@@ -20,7 +20,7 @@ from mmengine.registry import init_default_scope
 from torch.utils.data import DataLoader, Subset
 
 import hydrostate  # noqa: F401
-from hydrostate.datasets.zarr_dataset import hydro_collate
+from hydrostate.datasets.collate import hydro_collate
 from hydrostate.models.hydrostate_model import supervision_values
 from hydrostate.registry import DATASETS, MODELS
 

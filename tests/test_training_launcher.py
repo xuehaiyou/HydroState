@@ -83,7 +83,8 @@ def launch(tmp_path):
             environment["HYDROSTATE_GPUS_PER_NODE"] = requested
         result = subprocess.run(
             [
-                "bash", str(PROJECT_ROOT / "scripts/slurm" / script),
+                "bash", str(PROJECT_ROOT / script if script.startswith("scripts/")
+                            else PROJECT_ROOT / "scripts/legacy/slurm" / script),
                 "resume=True", "work_dir=/tmp/experiment with spaces",
             ],
             env=environment,
@@ -116,7 +117,7 @@ def test_launcher_uses_visible_gpu_count_and_preserves_arguments(launch, script,
         "optim_wrapper.dtype=bfloat16", "resume=True", "work_dir=/tmp/experiment with spaces"
     ]
     assert args[args.index("tools/train.py") + 1] == (
-        "configs/hydrostate_l40s.py" if script.startswith("12_") else "configs/hydrostate_hpc.py"
+        "configs/experiments/legacy/hydrostate_l40s.py" if script.startswith("12_") else "configs/experiments/legacy/hydrostate_hpc.py"
     )
 
 
@@ -148,3 +149,16 @@ def test_explicit_float16_allows_gpu_without_native_bf16(launch):
     result, invocation = launch(1, bf16=False, precision="float16")
     assert result.returncode == 0, result.stderr
     assert "optim_wrapper.dtype=float16" in invocation["args"]
+
+
+def test_current_launcher_selects_current_model_and_one_gpu(launch):
+    result, invocation = launch(1, script="scripts/train.sh")
+    assert result.returncode == 0, result.stderr
+    assert invocation["command"] == "python"
+    assert invocation["args"][1] == "configs/hydrostate_mtlora.py"
+
+
+def test_current_launcher_refuses_multiple_visible_gpus(launch):
+    result, invocation = launch(2, script="scripts/train.sh")
+    assert result.returncode != 0 and invocation is None
+    assert "Visible 2 GPUs, explicitly requested 1" in result.stderr

@@ -6,7 +6,7 @@ import pytest
 
 from hydrostate.data.regional.prepare import load_config, prepare_region
 
-CONFIG = Path("configs/data/regional")
+CONFIG = Path("configs/experiments/legacy/data/regional")
 
 
 @pytest.mark.parametrize(
@@ -29,13 +29,13 @@ def test_legacy_cli_preserves_previous_configs():
     drive = load_config(backend="drive")
     assert "export_layout" not in drive["options"]
     assert (
-        load_config(download_config="configs/data/gee_drive_native.json")["options"][
+        load_config(download_config="configs/experiments/legacy/data/gee_drive_native.json")["options"][
             "export_layout"
         ]
         == "native_v1"
     )
     with pytest.raises(ValueError, match="conflicts"):
-        load_config(backend="pixels", download_config="configs/data/gee_drive.json")
+        load_config(backend="pixels", download_config="configs/experiments/legacy/data/gee_drive.json")
 
 
 def test_profile_mismatch_rejected_before_any_backend_runs(tmp_path):

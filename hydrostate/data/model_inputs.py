@@ -3,10 +3,11 @@
 import torch
 
 from .input_products import L2_PROFILE, LEGACY_PROFILE
+from .retrieval.contract import PROFILE
 
 
 def input_keys(profile):
-    if profile not in {LEGACY_PROFILE, L2_PROFILE}:
+    if profile not in {LEGACY_PROFILE, L2_PROFILE, PROFILE}:
         raise ValueError(f"Unknown model input profile: {profile}")
     return ("s1", "s2", "landsat_l2" if profile == L2_PROFILE else "landsat")
 
@@ -19,7 +20,7 @@ def prepare_model_inputs(inputs, profile):
     """
     input_keys(profile)
     inputs = dict(inputs)
-    if profile == LEGACY_PROFILE:
+    if profile in {LEGACY_PROFILE, PROFILE}:
         if "landsat_l2" in inputs:
             raise ValueError("landsat_l2 requires the explicit L2 input profile")
         return inputs

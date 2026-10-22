@@ -1,0 +1,64 @@
+# 仓库结构与职责
+
+正式路径：**采样配置 → retrieval 采样 → 严格读取/审计 → 训练统计 → 模型配置 → 训练/验证**。
+运行数据、缓存和 checkpoint 放在代码仓库之外。
+
+```text
+configs/
+  data/collection/retrieval.py   当前采样参数
+  hydrostate_retrieval.py        公共训练配置，从数据契约导入任务和输入定义
+  hydrostate_mtlora*.py          模型选择及消融
+  _base_/runtime.py              MMEngine 通用运行设置
+  experiments/legacy/           历史架构、数据和机器配置
+hydrostate/
+  data/retrieval/                当前产品监督流程
+  data/gee/                     GEE 产品、传输、请求和历史区域工作流
+  data/spatial.py                公共网格与地理划分
+  datasets/                     当前读取器、拼批和采样器
+  storage/                      与任务无关的数组描述、Zarr 读写和缓存
+  tasks.py                      任务支持范围校验；默认解析当前七任务
+  statistics.py                 通用流式统计
+  models/, losses/, evaluation/ 模型、损失及指标；架构仍由 config 选择
+  legacy/                       历史采样器、读取器、schema 和统计
+  data/local/, data/regional/    历史区域影像准备组件
+  inference/, experiments/      区域导出和历史实验组件
+scripts/
+  run_gee_sampling.sh            唯一本地采样包装入口
+  run_gee_collection_io.sh       HPC IO 环境检查后调用同一采样入口
+  train.sh                      单 GPU 训练运行器
+  slurm/                        当前准备/训练资源声明
+  legacy/                       历史调度和采样命令
+tools/                         薄 CLI；data/ 为当前准备，legacy/ 为历史命令
+docs/                          当前文档；history/ 为历史记录
+tests/                         共享模块及历史回归；retrieval/ 为当前流程检查
+```
+
+## 当前采样包
+
+- `contract.py`：唯一当前版本、任务、输入配置和数组形状。
+- `configuration.py`：训练配置与该契约的一致性检查。
+- `cli.py`：解析采样参数，离线预览，绑定生产代码哈希。
+- `catalog.py`：候选点和影像元数据缓存；`sampling.py`：配额与时空去重。
+- `composites.py`：逐景 QA、均值合成、观测质量摘要。
+- `gee_labels.py`：产品读取；`labels.py`：监督掩膜与面积聚合。
+- `collector.py`：输入提取、样本提交、续采和完成标记。
+- `validation.py`：数组检查；`audit.py`：已发布数据审计。
+- `statistics.py`：训练集监督尺度上的统计；`release.py`：成对训练准备。
+
+公共工具不从历史采样器、历史读取器导入私有对象。
+`storage/reader.py` 的 `ShardCache`、`datasets/collate.py` 的 `hydro_collate`、
+`data/spatial.py` 的网格函数供不同流程复用。分片 writer 必须显式接收 schema。
+
+## 历史边界
+
+旧四槽/三变量 schema 使用 `LegacySchema`，旧读取器使用
+`hydrostate.legacy.dataset.HydroStateZarrDataset`；由历史配置显式注册。
+共享模型中的历史默认参数明确命名为 `LEGACY_TASKS`，正式配置始终绑定当前七任务。
+历史工具使用 `hydrostate.legacy.statistics`，当前统计入口只接受当前契约。
+
+历史模型实现继续保留，避免把“清理旧数据流程”误变成“删除模型对比能力”。
+归档配置继续加载其历史数据定义；不能直接用它们对当前七任务样本训练。
+旧区域制图工具也尚未适配当前七输出契约。
+
+新增业务逻辑放入 `hydrostate/`，`tools/` 只负责参数和调用；
+Shell 负责资源、环境和进程启动，数据检查统一调用 Python 服务。

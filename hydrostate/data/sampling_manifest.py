@@ -7,16 +7,11 @@ from pathlib import Path
 
 import pandas as pd
 
-
-def geographic_block(row):
-    return f"{int((row['lon'] + 180) // 5)}:{int((row['lat'] + 90) // 5)}"
+from hydrostate.data.spatial import geographic_block, geographic_split
 
 
-def geographic_split(row, seed):
-    # Preserve the original gee_sampling.fingerprint([seed, block]) contract.
-    payload = json.dumps([seed, geographic_block(row)], sort_keys=True).encode()
-    value = int(hashlib.sha256(payload).hexdigest()[:8], 16) % 100
-    return 'train' if value < 70 else 'validation' if value < 85 else 'test'
+
+
 
 
 def location_key(row):

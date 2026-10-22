@@ -11,7 +11,7 @@ import numpy as np
 import zarr
 from numcodecs import Blosc
 
-from .schema import ArraySpec, Schema
+from .schema import ArraySpec, ShardSchema
 
 
 class SampleShardWriter:
@@ -27,10 +27,10 @@ class SampleShardWriter:
         input_path: str,
         label_path: str,
         num_samples: int,
-        schema: Schema | None = None,
+        schema: ShardSchema,
         attrs: dict[str, Any] | None = None,
     ) -> None:
-        self.schema = schema or Schema()
+        self.schema = schema
         self.num_samples = num_samples
         self.index = 0
         self.input_path = Path(input_path)

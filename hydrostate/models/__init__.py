@@ -1,10 +1,12 @@
 """Model components."""
 
+from .composite_quality import CompositeQualityFusion
 from .data_preprocessor import HydroDataPreprocessor
 from .decoder import SharedUNetDecoder
 from .heads import RegressionHead
 from .hydrostate_model import HydroStateModel
 from .input_fusion import AuxiliaryInputFusion
+from .mtlora import MTLoRAFusionDecoder, MTLoRAHydroStateModel, MTLoRAOlmoEarthEncoder
 from .multilevel_encoder import MultiLevelOlmoEarthEncoder
 from .multilevel_model import MultiLevelFusionDecoder, MultiLevelHydroStateModel
 from .multilevel_temporal_model import (
@@ -12,7 +14,6 @@ from .multilevel_temporal_model import (
     MultiLevelTemporalOlmoEarthEncoder,
 )
 from .olmoearth_encoder import OlmoEarthEncoder
-from .mtlora import MTLoRAFusionDecoder, MTLoRAHydroStateModel, MTLoRAOlmoEarthEncoder
 from .query_time import TargetTimeQuery
 from .shared_private_encoder import SharedPrivateOlmoEarthEncoder
 from .shared_private_model import SharedPrivateHydroStateModel
@@ -22,6 +23,7 @@ from .temporal_model import TemporalHydroStateModel, TemporalOlmoEarthEncoder
 
 __all__ = [
     "AuxiliaryInputFusion",
+    "CompositeQualityFusion",
     "HydroDataPreprocessor",
     "HydroStateModel",
     "MultiLevelFusionDecoder",

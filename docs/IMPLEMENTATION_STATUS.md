@@ -1,150 +1,50 @@
-# Implementation status
+# 当前实现状态（2026-10-22）
 
-Implemented:
+本页记录当前快照；此前逐次追加的记录完整保留在
+[历史实现记录](history/IMPLEMENTATION_STATUS_BEFORE_RETRIEVAL.md)。
+科学与监督规范见 [RETRIEVAL_PIPELINE](RETRIEVAL_PIPELINE.md)，
+执行方式见 [DATA_PREPARATION](DATA_PREPARATION.md)。
 
-- MMEngine registries, Runner configurations, AMP, DDP-ready data loaders, and
-  checkpoint selection.
-- Official rslearn OlmoEarth v1.2 Base adapter with real observation times.
-- Shared spatial decoder and joint water-fraction, soil-moisture, and ET heads.
-- Masked product losses, station-footprint losses, and regression metrics.
-- MMEngine LLRD optimizer constructor with Base's 12-layer, 0.65 decay recipe.
-- Immutable sampled-Zarr writer, reader, manifest sampler, and validator.
+## 已实现
 
-Data ingestion is intentionally not guessed yet. The product and station paths,
-variable names, units, resolutions, and time-support definitions have not been
-provided. Those are required to generate valid sample centers and labels.
+- 2017–2024 年、五个 8 天均值输入槽，QA、有效日期数与时间分布摘要。
+- JRC 七个中心频率组硬配额，地点/日期限制与地理划分。
+- 当前水/冰雪/陆地置信度规则、Unknown 记录和独立监督掩膜。
+- SMAP 上午弱监督与水冰污染筛选；PML 原始像元面积聚合及 ET 分支监督。
+- 七个内部输出、覆盖闭合与派生总 ET；MTLoRA / shared-LoRA 配置选择。
+- 唯一当前数据契约贯通采样、读取、配置和准备检查；旧采样配置明确拒绝。
+- 本地/HPC IO 共用采样入口；单 GPU、最多六 CPU 的当前 Slurm 包装。
+- 公共网格、Zarr 缓存、拼批、流式统计独立；当前包不加载历史采样/读取模块。
+- 旧配置、命令和说明归档；历史模型实现及其回归测试保留。
 
-The available source layouts were checked read-only:
+## 本轮验证
 
-- S1 contains paired `Sigma0_VV_db.tif` and `Sigma0_VH_db.tif`, so it appears
-  already expressed in dB. RTC/projection metadata still needs verification.
-- S2 is organized as Level-2A `.SAFE` scenes.
-- Landsat is Collection 2 Level-2 (`LC08_L2SP`) with SR/ST products. OlmoEarth's
-  documented encoder input is Collection 2 Level-1 with canonical bands
-  `B8,B1,B2,B3,B4,B5,B6,B7,B9,B10,B11`. The L2 store must not be silently
-  presented as that Level-1 tensor. Before Zarr generation, choose either a
-  matching Level-1 source or define and validate an explicit L2 adapter.
+完整回归：**451 passed**，耗时约 94 秒。覆盖当前模型前向/反向、样本读写、
+训练统计、历史模型、配置展开/重载、HPC watcher 和训练入口。
+其中新增检查验证：
 
+- 本地与 HPC IO 的实际 Shell 入口离线预览得到同一当前契约，且不创建数据目录。
+- 旧采样配置、错误版本/任务/输入配置/读取器被拒绝。
+- 当前三种 MTLoRA 配置与历史架构预设均可加载。
+- 当前任务顺序不受 MMEngine 配置展开排序影响。
+- 当前包无历史工作流加载依赖，训练入口拒绝多张可见 GPU。
+- 准备检查拒绝错误版本、未完成数据或不匹配的 manifest/统计文件。
 
-## GEE pipeline update
+46 个 Shell 文件语法检查通过；新模块静态检查、全库未定义名称检查、
+文档相对链接检查和 diff 空白检查通过。测试输出包含依赖库弃用警告。
 
-The current pipeline supersedes the local-ingestion plan above: all imagery comes
-from GEE, including Landsat L1. Global climate/month/occurrence sampling and
-verified Drive transfer are implemented in `hydrostate/data/gee_sampling.py`.
-Stored samples are 120×120 at 10 m; training outputs are 40×40 at 30 m.
-Authenticated GEE/Drive pilot validation passed as detailed below; full global
-sampling quality and production-scale throughput remain unvalidated. See DATA_PREPARATION.md.
+## 数据与运行进度
 
-## Real-data pilot verification (2026-09-14)
+此前已完成五个手选窗口的阈值检查、三个完整样本写盘及一个 SMAP 支持区检查，
+见 [试采证据](validation/RETRIEVAL_PILOT_20261022.md)。它们不构成正式均衡数据集。
+截至本次本地整理，未启动新的 20,000 样本采集或正式训练；本次没有部署到远端。
+生产代码哈希已变化，后续正式采样使用当前配置的新目录。
 
-Three real GEE samples (two Poyang Lake, one Arkansas) were exported to Drive,
-downloaded with MD5 checks, ingested into Zarr and removed from their dedicated
-Drive folders. Read-only audit found zero remaining files in both pilot folders.
-The third sample has valid water, SMAP and PML supervision.
+## 尚需验证
 
-Original OlmoEarth v1.2 Base weights passed GPU forward-only evaluation on all
-three samples: four input slots, 120×120 pixels, three finite 40×40 outputs.
-RTX 4060 BF16 forward time was 0.19–0.66 s/sample, peak allocated memory 917 MiB.
-This is an execution check, not retrieval-accuracy validation; task heads are new.
-Artifacts: outputs/pilot_transfer_audit.json and outputs/gpu_forward_check.json.
-
-Pilot fixes include explicit EPSG:6933 WKT, full source asset paths, request/task
-ID reconciliation and exact-grid cropping of GEE rounding borders. The adapter
-uses an equivalent broadcast attention mask and optional gradient checkpointing.
-15 local tests passed, including attention output/gradient equivalence.
-
-
-## Multiscale supervision update (2026-09-14)
-
-- Water: 10 m binary DW aggregated to 30 m fraction with complete label masks.
-- ET: native-grid polygon overlaps in local equal-area coordinates; only complete
-  cells are supervised. GEE reports EPSG:4326 with 1/240-degree spacing for the
-  pilot PML assets, so nominal 500 m integer pooling would be incorrect.
-- SMAP: observed-window prediction mean against the original center label,
-  with reduced product loss weight. This remains weak supervision, not full SMAP
-  footprint consistency. No cross-window association.
-- Training and evaluation share the same aggregation and input-coverage masks.
-  At that stage losses and the combined metric used physical reference scales;
-  the training-statistics/NLL update below supersedes that loss recipe.
-- Schema v3 stores variable native-cell weights, padded by `hydro_collate`;
-  spatial flips transform weights too. Legacy ET labels without weights fail
-  explicitly. `--reingest-from` rebuilds shards from MD5-verified local TIFFs.
-
-The three existing real samples were converted to
-`outputs/gee_multiscale_pilot/samples.parquet`. They contain 4, 2 and 4 complete
-valid PML cells respectively; all ten survive the input-coverage check. The Arkansas
-sample also supplies one valid SMAP window constraint. All three have 1600 valid
-water output pixels. Original encoder weights passed RTX 4060 BF16 forward/loss
-and metric evaluation, including a batch of two different native-cell counts.
-Peak allocated GPU memory was approximately 1091 MiB. No optimizer was created
-and no model parameters were updated. Report: `outputs/multiscale_forward_check.json`.
-These checks establish execution, not retrieval accuracy of the newly initialized heads.
-
-20 tests pass, including area overlap at nonaligned boundaries, exclusion of partial
-cells and unobserved support, augmentation/collation, and singleton R² handling.
-MMEngine's configured DataLoader also passed on the converted real samples.
-
-
-## Seven frequency bins and block screening (2026-09-15)
-
-The sampler now includes frequency 0 and 100 as separate strata alongside the
-five intermediate bins. Seven bins receive equal quotas; year-month balancing
-and the half-equal/half-area climate allocation are retained. YearlyHistory
-non-no-data observations distinguish observed dry land from missing coverage.
-Native-resolution climate screening skips empty ocean blocks before expensive
-30 m sampling and histograms, with conservative 2 km edge buffering. The sampling
-strategy identifier prevents mixing different plans. No five-bin cache migration
-is implemented. Existing production results were removed at the user's request;
-the seven-bin production run has not been started.
-
-
-## Shared candidate pool (2026-09-15)
-
-Candidate blocks now use an independently configured shared directory and spatial
-seed. Per-run sample counts, dates, selection seeds and transfer state are separate.
-Pool metadata guards against incompatible reuse; locks prevent racing builders.
-Existing production directories were not moved: `candidates` and `samples_10000`
-are links into the currently running `samples` directory. No new sampling process
-was started by this update.
-
-
-## Training normalization and uncertainty weighting (2026-09-22)
-
-The current 1024-sample snapshot is staged under `/scr/u/xiaoz/HydroState/samples_v1`
-for L40S nodes, which cannot mount `/fossfs`. Train/validation/test counts are
-747/121/156. Training-only means and population standard deviations now replace
-the manual physical scales; effective counts are 1,157,072 water pixels,
-167 SMAP windows, and 2,735 PML cells. There are no valid station observations.
-
-The model now minimizes standardized Gaussian NLL with one learned scalar variance
-per task, replacing Huber and fixed task/site weights. Masking precedes likelihood
-arithmetic; empty tasks contribute zero. DDP normalizes by global valid counts.
-The frozen moments and training fingerprint are checkpoint buffers; learned log
-variances use the full base learning rate without weight decay. Metrics remain in
-physical units and model selection uses RMSE divided by fixed training std.
-
-SLURM jobs 4098289 (statistics), 4098315 (40 tests), and 4098316 (two L40S GPUs)
-completed successfully in the existing `hydrostate` environment. The GPU check ran
-64 microbatches / 8 optimizer updates at effective batch size 32, followed by all
-121 validation samples. Encoder, decoder, heads and variances updated and matched
-across ranks; moments stayed fixed and NLL checkpoint restoration passed.
-Formal 50-epoch training has not started. See [HPC_FINETUNING.md](HPC_FINETUNING.md)
-for statistics, the objective function, validation artifacts and reproducible commands.
-
-The two-L40S training configuration was subsequently changed, at the user's request,
-to batch size 16 per GPU with accumulation 1 (effective batch 32). Warmup is now
-125 iterations to retain approximately 125 optimizer updates of warmup; the smoke
-configuration follows the new batch size and still performs eight optimizer updates.
-The new batch size is an estimate and has not been measured on GPUs; the completed
-job above used batch size 2 with accumulation 8.
-
-## Automatic single-GPU / DDP launch (2026-09-23)
-
-Job 4098515 failed before training because SLURM allocated one GPU while the L40S
-wrapper forced two training processes. The wrapper no longer fixes the process
-count. The shared HPC launcher now detects CUDA-visible GPUs: one uses Python
-with `--launcher none`; multiple GPUs use torchrun with one DDP process per GPU.
-An optional explicit `HYDROSTATE_GPUS_PER_NODE` remains a consistency check.
-The current SLURM default requests one L40S; `--gres=gpu:nvidia_l40s:2` requests two.
-Batch size stays 16 per GPU with accumulation 1, giving effective batch 16 or 32.
-Launcher regression tests simulate GPU visibility without running GPU training.
+- 全球 20,000 样本的七组补齐率、吞吐和各变量有效监督量。
+- 目标服务器 GPU 上的 batch size/吞吐实测和混合缺测批次一致性。
+  此前一次回归的 6 项缺测批次一致性失败尚未确定原因；后续及本轮完整回归未重现，
+  不能因此称其根因已修复。
+- 当前七输出契约的区域地图导出；旧区域推理工具仍为历史流程。
+- 独立站点验证和真实训练精度；产品一致性不等于独立 30 m 真值精度。

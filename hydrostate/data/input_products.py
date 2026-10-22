@@ -11,8 +11,9 @@ LANDSAT_SR_OFFSET = -0.2
 
 def profile_bands(profile):
     from hydrostate.data.gee.products import BANDS
+    from hydrostate.data.retrieval.contract import PROFILE
 
-    if profile not in {LEGACY_PROFILE, L2_PROFILE}:
+    if profile not in {LEGACY_PROFILE, L2_PROFILE, PROFILE}:
         raise ValueError(f"Unknown input profile: {profile}")
     return dict(BANDS, landsat=LANDSAT_SR_BANDS) if profile == L2_PROFILE else BANDS
 
@@ -20,7 +21,7 @@ def profile_bands(profile):
 def landsat_l2_pixels(dn, qa_pixel, qa_radsat, valid=None):
     """Do not clip negative water reflectance or mask the QA water bit."""
     dn = np.asarray(dn)
-    mask = ((qa_pixel.astype('uint16') & 63) == 0) & (qa_radsat == 0)
+    mask = ((qa_pixel.astype('uint16') & 31) == 0) & (qa_radsat == 0)
     mask &= (dn != 0).all(axis=0) & np.isfinite(dn).all(axis=0)
     if valid is not None:
         mask &= valid

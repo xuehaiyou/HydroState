@@ -7,7 +7,7 @@ from pathlib import Path
 from hydrostate.data.input_products import L2_PROFILE, LEGACY_PROFILE
 from hydrostate.data.regional.temporal import policy
 
-CONFIG_ROOT = Path(__file__).resolve().parents[3] / "configs/data"
+CONFIG_ROOT = Path(__file__).resolve().parents[3] / "configs/experiments/legacy/data"
 BACKENDS = ("drive", "pixels", "local")
 
 

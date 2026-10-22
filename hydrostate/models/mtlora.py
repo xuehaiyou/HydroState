@@ -216,6 +216,7 @@ class MTLoRAHydroStateModel(TemporalHydroStateModel):
 
     def __init__(self, land_time_policy="aligned_or_window", **kwargs):
         specs = resolve_tasks(kwargs.get("tasks"))
+        kwargs["tasks"] = task_config(specs)
         encoder = dict(kwargs["encoder"])
         if "tasks" in encoder and resolve_tasks(encoder["tasks"]) != specs:
             raise ValueError("Encoder tasks disagree with model tasks")
@@ -270,6 +271,9 @@ class MTLoRAHydroStateModel(TemporalHydroStateModel):
         aligned = (inputs["target_time"]["water"] == inputs["target_time"]["soil_moisture"]).all(
             dim=-1
         )
+        if coupling.ice_task is not None:
+            aligned &= (inputs["target_time"][coupling.ice_task]
+                        == inputs["target_time"]["soil_moisture"]).all(dim=-1)
         if self.land_time_policy == "require_aligned":
             torch._assert_async(
                 aligned.all(), "Observed land constraint requires matching WF/SM query times"
@@ -283,7 +287,12 @@ class MTLoRAHydroStateModel(TemporalHydroStateModel):
         if data_samples is None:
             # Inference without labels also must not mask SM with WF at another time.
             values = self._forward(inputs)
-            samples = self._land_samples(inputs, {})
+            observed = torch.stack([
+                inputs[f"{key}_valid"].bool().all(dim=2, keepdim=True).any(dim=1)
+                for key in self.encoder.input_keys
+            ]).any(dim=0)
+            prediction_valid = F.avg_pool2d(observed.float(), self.output_scale).eq(1)
+            samples = self._land_samples(inputs, dict(prediction_valid=prediction_valid))
             coupling = self.water_soil_coupling
             support = (
                 coupling.prepare(values, samples)
@@ -294,6 +303,7 @@ class MTLoRAHydroStateModel(TemporalHydroStateModel):
             for i in range(next(iter(values.values())).shape[0]):
                 item = {task: value[i] for task, value in values.items()}
                 item["metainfo"] = {}
+                item["prediction_valid"] = prediction_valid[i]
                 item["target_time"] = {
                     task: bounds[i] for task, bounds in inputs["target_time"].items()
                 }
@@ -304,10 +314,21 @@ class MTLoRAHydroStateModel(TemporalHydroStateModel):
                     item["soil_moisture_prediction_valid"] = support.pixel_valid[i]
                     item["sm_land_time_aligned"] = samples["sm_land_time_aligned"][i]
                 outputs.append(item)
-            return outputs
+            return self._derived_outputs(outputs)
         samples = self._land_samples(inputs, data_samples) if data_samples is not None else None
         outputs = super().predict(inputs, samples)
         if samples is not None and "sm_land_time_aligned" in samples:
             for i, output in enumerate(outputs):
                 output["sm_land_time_aligned"] = samples["sm_land_time_aligned"][i]
+        return self._derived_outputs(outputs)
+
+    @staticmethod
+    def _derived_outputs(outputs):
+        for item in outputs:
+            if all(name in item for name in ("et_water", "et_ice", "et_land", "snow_ice", "land")):
+                total = (item["water"] * item["et_water"] + item["snow_ice"] * item["et_ice"]
+                         + item["land"] * item["et_land"])
+                valid = item.get("prediction_valid", torch.ones_like(total, dtype=torch.bool))
+                item["et_total"] = total.masked_fill(~valid, float("nan"))
+                item["et_total_prediction_valid"] = valid
         return outputs

@@ -86,7 +86,7 @@ def test_multilevel_cosine_schedule_preserves_layer_ratios():
     from mmengine.config import Config
     from mmengine.optim.scheduler import CosineAnnealingLR
 
-    cfg = Config.fromfile("configs/hydrostate_multilevel.py")
+    cfg = Config.fromfile("configs/experiments/legacy/hydrostate_multilevel.py")
     optimizer = torch.optim.AdamW([
         dict(params=[torch.nn.Parameter(torch.zeros(1))], lr=1e-4 * 0.65**12),
         dict(params=[torch.nn.Parameter(torch.zeros(1))], lr=1e-4),

@@ -1,108 +1,67 @@
 # HydroState
 
-HydroState uses Sentinel-1, Sentinel-2, and Landsat time series with an
-OlmoEarth v1.2 Base encoder to jointly retrieve water fraction, surface soil
-moisture, and evapotranspiration. Training is driven by MMEngine; sampled and
-aligned image windows are read from sharded Zarr stores.
+Joint retrieval of water, snow/ice, land fractions, land soil moisture, and
+water/ice/land ET with OlmoEarth v1.2 Base. Current inputs are **five 8-day mean
+composites** of Sentinel-1, Sentinel-2 and Landsat, collected from GEE.
+Outputs are 30 m; product losses respect each label's observation support.
 
-## Paths
+## Start here
 
-- Code: `/home/xiaoz/HydroState`
-- Data, pretrained weights, and run outputs: `/fossfs/xiaozhen/HydroState`
-- S1 source: `/fossfs/QianWang/Download/Sentinel1/tile`
-- S2 source: `/fossfs/DATAPOOL/Sentinel2_L2`
-- Landsat source: `/fossfs/DATAPOOL/Landsat_L2`
-
-The raw sources are only read while creating sampled windows. Training reads
-the Zarr stores and `samples.parquet` manifest.
+- [Scientific and sampling specification](docs/RETRIEVAL_PIPELINE.md)
+- [Collect, prepare, train and validate](docs/DATA_PREPARATION.md)
+- [MTLoRA and shared-LoRA architectures](docs/MTLORA.md)
+- [Repository responsibilities](docs/REPOSITORY_STRUCTURE.md)
+- [Implementation and validation status](docs/IMPLEMENTATION_STATUS.md)
+- [All documentation](docs/README.md)
 
 ## Environment
 
-Use Python 3.12. The host Python 3.13 environment is intentionally not used.
+Use Python 3.12 and an activated `hydrostate` environment:
 
 ```bash
 conda create -n hydrostate python=3.12 -y
 conda activate hydrostate
-
-# Choose the PyTorch command that matches the cluster CUDA driver. For CUDA 12.8:
-pip install --index-url https://download.pytorch.org/whl/cu128 \
-  torch==2.9.1 torchvision==0.24.1
-
-cd /home/xiaoz/HydroState
-pip install -e ".[geo,gee,dev]"
+# Use the PyTorch wheel appropriate to the host CUDA driver.
+pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.9.1 torchvision==0.24.1
+pip install -e '.[geo,gee,dev]'
 ```
 
-The editable install above obtains the current official OlmoEarth and rslearn
-repositories. To refresh them explicitly later, run:
+Set `HYDROSTATE_MODEL_PATH` to an existing OlmoEarth-v1_2-Base bundle containing
+`config.json` and `weights.pth`. The collection process needs authorized Earth
+Engine access. Raw local SAFE/Landsat directories are not part of the current
+collection workflow.
+
+## Current commands
+
+Run from the repository root. Each stage is explicit; collection does not launch training.
 
 ```bash
-pip install "git+https://github.com/allenai/olmoearth_pretrain.git"
-pip install "git+https://github.com/allenai/rslearn.git"
+export HYDROSTATE_DATA_ROOT=/path/to/samples/retrieval_5x8_v1
+export HYDROSTATE_CANDIDATE_ROOT=/path/to/candidates/retrieval_5x8_v1
+export HYDROSTATE_MODEL_PATH=/path/to/OlmoEarth-v1_2-Base
+
+bash scripts/run_gee_sampling.sh --dry-run
+bash scripts/run_gee_sampling.sh
+python tools/validate_zarr.py "$HYDROSTATE_DATA_ROOT"
+python tools/data/compute_target_statistics.py --config configs/hydrostate_mtlora.py   --output "$HYDROSTATE_DATA_ROOT/target_stats.json" --num-workers 4
+CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/hydrostate_mtlora.py
+CUDA_VISIBLE_DEVICES=0 python tools/test.py configs/hydrostate_mtlora.py CHECKPOINT.pth
 ```
 
-Download and pin the v1.2 Base bundle:
+Use `configs/hydrostate_mtlora_shared.py` for the shared-LoRA control on identical
+data. [Current Slurm scripts](scripts/slurm) request one GPU and at most six CPUs;
+see the preparation guide for environment variables and release checks.
 
-```bash
-hf download allenai/OlmoEarth-v1_2-Base \
-  --local-dir /fossfs/xiaozhen/HydroState/pretrained/OlmoEarth-v1_2-Base
-```
+## One current contract
 
-## Commands
+[`hydrostate/data/retrieval/contract.py`](hydrostate/data/retrieval/contract.py)
+defines the version, tasks, input profile and array shapes. Collection, readers,
+training configs and release checks use this definition. Current entry points
+reject old sample contracts; they do not convert four-slot or variable-pack data.
 
-```bash
-python tools/validate_zarr.py configs/hydrostate_v1.py
-python tools/train.py configs/hydrostate_v1.py
-python tools/test.py configs/hydrostate_v1.py CHECKPOINT.pth
-```
-
-Distributed training:
-
-```bash
-torchrun --nproc_per_node=4 tools/train.py configs/hydrostate_v1.py --launcher pytorch
-```
-
-See `docs/DATA_SCHEMA.md` for the manifest and Zarr contract. Dataset creation
-is deliberately separate from training so input shards remain immutable and a
-new label family can be added without duplicating satellite imagery.
-
-Architecture variants, including progressive task-specific attention/adapters,
-auxiliary supervision and gated task interaction, are configured through
-`configs/hydrostate_staged.py`; the half-width version uses
-`configs/hydrostate_staged_light.py` (256 → 128 → 64 channels).
-The multilevel architecture uses `configs/hydrostate_multilevel.py`: OlmoEarth
-blocks 4/8/12, a shared 256 → 128 → 64 fusion decoder, zero-initialized task
-adapters on the 30 m grid, and one learned-strength sigmoid interaction.
-`hydrostate_multilevel_independent.py` disables interaction;
-`hydrostate_multilevel_shared.py` also disables adapters. These presets use the
-official layer-wise learning-rate mapping, including trainable input embeddings,
-and retain land-conditional SM supervision. Existing windows still provide
-window-mean SMAP weak supervision, not complete SMAP-footprint supervision.
-See [model architectures](docs/MODEL_ARCHITECTURES.md)
-for equations, ablations and configuration switches. Existing configs retain the
-original shared-decoder baseline.
-
-The opt-in `configs/hydrostate_shared_private.py` selects the new registered
-`SharedPrivateHydroStateModel`: frozen OlmoEarth weights, shared/private LoRA,
-and independent temporal prediction branches. Separate configs cover task
-specialization, independent-LoRA controls, and incremental LAI/LST adaptation.
-See [shared/private training and model selection](docs/SHARED_PRIVATE_MODEL.md)
-for configuration choices, checkpoint composition, and transfer commands.
-
-Local coverage indexing, station ingestion, and ready-to-submit SLURM jobs are
-documented in `docs/DATA_PREPARATION.md`.
-
-## Current implementation boundary
-
-The MMEngine training path, sampled-Zarr contract, coverage indexing and station
-ingestion are implemented. GEE sample-manifest generation and independent
-source-to-Zarr producers are the remaining data-pipeline stages.
-
-## Current global sampling workflow
-
-All imagery is now sampled from GEE; local source paths above describe the legacy
-workflow. Use `scripts/run_gee_sampling.sh` and see `docs/DATA_PREPARATION.md`
-for credentials and restart behavior. Inputs are 120×120 at 10 m and supervision
-is 40×40 at 30 m. Water uses 30 m fraction labels, ET uses area-weighted
-aggregation to complete native PML cells, and SMAP uses window-mean weak supervision.
-Three real samples passed GEE/Drive transfer and GPU forward checks. See
-[preparation instructions](docs/DATA_PREPARATION.md) for v3 sample conversion.
+Historical model configurations and commands are kept under
+[`configs/experiments/legacy`](configs/experiments/legacy),
+[`tools/legacy`](tools/legacy), [`scripts/legacy`](scripts/legacy), and
+[`docs/history`](docs/history). They preserve experiment context and are not
+current data preparation instructions. Model implementations remain available
+for controlled architecture comparisons.

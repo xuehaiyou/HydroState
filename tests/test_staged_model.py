@@ -15,7 +15,7 @@ from hydrostate.engine.layer_decay_constructor import OlmoEarthLayerDecayOptimWr
 from hydrostate.losses.uncertainty_nll import masked_standardized_mse
 from hydrostate.models import SharedUNetDecoder, StagedHydroStateModel, TaskGatedInteraction
 from hydrostate.models.hydrostate_model import combined_supervision_values
-from hydrostate.normalization import TASKS
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS
 from hydrostate.registry import MODELS
 
 
@@ -78,7 +78,7 @@ def test_shared_stages_preserve_baseline_output_and_checkpoint():
     ("hydrostate_staged_light_land_sm", [256, 128, 64]),
 ])
 def test_real_config_build_and_full_resolution(config_name, channels, target_statistics):
-    cfg = Config.fromfile(f"configs/{config_name}.py")
+    cfg = Config.fromfile(f"configs/experiments/legacy/{config_name}.py")
     assert cfg.model.decoder.channels == channels
     assert cfg.model.encoder.embedding_channels == 768
     cfg.model.encoder = dict(type="StagedTestEncoder")
@@ -200,7 +200,7 @@ def test_auxiliary_heads_only_execute_in_loss_mode(target_statistics):
 
 
 def test_config_options_select_math_and_per_task_auxiliary_weights(target_statistics):
-    cfg = Config.fromfile("configs/hydrostate_staged.py")
+    cfg = Config.fromfile("configs/experiments/legacy/hydrostate_staged.py")
     cfg.merge_from_dict({
         "model.decoder.attention.kind": "se",
         "model.decoder.adapter.kind": "depthwise",

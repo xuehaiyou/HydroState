@@ -11,11 +11,18 @@ from mmengine.runner import Runner
 from hydrostate.data.input_products import L2_PROFILE, LEGACY_PROFILE
 from hydrostate.data.model_inputs import input_keys
 from hydrostate.normalization import load_target_statistics, training_fingerprint
-from hydrostate.tasks import task_config
+from hydrostate.tasks import LEGACY_TASKS, task_config
 
 
 def configure_data_contract(cfg: Config) -> None:
-    """Fan out one optional task/pack configuration without changing legacy configs."""
+    """Validate the current contract, then bind tasks to every model/data consumer."""
+    if cfg.get("data_contract") is not None or any(
+        cfg.get(key, {}).get("dataset", {}).get("type") == "RetrievalDataset"
+        for key in ("train_dataloader", "val_dataloader", "test_dataloader")
+    ):
+        from hydrostate.data.retrieval.configuration import require_current_config
+
+        require_current_config(cfg)
     profile = cfg.get("input_profile", cfg.model.get("encoder", {}).get(
         "input_profile", LEGACY_PROFILE))
     input_keys(profile)
@@ -61,7 +68,7 @@ def configure_data_contract(cfg: Config) -> None:
 def configure_target_statistics(cfg: Config, training: bool) -> None:
     """Freeze one training-statistics version into the model and both evaluators."""
     configure_data_contract(cfg)
-    tasks = cfg.model.get("tasks")
+    tasks = cfg.model.get("tasks", LEGACY_TASKS)
     source = cfg.model.target_statistics
     if source == "__manifest__":
         manifest = cfg.train_dataloader.dataset.manifest
@@ -78,9 +85,8 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
             "tasks", "input_packs", "label_packs", "target_time_queries", "input_profile")) or (
             dataset.get("output_scale", 3) != 3
         ):
-            from hydrostate.datasets.zarr_dataset import HydroStateZarrDataset
-
-            loaded = HydroStateZarrDataset(**{k: v for k, v in dataset.items() if k != "type"})
+            from hydrostate.registry import DATASETS
+            loaded = DATASETS.build(dict(dataset))
             contract = loaded.data_contract
             selected_inputs = {name for pack in loaded.input_packs for name in pack.variables}
             if loaded.input_profile == L2_PROFILE:

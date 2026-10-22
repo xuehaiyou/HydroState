@@ -219,7 +219,7 @@ class NativeReader:
         if key == "s2":
             valid &= ~np.isin(values["SCL"], [0, 1, 3, 8, 9, 10])
         elif key == "landsat":
-            valid &= (values["QA_PIXEL"] & 63) == 0
+            valid &= (values["QA_PIXEL"] & 31) == 0
             valid &= values["QA_RADSAT"] == 0
         return np.stack([values[b] for b in BANDS[key]]).astype("float32"), valid
 

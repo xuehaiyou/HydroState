@@ -50,6 +50,8 @@ class WaterSoilCoupling:
     supervision_source: str = "observed"
     min_land_fraction: float = 0.01
     min_window_land_fraction: float = 0.01
+    min_known_fraction: float = 1.0
+    ice_task: str | None = None
 
     def __post_init__(self):
         if not isinstance(self.enabled, bool):
@@ -60,6 +62,8 @@ class WaterSoilCoupling:
             value = getattr(self, name)
             if not math.isfinite(value) or not 0 <= value < 1:
                 raise ValueError(f"{name} must be finite and in [0, 1)")
+        if not 0 < self.min_known_fraction <= 1:
+            raise ValueError("min_known_fraction must be in (0,1]")
 
     def prepare(self, outputs, samples=None, *, supervision=False):
         samples = {} if samples is None else samples
@@ -76,18 +80,30 @@ class WaterSoilCoupling:
             if samples["water_valid"].shape != reference.shape:
                 raise ValueError("water_valid must share the output grid")
             source_valid = source_valid & samples["water_valid"].bool()
+        ice = torch.zeros_like(water)
+        if self.ice_task is not None:
+            source = samples if observed else outputs
+            ice = source[self.ice_task].detach().float()
+            if ice.shape != reference.shape:
+                raise ValueError("Ice cover must share the SM output grid")
+            source_valid &= torch.isfinite(ice) & (ice >= 0) & ((water + ice) <= 1 + 1e-6)
+            if observed:
+                source_valid &= samples[f"{self.ice_task}_valid"].bool()
         known = source_valid & support.bool()
         # No new land-cover data is required. A future trusted domain mask can
         # exclude non-soil surfaces; without it, non-water is only a soil proxy.
-        domain = samples.get("soil_moisture_domain_valid", torch.ones_like(known))
+        domain = (samples.get("soil_moisture_domain_valid", torch.ones_like(known))
+                  if supervision else torch.ones_like(known))
         if domain.shape != reference.shape:
             raise ValueError("soil_moisture_domain_valid must share the output grid")
-        land_fraction = (1 - water).masked_fill(~known, 0)
+        land_fraction = (1 - water - ice).clamp(min=0).masked_fill(~known, 0)
         pixel_valid = known & domain.bool() & (land_fraction > self.min_land_fraction)
         weights = land_fraction.masked_fill(~pixel_valid, 0)
         total = weights.sum(dim=(-2, -1), keepdim=True)
-        area = support.sum(dim=(-2, -1), keepdim=True)
-        complete = ~(support.bool() & ~source_valid).any(dim=(-2, -1), keepdim=True)
+        area = torch.ones_like(support).sum(dim=(-2, -1), keepdim=True)
+        known_fraction = known.sum(dim=(-2, -1), keepdim=True) / area.clamp(min=1)
+        complete = (known_fraction > self.min_known_fraction if self.min_known_fraction < 1
+                    else known_fraction == 1)
         valid = complete & (total > 0) & (total >= self.min_window_land_fraction * area)
         return SoilMoistureSupport(
             land_fraction, pixel_valid, weights, total.masked_fill(total == 0, 1), valid, known,

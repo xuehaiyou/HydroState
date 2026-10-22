@@ -11,23 +11,24 @@ from mmengine.config import Config
 from hydrostate.cli import configure_data_contract
 from hydrostate.data.gee_labels import COVER_NAMES, containing_interval, quality_masks
 from hydrostate.data.native_support import NativeSupport
-from hydrostate.datasets.zarr_dataset import HydroStateZarrDataset, hydro_collate
+from hydrostate.datasets.collate import hydro_collate
+from hydrostate.legacy.dataset import HydroStateZarrDataset
 from hydrostate.engine.visualization_hook import comparison_maps
 from hydrostate.models.data_preprocessor import HydroDataPreprocessor
 from hydrostate.models.hydrostate_model import prepare_supervision, supervision_values
 from hydrostate.registry import MODELS
 from hydrostate.storage import VariablePackWriter
 from tests import test_variable_packs as pack_fixtures
-from tools.data.compute_target_statistics import compute_statistics
-from tools.data.extend_gee_labels import Checkpoint, select_rows
-from tools.data.validate_gee_labels import validate_training_support
+from hydrostate.legacy.statistics import compute_statistics
+from tools.legacy.data.extend_gee_labels import Checkpoint, select_rows
+from tools.legacy.data.validate_gee_labels import validate_training_support
 
 
 @pytest.mark.parametrize("stations", ["absent", "masked", "valid"])
 def test_validation_matches_product_and_station_support(stations):
-    from hydrostate.tasks import task_config
+    from hydrostate.tasks import LEGACY_TASKS, task_config
 
-    specs = task_config() | dict(lai=dict(support="native", grid="native"),
+    specs = task_config(LEGACY_TASKS) | dict(lai=dict(support="native", grid="native"),
                                 lst=dict(support="pixel", grid="output"))
     support = torch.ones(2, 1, 2, 2, dtype=torch.bool)
     support[0, 0, 1, 1] = False
@@ -221,7 +222,7 @@ def test_checkpoint_resume_contract_and_ecosystem_configuration(tmp_path):
     cache.close()
     with pytest.raises(ValueError, match="parameters/manifest differ"):
         Checkpoint(path, dict(version="2"))
-    cfg = Config.fromfile("configs/hydrostate_ecosystem.py")
+    cfg = Config.fromfile("configs/experiments/legacy/hydrostate_ecosystem.py")
     configure_data_contract(cfg)
     assert len(cfg.tasks) == 16
     assert set(cfg.tasks) == set(cfg.model.heads)

@@ -1,8 +1,8 @@
 """Zarr schema and validation helpers."""
 
 from .packs import VariablePackWriter
-from .schema import INPUT_ARRAYS, TARGET_ARRAYS, Schema
+from .schema import ArraySpec, ShardSchema
 from .writer import SampleShardWriter
 
-__all__ = ["INPUT_ARRAYS", "TARGET_ARRAYS", "SampleShardWriter", "Schema", "VariablePackWriter"]
+__all__ = ["ArraySpec", "ShardSchema", "SampleShardWriter", "VariablePackWriter"]
 

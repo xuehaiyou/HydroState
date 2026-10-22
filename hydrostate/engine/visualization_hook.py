@@ -13,7 +13,7 @@ from mmengine.hooks import Hook
 from mmengine.runner import IterBasedTrainLoop
 
 from hydrostate.registry import HOOKS
-from hydrostate.tasks import resolve_tasks
+from hydrostate.tasks import LEGACY_TASKS, resolve_tasks
 
 
 def _masked(values, valid):
@@ -86,7 +86,7 @@ class HydroVisualizationHook(Hook):
     """
 
     def __init__(self, num_samples=4, interval=1, out_dir="visualizations", et_vmax=10.0,
-                 tasks=None, task_styles=None):
+                 tasks=LEGACY_TASKS, task_styles=None):
         if not isinstance(num_samples, int) or num_samples < 0:
             raise ValueError("num_samples must be a nonnegative integer (0 disables plotting)")
         if not isinstance(interval, int) or interval < 1:

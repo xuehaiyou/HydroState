@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from hydrostate.models.task_branches import StagedTaskDecoder, TaskGatedInteraction
-from hydrostate.normalization import TASKS
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS
 
 
 @pytest.fixture(autouse=True)

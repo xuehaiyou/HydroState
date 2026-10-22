@@ -8,7 +8,7 @@ from mmengine.hooks import Hook
 from mmengine.registry import HOOKS
 
 from hydrostate.losses import UncertaintyWeightedNLL
-from hydrostate.normalization import TASKS
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS
 
 
 @HOOKS.register_module()

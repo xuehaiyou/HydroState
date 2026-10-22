@@ -15,9 +15,9 @@ from mmengine.runner import load_checkpoint
 from torch.utils.data import DataLoader, Subset
 import hydrostate.experiments.sm_causal  # noqa
 from hydrostate.registry import MODELS, DATASETS
-from hydrostate.datasets.zarr_dataset import hydro_collate
+from hydrostate.datasets.collate import hydro_collate
 from hydrostate.models.hydrostate_model import supervision_values
-from hydrostate.normalization import TASKS
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS
 
 
 def code_hash():

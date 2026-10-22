@@ -35,9 +35,9 @@ def variables(capacity=64):
 
 
 def tasks():
-    from hydrostate.tasks import task_config
+    from hydrostate.tasks import LEGACY_TASKS, task_config
 
-    return (task_config()
+    return (task_config(LEGACY_TASKS)
             | {name: dict(support="pixel", grid="input") for name in COVER_NAMES[1:]}
             | {name: dict(support="native", grid="native") for name in NATIVE_NAMES}
             | {"lst": dict(support="pixel", grid="output")})

@@ -13,7 +13,7 @@ import torch
 import zarr
 from affine import Affine
 
-from hydrostate.data.gee.workflows import samples
+from hydrostate.legacy import sampling as samples
 from hydrostate.data.merge_samples import merge
 from hydrostate.data.regional.common import assemble_inputs
 from hydrostate.data.sampling_manifest import geographic_split
@@ -44,7 +44,7 @@ def test_new_default_and_explicit_legacy_and_invalid_recency():
         ("2025-01-01", "2025-01-09"), ("2025-01-09", "2025-01-17"),
     ]
     old = SimpleNamespace(
-        sampling_config=Path("configs/data/sampling/past16d.json"), reingest_from=None,
+        sampling_config=Path("configs/experiments/legacy/data/sampling/past16d.json"), reingest_from=None,
     )
     samples.resolve_sampling_config(old)
     assert {k: getattr(old, k) for k in LEGACY_SAMPLE_CONFIG} == LEGACY_SAMPLE_CONFIG
@@ -185,7 +185,7 @@ def test_reingestion_cannot_relabel_past_inputs_as_centered(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps(LEGACY_SAMPLE_CONFIG))
     with pytest.raises(ValueError, match="cannot change observation dates"):
         samples.resolve_sampling_config(SimpleNamespace(
-            sampling_config=Path("configs/data/sampling/centered8d.json"),
+            sampling_config=Path("configs/experiments/legacy/data/sampling/centered8d.json"),
             reingest_from=[tmp_path],
         ))
 
@@ -198,7 +198,7 @@ def test_cli_refuses_new_policy_in_old_directory_before_network(tmp_path, monkey
 
     monkeypatch.setitem(sys.modules, "ee", SimpleNamespace(Initialize=no_network))
     base = ["prepare_gee_samples.py", "--project", "test", "--output", str(tmp_path), "--plan-only"]
-    legacy = base + ["--sampling-config", "configs/data/sampling/past16d.json"]
+    legacy = base + ["--sampling-config", "configs/experiments/legacy/data/sampling/past16d.json"]
     monkeypatch.setattr(sys, "argv", legacy)
     with pytest.raises(RuntimeError, match="offline initialization sentinel"):
         samples.main()
@@ -219,8 +219,8 @@ def test_cli_refuses_new_policy_in_old_directory_before_network(tmp_path, monkey
 
 
 def test_training_and_regional_centered_presets_agree():
-    training = json.loads(Path("configs/data/sampling/centered8d.json").read_text())
-    regional = json.loads(Path("configs/inference/poyang_centered8d.json").read_text())
+    training = json.loads(Path("configs/experiments/legacy/data/sampling/centered8d.json").read_text())
+    regional = json.loads(Path("configs/experiments/legacy/inference/poyang_centered8d.json").read_text())
     for key in ("temporal_sampling", "min_active_slots", "latest_days"):
         assert training[key] == regional[key]
     assert training["min_valid"] == regional["min_valid_fraction"] == 0.5

@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 import zarr
 
-from hydrostate.data.gee_sampling import fingerprint
+from hydrostate.legacy.sampling import fingerprint
 from hydrostate.data.merge_samples import COMPATIBILITY, merge, validate_shards
 from hydrostate.data.sampling_manifest import (
     SamplingConstraints,
@@ -16,7 +16,7 @@ from hydrostate.data.sampling_manifest import (
     sample_key,
     source_contract,
 )
-from hydrostate.storage import Schema
+from hydrostate.legacy.schema import LegacySchema as Schema
 
 
 def sample(sid='a', x=0, day='2020-01-01'):
@@ -146,7 +146,7 @@ def test_planner_excludes_old_windows_and_keeps_split_seed(tmp_path, monkeypatch
     from types import SimpleNamespace
     from unittest.mock import MagicMock
 
-    import hydrostate.data.gee_sampling as sampling
+    import hydrostate.legacy.sampling as sampling
 
     old_row = sample()
     old_row['crs'] = 'EPSG:32633'

@@ -115,7 +115,7 @@ def test_pooling_conditions_one_observation_and_ignores_padding():
 
 
 def test_new_config_keeps_all_tasks_and_explicit_time_contract():
-    cfg = Config.fromfile("configs/hydrostate_ecosystem_temporal.py")
+    cfg = Config.fromfile("configs/experiments/legacy/hydrostate_ecosystem_temporal.py")
     configure_data_contract(cfg)
     assert cfg.model.type == "TemporalHydroStateModel"
     assert cfg.model.encoder.type == "TemporalOlmoEarthEncoder"

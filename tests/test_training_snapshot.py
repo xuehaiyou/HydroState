@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from tools.data.prepare_training_snapshot import select_samples
+from tools.legacy.data.prepare_training_snapshot import select_samples
 
 
 def sample_table(count=120):

@@ -11,11 +11,11 @@ import torch
 from torch.utils.data import Sampler
 from mmengine.dist import get_dist_info
 
-from hydrostate.datasets.zarr_dataset import HydroStateZarrDataset
+from hydrostate.legacy.dataset import HydroStateZarrDataset
 from hydrostate.losses.uncertainty_nll import UncertaintyWeightedNLL, masked_standardized_mse_sum
 from hydrostate.models.hydrostate_model import HydroStateModel
 from hydrostate.models.olmoearth_encoder import OlmoEarthEncoder, INPUT_KEYS, MODALITIES
-from hydrostate.normalization import TASKS
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS
 from hydrostate.registry import DATASETS, DATA_SAMPLERS, MODELS
 
 

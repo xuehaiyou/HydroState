@@ -9,7 +9,7 @@ import torch
 from torch import nn
 
 from hydrostate.registry import MODELS
-from hydrostate.tasks import resolve_tasks
+from hydrostate.tasks import LEGACY_TASKS, resolve_tasks
 
 from .multilevel_temporal_model import MultiLevelTemporalOlmoEarthEncoder
 from .shared_private_lora import (
@@ -23,7 +23,7 @@ from .shared_private_lora import (
 
 @MODELS.register_module()
 class SharedPrivateOlmoEarthEncoder(MultiLevelTemporalOlmoEarthEncoder):
-    def __init__(self, tasks=None, shared_rank=8, private_rank=8,
+    def __init__(self, tasks=LEGACY_TASKS, shared_rank=8, private_rank=8,
                  target_modules=("q", "v"), gate_init=0.5, lora_scale=1.0,
                  gradient_checkpointing=False, shared_gate_mode="learned", **kwargs):
         # Install checkpoints after adapters, with the task captured explicitly.

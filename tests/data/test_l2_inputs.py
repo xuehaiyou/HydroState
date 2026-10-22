@@ -19,22 +19,23 @@ from hydrostate.data.local.reader import RasterReader
 from hydrostate.data.regional.common import assemble_inputs
 from hydrostate.data.regional.local import prepare_region_local
 from hydrostate.storage.scene_cache import SceneCache
-from tools.data.extend_gee_labels import Checkpoint
-from tools.data.extend_gee_landsat_l2 import publish
+from tools.legacy.data.extend_gee_labels import Checkpoint
+from tools.legacy.data.extend_gee_landsat_l2 import publish
 
 
 def test_sr_quality_preserves_water_and_negative_reflectance():
     dn = np.full((7, 2, 4), 5000, 'uint16')
     qa = np.array([[128, 0, 8, 32], [1, 2, 4, 16]], 'uint16')
     values, valid = landsat_l2_pixels(dn, qa, np.zeros_like(qa))
-    assert valid.tolist() == [[True, True, False, False], [False] * 4]
+    assert valid.tolist() == [[True, True, False, True], [False] * 4]
     np.testing.assert_allclose(values[:, 0, :2], -0.0625)
     assert (values[:, ~valid] == 0).all()
     dn[3, 0, 0] = 0
     assert not landsat_l2_pixels(dn, qa, np.zeros_like(qa))[1][0, 0]
     saturated = np.zeros_like(qa)
     saturated[0, 1] = 1
-    assert not landsat_l2_pixels(dn, qa, saturated)[1].any()
+    assert landsat_l2_pixels(dn, qa, saturated)[1].tolist() == [
+        [False, False, False, True], [False] * 4]
 
 
 def test_assets_must_match_original_l1_collection():

@@ -10,7 +10,7 @@ from torch import nn
 
 from hydrostate.normalization import load_target_statistics
 from hydrostate.registry import MODELS
-from hydrostate.tasks import resolve_tasks
+from hydrostate.tasks import LEGACY_TASKS, resolve_tasks
 
 
 def global_observation_means(local_sums, counts, count_indices):
@@ -74,7 +74,7 @@ class UncertaintyWeightedNLL(nn.Module):
     local gradients by world size compensates for DDP's gradient averaging.
     """
 
-    def __init__(self, target_statistics: str | dict, min_variance: float = 1e-6, tasks=None):
+    def __init__(self, target_statistics: str | dict, min_variance: float = 1e-6, tasks=LEGACY_TASKS):
         super().__init__()
         if not math.isfinite(min_variance) or not 0 < min_variance < 1:
             raise ValueError("min_variance must be finite and in (0, 1)")
@@ -103,7 +103,7 @@ class UncertaintyWeightedNLL(nn.Module):
         prediction, target, valid = torch.broadcast_tensors(prediction, target, valid.bool())
         return global_observation_mean(self.local_sum(task, prediction, target, valid), valid.sum())
 
-    def local_sum(self, task, prediction, target, valid):
+    def local_sum(self, task, prediction, target, valid, weight=None):
         """Fixed-shape NLL sum; leave shared normalization to the caller."""
         index = self.tasks.index(task)
         prediction, target, valid = _masked_inputs(prediction, target, valid)
@@ -120,6 +120,8 @@ class UncertaintyWeightedNLL(nn.Module):
             variance.log() + (standardized_prediction - standardized_target).square() / variance
         ) + 0.5 * math.log(2 * math.pi)
         # Also mask the normalizing constant and variance penalty for missing data.
+        if weight is not None:
+            value = value * weight.detach().float().masked_fill(~valid, 0)
         return value.masked_fill(~valid, 0).sum()
 
     def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):

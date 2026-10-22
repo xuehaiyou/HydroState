@@ -24,7 +24,7 @@ from hydrostate.data.temporal_sampling import (
     sample_row_config,
     sample_temporal_config,
 )
-from hydrostate.storage import Schema
+from hydrostate.legacy.schema import LegacySchema as Schema
 
 LOG = logging.getLogger(__name__)
 COMPATIBILITY = ('schema_version', 'normalization', 'normalization_hash',

@@ -14,7 +14,7 @@ from hydrostate.data.gee.products import BANDS
 from hydrostate.data.gee.selection import select_window
 from hydrostate.data.input_products import L2_PROFILE
 from hydrostate.inference.planning import windows
-from hydrostate.storage.schema import Schema
+from hydrostate.legacy.schema import LegacySchema as Schema
 
 LOG = logging.getLogger(__name__)
 

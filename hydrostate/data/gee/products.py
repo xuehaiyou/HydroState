@@ -33,7 +33,7 @@ def prepare(ee, key, image):
             valid = valid.And(scl.neq(code))
         return image.select(BANDS[key]).updateMask(valid)
     if key == "landsat":
-        valid = image.select("QA_PIXEL").bitwiseAnd(63).eq(0)
+        valid = image.select("QA_PIXEL").bitwiseAnd(31).eq(0)
         valid = valid.And(image.select("QA_RADSAT").eq(0))
         return image.select(BANDS[key]).updateMask(valid)
     if key == "dw":

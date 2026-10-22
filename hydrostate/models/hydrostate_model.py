@@ -14,12 +14,12 @@ from hydrostate.losses.uncertainty_nll import (
     masked_standardized_mse_sum,
 )
 from hydrostate.registry import MODELS
-from hydrostate.tasks import resolve_tasks, task_config
+from hydrostate.tasks import LEGACY_TASKS, resolve_tasks, task_config
 
 from .water_soil_coupling import WaterSoilCoupling, weighted_sm_mean
 
 
-def supervision_values(task, prediction, samples, sm_support=None, tasks=None):
+def supervision_values(task, prediction, samples, sm_support=None, tasks=LEGACY_TASKS):
     """Return predictions and labels on the same observational support."""
     prediction = prediction.float()  # Stable reductions under BF16 inference/training.
     support = samples.get("prediction_valid", torch.ones_like(prediction, dtype=torch.bool))
@@ -28,7 +28,9 @@ def supervision_values(task, prediction, samples, sm_support=None, tasks=None):
         if samples[task].shape != prediction.shape:
             raise ValueError(f"Pixel task {task} must match the model output grid")
         return prediction, samples[task], samples[f"{task}_valid"] & support
-    if spec.support == "window_mean":
+    if spec.support in {"window_mean", "tile_mean_weak"}:
+        if spec.support == "tile_mean_weak" and sm_support is None:
+            raise ValueError("SM weak supervision requires observed land/ice support")
         if task == "soil_moisture" and sm_support is not None:
             return (sm_support.project(prediction), samples[task],
                     samples[f"{task}_valid"] & sm_support.valid)
@@ -45,7 +47,7 @@ def supervision_values(task, prediction, samples, sm_support=None, tasks=None):
     return pooled, samples[f"{task}_native_value"], valid
 
 
-def site_supervision_values(task, prediction, samples, sm_support=None, tasks=None):
+def site_supervision_values(task, prediction, samples, sm_support=None, tasks=LEGACY_TASKS):
     """Optional station observation on a completely observed, nonempty footprint."""
     index = resolve_tasks(tasks)[task].station_index
     if index is None or not all(
@@ -70,7 +72,7 @@ def site_supervision_values(task, prediction, samples, sm_support=None, tasks=No
     return pooled, target, valid
 
 
-def combined_supervision_values(task, prediction, samples, sm_support=None, tasks=None):
+def combined_supervision_values(task, prediction, samples, sm_support=None, tasks=LEGACY_TASKS):
     """Use identical product and optional station support for every head."""
     product = supervision_values(task, prediction, samples, sm_support, tasks)
     site = site_supervision_values(task, prediction, samples, sm_support, tasks)
@@ -96,10 +98,10 @@ class PreparedTaskSupervision:
 
     def project(self, prediction):
         prediction = prediction.float()
-        kind = self.kind or resolve_tasks()[self.task].support
+        kind = self.kind or LEGACY_TASKS[self.task].support
         if kind == "pixel":
             pooled = prediction
-        elif kind == "window_mean":
+        elif kind in {"window_mean", "tile_mean_weak"}:
             if self.weights is not None:
                 pooled = weighted_sm_mean(prediction, self.weights, self.denominator)
             else:
@@ -117,7 +119,7 @@ class PreparedTaskSupervision:
         return pooled
 
 
-def prepare_supervision(outputs, samples, sm_support=None, tasks=None):
+def prepare_supervision(outputs, samples, sm_support=None, tasks=LEGACY_TASKS):
     """Compute support, completeness and counts once per batch, never across batches."""
     specs = resolve_tasks(tasks)
     reference = next(iter(outputs.values()))
@@ -144,7 +146,9 @@ def prepare_supervision(outputs, samples, sm_support=None, tasks=None):
                 raise ValueError(f"Pixel task {task} must match the model output grid")
             target, valid = samples[task], samples[f"{task}_valid"] & support
             shape = prediction.shape
-        elif spec.support == "window_mean":
+        elif spec.support in {"window_mean", "tile_mean_weak"}:
+            if spec.support == "tile_mean_weak" and sm_support is None:
+                raise ValueError("SM weak supervision requires observed land/ice support")
             if sm_support is None or task != "soil_moisture":
                 count = support.sum(dim=(-2, -1), keepdim=True)
                 denominator = count.clamp(min=1)
@@ -194,12 +198,18 @@ class HydroStateModel(BaseModel):
         data_preprocessor: dict[str, Any] | None = None,
         init_cfg: dict[str, Any] | None = None,
         water_soil_coupling: dict[str, Any] | None = None,
-        tasks: dict | None = None,
+        tasks: dict | None = LEGACY_TASKS,
         input_fusion: dict | None = None,
         fraction_groups: list[list[str]] | None = None,
+        task_loss_weights: dict[str, float] | None = None,
     ) -> None:
         self.task_specs = resolve_tasks(tasks)
         self.tasks = tuple(self.task_specs)
+        self.task_loss_weights = {name: float((task_loss_weights or {}).get(name, 1.))
+                                  for name in self.tasks}
+        if any(value < 0 or not torch.isfinite(torch.tensor(value))
+               for value in self.task_loss_weights.values()):
+            raise ValueError("Task loss weights must be finite and nonnegative")
         self.input_profile = encoder.get("input_profile", LEGACY_PROFILE)
         if data_preprocessor is not None:
             data_preprocessor = dict(data_preprocessor)
@@ -279,7 +289,7 @@ class HydroStateModel(BaseModel):
         return self._loss_from_outputs(outputs, data_samples)
 
     def _loss_from_outputs(self, outputs, data_samples, auxiliary=None, auxiliary_weights=None):
-        task_specs = getattr(self, "task_specs", None)
+        task_specs = getattr(self, "task_specs", LEGACY_TASKS)
         all_tasks = tuple(resolve_tasks(task_specs))
         task_specs = {task: spec for task, spec in resolve_tasks(task_specs).items()
                       if task in outputs}
@@ -294,8 +304,10 @@ class HydroStateModel(BaseModel):
         for index, task in enumerate(tasks):
             plan = prepared[task]
             names.append(f"loss_{task}")
+            sample_weight = data_samples.get(f"{task}_weight")
+            options = {} if sample_weight is None else dict(weight=sample_weight)
             sums.append(self.loss_module.local_sum(
-                task, plan.project(outputs[task]), plan.target, plan.valid
+                task, plan.project(outputs[task]), plan.target, plan.valid, **options
             ))
             count_indices.append(index)
         for task, prediction in (auxiliary or {}).items():
@@ -314,7 +326,8 @@ class HydroStateModel(BaseModel):
         objectives = dict(zip(names, values))
         losses: dict[str, torch.Tensor] = {}
         for index, task in enumerate(tasks):
-            losses[f"loss_{task}"] = objectives[f"loss_{task}"]
+            weight = getattr(self, "task_loss_weights", {}).get(task, 1.)
+            losses[f"loss_{task}"] = weight * objectives[f"loss_{task}"]
             losses[f"valid_count_{task}"] = counts[index]
             variance = self.loss_module.variance(task).detach()
             losses[f"variance_{task}"] = variance
@@ -326,7 +339,7 @@ class HydroStateModel(BaseModel):
     def predict(
         self, inputs: dict[str, torch.Tensor], data_samples: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
-        task_specs = getattr(self, "task_specs", None)
+        task_specs = getattr(self, "task_specs", LEGACY_TASKS)
         outputs = self._forward(inputs)
         task_specs = {task: spec for task, spec in resolve_tasks(task_specs).items()
                       if task in outputs}

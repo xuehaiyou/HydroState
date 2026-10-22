@@ -9,7 +9,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from hydrostate.registry import MODELS
-from hydrostate.tasks import resolve_tasks
+from hydrostate.tasks import LEGACY_TASKS, resolve_tasks
 
 from .decoder import SharedUNetDecoder
 
@@ -133,7 +133,7 @@ class StagedTaskDecoder(SharedUNetDecoder):
         attention=None,
         adapter=None,
         merge_ops=True,
-        tasks=None,
+        tasks=LEGACY_TASKS,
     ):
         super().__init__(in_channels=in_channels, channels=channels, scale_factor=scale_factor)
         self.tasks = tuple(resolve_tasks(tasks))
@@ -213,7 +213,7 @@ class TaskGatedInteraction(nn.Module):
     """
 
     def __init__(self, channels=128, mode="sigmoid", residual_scale=0.1, merge_ops=True,
-                 learnable_scale=False, tasks=None):
+                 learnable_scale=False, tasks=LEGACY_TASKS):
         super().__init__()
         if mode not in ("none", "sigmoid", "softmax"):
             raise ValueError(f"Unknown interaction mode: {mode}")

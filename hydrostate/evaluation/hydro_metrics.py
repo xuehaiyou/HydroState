@@ -11,14 +11,14 @@ from mmengine.evaluator import BaseMetric
 
 from hydrostate.normalization import load_target_statistics
 from hydrostate.registry import METRICS
-from hydrostate.tasks import resolve_tasks
+from hydrostate.tasks import LEGACY_TASKS, resolve_tasks
 
 
 @METRICS.register_module()
 class HydroStateMetric(BaseMetric):
     default_prefix = None
 
-    def __init__(self, target_statistics, tasks=None, evaluated_tasks=None,
+    def __init__(self, target_statistics, tasks=LEGACY_TASKS, evaluated_tasks=None,
                  sample_metrics_path=None, **kwargs):
         super().__init__(**kwargs)
         configured = tuple(resolve_tasks(tasks))
@@ -50,12 +50,19 @@ class HydroStateMetric(BaseMetric):
                     continue
                 error = prediction.masked_select(valid) - target.masked_select(valid)
                 values = target.masked_select(valid)
+                estimates = prediction.masked_select(valid)
                 result[f"{task}/count"] = float(error.numel())
                 result[f"{task}/sum_abs"] = float(error.abs().sum())
                 result[f"{task}/sum_sq"] = float((error**2).sum())
                 result[f"{task}/sum_err"] = float(error.sum())
                 result[f"{task}/sum_y"] = float(values.sum())
                 result[f"{task}/sum_y2"] = float((values**2).sum())
+                result[f"{task}/sum_x"] = float(estimates.sum())
+                result[f"{task}/sum_x2"] = float((estimates**2).sum())
+                result[f"{task}/sum_xy"] = float((estimates * values).sum())
+            info = sample.get("metainfo", {})
+            if "frequency_bin" in info:
+                result["frequency_bin"] = str(info["frequency_bin"])
             if self.sample_metrics_path is not None:
                 info = sample.get("metainfo", {})
                 result["sample_id"] = str(info["sample_id"])
@@ -73,7 +80,8 @@ class HydroStateMetric(BaseMetric):
         for task in self.tasks:
             totals = {
                 key: sum(item.get(f"{task}/{key}", 0.0) for item in results)
-                for key in ("count", "sum_abs", "sum_sq", "sum_err", "sum_y", "sum_y2")
+                for key in ("count", "sum_abs", "sum_sq", "sum_err", "sum_y", "sum_y2",
+                            "sum_x", "sum_x2", "sum_xy")
             }
             count = totals["count"]
             if count == 0:
@@ -83,6 +91,11 @@ class HydroStateMetric(BaseMetric):
             rmse = math.sqrt(mse)
             bias = totals["sum_err"] / count
             total_variance = totals["sum_y2"] - totals["sum_y"] ** 2 / count
+            prediction_variance = totals["sum_x2"] - totals["sum_x"] ** 2 / count
+            covariance = totals["sum_xy"] - totals["sum_x"] * totals["sum_y"] / count
+            correlation = (covariance / math.sqrt(total_variance * prediction_variance)
+                           if total_variance > 1e-12 and prediction_variance > 1e-12
+                           else float("nan"))
             r2 = (
                 1.0 - totals["sum_sq"] / total_variance
                 if count > 1 and total_variance > 1e-12 * max(totals["sum_y2"], 1.0)
@@ -94,11 +107,23 @@ class HydroStateMetric(BaseMetric):
                     f"{task}_rmse": rmse,
                     f"{task}_bias": bias,
                     f"{task}_r2": r2,
+                    f"{task}_ubrmse": math.sqrt(max(0., mse - bias**2)),
+                    f"{task}_correlation": correlation,
+                    f"{task}_count": count,
                 }
             )
             rmse_values.append(rmse / self.task_scales[task])
         # Keep model selection fixed: use training std, never learned task variance.
         metrics["hydro_score"] = -sum(rmse_values) / len(rmse_values) if rmse_values else -math.inf
+        # Bin-specific metrics never change the overall model-selection score.
+        for group in sorted({row["frequency_bin"] for row in results if "frequency_bin" in row}):
+            rows = [row for row in results if row.get("frequency_bin") == group]
+            for task in self.tasks:
+                count = sum(row.get(f"{task}/count", 0.) for row in rows)
+                metrics[f"frequency_{group}/{task}_count"] = count
+                if count:
+                    square = sum(row.get(f"{task}/sum_sq", 0.) for row in rows)
+                    metrics[f"frequency_{group}/{task}_rmse"] = math.sqrt(square / count)
         if any(item.get("sm_coupling/enabled", 0) for item in results):
             metrics["soil_moisture_observation_count"] = sum(
                 item.get("soil_moisture/count", 0.0) for item in results

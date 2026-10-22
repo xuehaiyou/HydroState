@@ -9,9 +9,9 @@ import pytest
 from mmengine.config import Config
 
 from hydrostate.cli import configure_data_contract
-from tools import dispatch_sharing_ablation as dispatch
-from tools import submit_sharing_ablation as submit
-from tools.summarize_sharing_ablation import paired_summary, summarize
+from tools.legacy import dispatch_sharing_ablation as dispatch
+from tools.legacy import submit_sharing_ablation as submit
+from tools.legacy.summarize_sharing_ablation import paired_summary, summarize
 
 
 def test_three_way_configs_and_seed_grid(monkeypatch):

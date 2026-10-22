@@ -1,159 +1,58 @@
-# OlmoEarth MTLoRA architecture
+# 当前 MTLoRA / shared-LoRA 模型
 
-Select `configs/hydrostate_mtlora.py` through the existing training CLI. This
-adds `MTLoRAHydroStateModel`, `MTLoRAOlmoEarthEncoder`, and
-`MTLoRAFusionDecoder`; existing model configurations remain available.
+当前数据与监督以 [流程规范](RETRIEVAL_PIPELINE.md) 为准。
+配置选择：`configs/hydrostate_mtlora.py` 与 `configs/hydrostate_mtlora_shared.py`；
+两者继承 `hydrostate_retrieval.py`，共用当前七任务、五时间槽和训练统计。
 
-This is an adaptation of Agiza et al. (CVPR 2024), not a reproduction of its
-Swin backbone. OlmoEarth blocks 4, 8, and 12 are logical stage endpoints with
-equal spatial grids. They are different depths, not spatial scales.
+## 编码器与分支
 
-## Computation
+Backbone 为 OlmoEarth-v1.2-Base：12 个 Transformer block、768 通道。
+所有 block 的 Q/K/V、注意力输出投影和 MLP 线性层都有共享 TA-LoRA。
+第 4、8、12 层提供任务出口（配置索引 `[3, 7, 11]`）：
 
-Every block adapts Q/K/V with shared TA-LoRA. Ordinary blocks also adapt the
-attention output projection and both MLP linear maps with TA-LoRA. At the
-three endpoints those maps expose a shared branch and independent task
-branches. Attention, including QKV, masks and RoPE, executes once per block.
-Only the shared output continues through the backbone. Private outputs leave
-the backbone for their own task's downstream path.
+- 继续传播的共享流使用原权重 + 共享低秩更新。
+- 各任务出口使用原权重 + 专属低秩更新，分支位于注意力输出投影和 MLP。
+- 注意力计算及 Q/K/V 共用；专属出口不继续进入下一共享 block。
+- 当前共享秩为 8、专属秩为 4；缩放系数 1.0 直接乘更新，不隐含除以秩。
 
-Following the paper's equation 2, each linear branch is `W x + b + scale B A x`.
-The continuing branch uses shared A/B; a task branch uses that task's A/B.
-It is not the earlier implementation's `W + gated shared BA + private BA`.
-The shared low-rank output projection/MLP at the final endpoint have no
-consumer when private branches exist, so their unused parameters are frozen.
+shared-LoRA 对照将 `private_rank=0`，保留相同的任务查询、融合、解码器和输出头。
+实现采用 MTLoRA 的共享/专属思路，但 OlmoEarth 的同网格深度出口与论文的 Swin
+多尺度骨干不同，不能称为论文的逐项严格复现。
 
-Observation tokens, acquisition times, missing observations, and padding masks
-are retained at all exits. Each variable independently queries its target
-instant or interval at all three depths. The three queried maps are projected
-to 64 channels each, concatenated, compressed with a 1x1 convolution, processed
-by a two-convolution residual module, upsampled 4x, and refined with a 3x3
-convolution. Pooling to the existing output grid and task heads follow.
-Each variable owns its query and fusion/decoder parameters. There is no CBAM,
-cross-task interaction gate, or intermediate auxiliary prediction loss.
+## 三层融合
 
-## Defaults and parameter policy
+各任务先查询三个深度的时间特征，然后分别通过 1×1 卷积降至 64 通道；
+拼接为 192 通道，再由 1×1 卷积压缩至 64 通道。
+之后采用两层 3×3 卷积与 GELU 的残差块，双线性上采样，再由 3×3 卷积细化。
+各任务有独立融合解码器，最终输出 30 m 网格。
+这是同分辨率的不同深度特征融合，未引入 Swin 式空间金字塔。
 
-| Setting | Default |
+## 参数与输入
+
+| 模块 | 当前设置 |
 |---|---|
-| Backbone | OlmoEarth-v1.2-Base, 768 channels, 12 blocks |
-| Logical endpoints | `out_indices=[3, 7, 11]` (zero based) |
-| Shared/private ranks | 8 / 4 |
-| Update scale | 1.0 (direct multiplier, not implicitly divided by rank) |
-| Original attention and MLP linear weights/biases | Frozen |
-| LayerNorm affine parameters | Trainable |
-| S1/S2/Landsat input patch embeddings | Trainable; unused modalities stay frozen |
-| Position/time encodings and RoPE frequencies | Frozen |
-| Unused pretraining projector | Frozen |
-| Query, fusion, decoder, output heads, loss weighting | Trainable |
-| Input profile | `olmoearth_l1_v1`; no L2 adapter |
-| Optimizer | AdamW, lr 1e-4, weight decay 0.01 |
-| Microbatch / accumulation | 2 / 8 |
-| Epoch budget / seed | 50 / 3407 |
+| 原始注意力/MLP 权重和偏置 | 冻结 |
+| 共享/专属 LoRA | 训练 |
+| S1/S2/Landsat patch embedding | 训练；未用模态保持冻结 |
+| LayerNorm affine 参数 | 训练；未用预训练 projector 保持冻结 |
+| 位置/时间编码及 RoPE | 冻结 |
+| 任务查询、融合、解码器、输出头及损失权重 | 训练 |
+| Landsat L1 TOA 输入适配器 | 训练；不是历史 Landsat L2 adapter |
+| 观测次数/时间质量融合 | 训练；末层零初始化 |
 
-The backbone stays in evaluation mode to disable stochastic dropout and input
-band dropping, while selected parameters still receive gradients. The model
-supports non-reentrant gradient checkpointing without persistent forward hooks.
-Ranks and freezing flags are exposed through `model.encoder` in the config.
+Backbone 保持 evaluation mode 禁用随机 dropout / band dropping，所选参数仍参与梯度计算。
+启用非重入梯度检查点。`hydrostate_mtlora_frozen_embed.py` 仅用于冻结 patch embedding 消融。
 
-## Land constraint and dates
+输入配置从契约导入 `landsat_l1_toa_mean_v1`。有效日期均值与 QA 摘要的定义见流程规范。
 
-`land_time_policy="aligned_or_window"` compares water and SM query bounds for
-each sample. With observed-water supervision:
+## 覆盖、SM 与 ET
 
-- Equal bounds: use the existing detached observed-water land weights and 1%
-  pixel/window engineering cutoffs.
-- Different bounds: use ordinary valid-pixel window averaging for SM; do not
-  discard that SM observation or apply a different date's water label.
+WF、IF、LF 同组 softmax；SM 是非水冰陆地条件下的预测。
+三个非负 ET 分支按预测覆盖比例派生总 ET，各自使用相应产品原始像元监督。
 
-Prediction/export likewise uses predicted-water land support only when water
-and SM output query bounds agree. Otherwise SM uses ordinary valid support.
-Prediction records expose `sm_land_time_aligned`. `require_aligned` instead
-raises on unequal bounds. This policy does not force tasks to share dates.
-ET native-footprint and water pixel supervision are unchanged.
+当前 `land_time_policy="require_aligned"`，不允许静默回退到其他日期的普通窗口均值。
+训练 SM 使用观测水/冰覆盖，推理使用预测覆盖。样本可信陆地和已知覆盖门槛为 95%；
+`min_land_fraction=0.01` 是像元级数值有效门槛，与产品支持区的 95% 质量筛选含义不同。
 
-This mixed policy differs from historical unconditional land-weighted metrics.
-All comparison runs must use the same policy and valid samples. Existing
-target moments remain training-only normalization statistics; the statistics
-tool computes ordinary product support, not a fitted land-conditioned transform.
-
-## Usage
-
-Set `HYDROSTATE_DATA_ROOT`, `HYDROSTATE_MANIFEST`, `HYDROSTATE_MODEL_PATH`,
-`HYDROSTATE_TARGET_STATS`, and optionally `HYDROSTATE_WORK_DIR` to the intended
-dataset/checkpoint locations. The dataset must contain the pretrained-compatible
-11-channel Landsat input and actual label/query timestamps. L2 packs and older
-statistics from another data contract must not be substituted silently.
-
-Generate a fresh training-statistics file if the temporal data contract has
-not already been prepared (the command refuses to overwrite an existing file):
-
-```bash
-python tools/data/compute_target_statistics.py \
-  --config configs/hydrostate_mtlora.py --output "$HYDROSTATE_TARGET_STATS"
-CUDA_VISIBLE_DEVICES=1 hydrostate-train configs/hydrostate_mtlora.py --launcher none
-```
-
-The GPU index is an example for the designated A100 server; expose only the
-assigned GPU. This implementation does not automatically submit a training job.
-Current saved full-finetuning/shared-private checkpoints have different parameter
-paths and must not be loaded as strict MTLoRA training resumes. Backbone
-initialization loads the original OlmoEarth weights before inserting LoRA.
-
-Controls are available through:
-
-- `configs/hydrostate_mtlora_shared.py`: private rank zero, same task-specific
-  downstream capacity, shared stage outputs consumed by every task.
-- `configs/hydrostate_mtlora_frozen_embed.py`: freeze patch embeddings.
-
-Alternatively override individual values using `--cfg-options`, for example
-`model.encoder.shared_rank=16 model.encoder.private_rank=4`.
-
-### HPC resources and data readiness
-
-`scripts/slurm/38_train_mtlora.sh mtlora` and the same script with `lora`
-select the private-branch model and shared TA-LoRA control, respectively.
-Both request one L40S GPU and six CPU cores, use four loader workers, and
-limit numerical-library threads to one. This respects the SPG-5 guidance of
-at most six CPU cores per GPU. Existing jobs are not reconfigured.
-
-Use a committed, immutable Git release and set the required source checksum,
-data, statistics, and separate work-directory environment variables shown in
-the script. Create log directories before submission and pass explicit Slurm
-output/error paths. Generate temporal training statistics in a CPU preparation
-job first; GPU jobs may depend on its successful completion with `afterok`.
-Do not submit against a collection that is still downloading: require
-`_COLLECTION_SUCCESS.json`, validate the samples/packs, and verify the training
-data contract before submission. The launcher repeats completion and manifest
-hash checks on the allocated node. It does not wait for data or automatically
-submit jobs when a collection finishes.
-
-For an explicitly authorized deferred submission, run
-`tools/watch_mtlora_collection.py <run-root>/submission.json` from the frozen
-release under `nohup` on the login host. The record supplies `code_root`,
-`data_root`, `environment`, and an initially empty `jobs` mapping. It polls every
-five minutes without reserving GPUs. `scripts/slurm/39_prepare_mtlora.sh` checks
-the complete 20,000-sample collection and label packs, creates training-only
-moments, checks both model contracts, and reads representative train/validation/
-test samples. Only successful preparation permits the two GPU submissions.
-The watcher respects GPU submission quotas and records every submission intent
-before calling Slurm. Ambiguous submissions or failed preparation stop it for
-inspection instead of blindly retrying. Check its PID, heartbeat, receipt and
-log after a host restart; this `nohup` process is not a system-managed service.
-
-The new collection uses `centered_8d_v1`: four half-open windows relative to the
-target date, `[-16,-8), [-8,0), [0,8), [8,16)` days. Each modality contributes
-at most one qualified scene per slot; at least two slots must be active. Both
-models consume actual observation timestamps and missing-data masks, rather
-than hard-coding an 8- or 16-day spacing. Historical four-slot data are not
-automatically reinterpreted as this new 32-day context.
-
-## Verification
-
-`tests/test_mtlora.py` uses a real small OlmoEarth encoder and tests a single
-attention traversal, zero-update equivalence, isolated private gradients,
-no private feedback into the shared stream, masks/padding invariance, independent
-query dates, checkpoint loading, optimizer/loss steps, freezing and temporal
-land-support fallback. These are CPU checks, not full-scale GPU throughput or
-accuracy measurements. Regression coverage includes the existing temporal,
-multilevel and shared/private architectures.
+AdamW lr=1e-4、weight decay=0.01；默认 50 epochs，单 GPU microbatch=2、累积=8。
+完整训练准备和命令见 [DATA_PREPARATION](DATA_PREPARATION.md)。

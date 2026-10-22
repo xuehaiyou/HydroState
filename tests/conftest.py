@@ -1,6 +1,6 @@
 import pytest
 
-from hydrostate.normalization import SUPPORT_VERSION, TASKS
+from hydrostate.normalization import SUPPORT_VERSION, LEGACY_TASK_NAMES as TASKS
 
 
 @pytest.fixture

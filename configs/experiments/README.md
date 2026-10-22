@@ -1,9 +1,8 @@
-# SM experiment configurations
+# Historical experiment configurations
 
-Generate fully expanded, immutable configs with
-`tools/experiments/prepare_sm_causal.py`. They are written alongside their
-manifests, training-only statistics and saved batch schedules under
-`outputs/sm_causal_DATE/{screen,full}/`.
+`legacy/` holds earlier shared decoder, staged, multilevel, ecosystem and
+shared/private presets with their historical data definitions. The current
+MTLoRA/shared-LoRA choices remain in the parent `configs/` directory.
 
-The source training config is the frozen actual v2 run, not a moving default.
-See `tools/experiments/README.md` for launch commands and staged execution.
+SM paired experiment configs are generated as immutable artifacts by
+`tools/experiments/prepare_sm_causal.py`; see that tool directory's README.

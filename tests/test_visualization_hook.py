@@ -16,12 +16,12 @@ from mmengine.model import BaseModel
 from mmengine.runner import Runner
 from torch.utils.data import DataLoader
 
-from hydrostate.datasets.zarr_dataset import hydro_collate
+from hydrostate.datasets.collate import hydro_collate
 from hydrostate.engine import HydroVisualizationHook
 from hydrostate.engine.visualization_hook import _cpu_sample, comparison_maps
 from hydrostate.models.data_preprocessor import HydroDataPreprocessor
 from hydrostate.models.hydrostate_model import HydroStateModel
-from hydrostate.normalization import TASKS
+from hydrostate.normalization import LEGACY_TASK_NAMES as TASKS
 
 
 def _prediction(sample_id="sample", missing_sm=False):
@@ -162,7 +162,7 @@ def test_l40s_config_and_smoke_preserve_hook(monkeypatch):
     monkeypatch.setenv("HYDROSTATE_VIS_NUM_SAMPLES", "7")
     root = Path(__file__).resolve().parents[1]
     for filename in ("hydrostate_l40s.py", "hydrostate_l40s_smoke.py"):
-        cfg = Config.fromfile(root / "configs" / filename)
+        cfg = Config.fromfile(root / "configs/experiments/legacy" / filename)
         assert cfg.custom_hooks[0].type == "HydroVisualizationHook"
         assert cfg.custom_hooks[0].num_samples == 7
         cfg.merge_from_dict({"custom_hooks.0.num_samples": 2})

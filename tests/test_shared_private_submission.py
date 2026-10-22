@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from tools import submit_shared_private as submit
+from tools.legacy import submit_shared_private as submit
 
 
 def test_two_experiment_graph_records_every_job_before_next_submission(tmp_path, monkeypatch):

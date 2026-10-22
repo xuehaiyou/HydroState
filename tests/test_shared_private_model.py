@@ -49,7 +49,7 @@ def tiny_olmoearth(monkeypatch):
 
 
 def make_config(tmp_path, variant="", checkpoint=True):
-    cfg = Config.fromfile(f"configs/hydrostate_shared_private{variant}.py")
+    cfg = Config.fromfile(f"configs/experiments/legacy/hydrostate_shared_private{variant}.py")
     configure_data_contract(cfg)
     cfg.model.adapter_init = None
     cfg.model.encoder.update(model_path=str(tmp_path), embedding_channels=32,
@@ -268,7 +268,7 @@ def test_config_selection_preserves_old_models():
                    hydrostate_multilevel="MultiLevelHydroStateModel",
                    hydrostate_multilevel_temporal_l2="MultiLevelTemporalHydroStateModel")
     for name, model_type in choices.items():
-        cfg = Config.fromfile(f"configs/{name}.py")
+        cfg = Config.fromfile(f"configs/experiments/legacy/{name}.py")
         assert cfg.model.type == model_type
         assert "shared_rank" not in cfg.model.encoder
         assert MODELS.get(model_type) is not None
@@ -290,7 +290,7 @@ def test_real_mmengine_runner_resume_and_bundle_tools(tmp_path, monkeypatch):
     from mmengine.runner import Runner
     from torch.utils.data import DataLoader
 
-    from tools import compose_shared_private, export_shared_private
+    from tools.legacy import compose_shared_private, export_shared_private
 
     # Same compatibility setting as the project's existing MMEngine launchers.
     monkeypatch.setenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
@@ -582,7 +582,7 @@ def test_ablation_evaluation_runner_writes_final_and_best_results(tmp_path, monk
     from mmengine.runner import Runner
     from torch.utils.data import DataLoader
 
-    from tools.evaluate_sharing_ablation import evaluate
+    from tools.legacy.evaluate_sharing_ablation import evaluate
 
     monkeypatch.setenv("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
     monkeypatch.setattr("mmengine.runner.runner.get_device", lambda: "cpu")

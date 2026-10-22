@@ -1,7 +1,7 @@
 """Datasets and samplers."""
 
+from .collate import hydro_collate
+from .retrieval_dataset import RetrievalDataset
 from .sampler import HydroBalancedSampler
-from .zarr_dataset import HydroStateZarrDataset
 
-__all__ = ["HydroBalancedSampler", "HydroStateZarrDataset"]
-
+__all__ = ["HydroBalancedSampler", "RetrievalDataset", "hydro_collate"]

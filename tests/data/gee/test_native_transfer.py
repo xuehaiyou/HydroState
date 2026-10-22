@@ -203,7 +203,7 @@ def test_native_queue_recovers_between_groups_without_duplicate_submission(
 ):
     cache, scene, job = native_setup("s2")
     paths = write_parts(cache.root, job)
-    settings = json.loads(Path("configs/data/gee_drive_native.json").read_text())
+    settings = json.loads(Path("configs/experiments/legacy/data/gee_drive_native.json").read_text())
     settings["poll_seconds"] = 0.001
     monkeypatch.setattr("time.sleep", lambda _: None)
     submitted, cleaned = [], []
@@ -256,7 +256,7 @@ def test_native_queue_recovers_between_groups_without_duplicate_submission(
 
 def test_layout_config_validation(native_setup):
     cache, _, _ = native_setup("s1")
-    settings = json.loads(Path("configs/data/gee_drive_native.json").read_text())
+    settings = json.loads(Path("configs/experiments/legacy/data/gee_drive_native.json").read_text())
     validate_settings(settings, cache)
     settings["export_layout"] = "native_typo"
     with pytest.raises(ValueError, match="export_layout"):

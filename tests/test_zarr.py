@@ -3,7 +3,8 @@ import json
 import numpy as np
 import zarr
 
-from hydrostate.storage import SampleShardWriter, Schema
+from hydrostate.storage import SampleShardWriter
+from hydrostate.legacy.schema import LegacySchema as Schema
 
 
 def test_sample_shard_writer(tmp_path):
@@ -26,7 +27,7 @@ def test_sample_shard_writer(tmp_path):
 def test_gee_sampling_contract():
     from datetime import date
 
-    from hydrostate.data.gee_sampling import climate_quota, frequency_bin, slots
+    from hydrostate.legacy.sampling import climate_quota, frequency_bin, slots
 
     assert [frequency_bin(v) for v in [0, 1, 20, 21, 40, 60, 80, 99, 100]] == [
         0,
@@ -79,7 +80,7 @@ def test_30m_supervision():
 
 
 def test_native_pml_geometry_clips_partial_cells_and_weights_boundaries():
-    from hydrostate.data.gee_sampling import pml_native_targets
+    from hydrostate.legacy.sampling import pml_native_targets
 
     sample = dict(
         lon=0.0,
@@ -100,7 +101,8 @@ def test_native_pml_geometry_clips_partial_cells_and_weights_boundaries():
 def test_native_collate_and_flip_are_consistent():
     import torch
 
-    from hydrostate.datasets.zarr_dataset import HydroStateZarrDataset, hydro_collate
+    from hydrostate.datasets.collate import hydro_collate
+    from hydrostate.legacy.dataset import HydroStateZarrDataset
 
     samples = []
     for n in (1, 3):
@@ -125,7 +127,7 @@ def test_native_collate_and_flip_are_consistent():
 
 
 def test_gee_histogram_excludes_null_ocean_blocks():
-    from hydrostate.data.gee_sampling import stratum_counts
+    from hydrostate.legacy.sampling import stratum_counts
 
     assert stratum_counts({'null': 28459592}) == {}
     assert stratum_counts(None) == {}
@@ -138,7 +140,7 @@ def test_gee_histogram_excludes_null_ocean_blocks():
 
 
 def test_seven_frequency_bins_and_balanced_quotas():
-    from hydrostate.data.gee_sampling import FREQUENCY_BINS, frequency_bin, quota, stratum_counts
+    from hydrostate.legacy.sampling import FREQUENCY_BINS, frequency_bin, quota, stratum_counts
 
     assert [frequency_bin(v) for v in [None, -1, 101, float('nan')]] == [None] * 4
     assert frequency_bin(0.5) == 1
@@ -155,7 +157,7 @@ def test_climate_screen_empty_ocean_and_coastal_land():
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from hydrostate.data.gee_sampling import screen_block
+    from hydrostate.legacy.sampling import screen_block
 
     ee = SimpleNamespace(Reducer=SimpleNamespace(max=lambda: Mock()))
     kg, area = Mock(), Mock()
@@ -173,7 +175,7 @@ def test_climate_screen_empty_ocean_and_coastal_land():
 def test_shared_candidate_pool_reuses_blocks_for_other_sample_seeds(tmp_path, monkeypatch):
     import json
     from types import SimpleNamespace
-    import hydrostate.data.gee_sampling as sampling
+    import hydrostate.legacy.sampling as sampling
 
     cache = tmp_path / 'shared'
     cache.mkdir()
@@ -204,7 +206,7 @@ def test_shared_pool_refuses_to_race_running_original_writer(tmp_path):
     import fcntl
     from types import SimpleNamespace
     import pytest
-    from hydrostate.data.gee_sampling import candidate_pool
+    from hydrostate.legacy.sampling import candidate_pool
 
     source = tmp_path / 'original'
     cache = source / 'candidates'
@@ -222,7 +224,7 @@ def test_shared_pool_refuses_to_race_running_original_writer(tmp_path):
 def test_completed_original_pool_can_be_read_while_run_exports(tmp_path, monkeypatch):
     import fcntl
     from types import SimpleNamespace
-    import hydrostate.data.gee_sampling as sampling
+    import hydrostate.legacy.sampling as sampling
 
     source = tmp_path / 'original'
     cache = source / 'candidates'

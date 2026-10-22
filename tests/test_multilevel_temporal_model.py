@@ -178,7 +178,7 @@ def test_multilevel_queries_adapters_loss_and_checkpoint(monkeypatch, tmp_path):
 
 
 def test_hpc_config_keeps_multilevel_architecture_and_all_sixteen_tasks():
-    cfg = Config.fromfile("configs/hydrostate_ecosystem_multilevel_temporal_hpc.py")
+    cfg = Config.fromfile("configs/experiments/legacy/hydrostate_ecosystem_multilevel_temporal_hpc.py")
     configure_data_contract(cfg)
     assert cfg.model.type == "MultiLevelTemporalHydroStateModel"
     assert cfg.model.encoder.out_indices == [3, 7, 11]

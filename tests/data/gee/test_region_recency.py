@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from hydrostate.data.gee.contracts import atomic_json, fingerprint, locked
-from tools.data import update_region_recency as revision
+from tools.legacy.data import update_region_recency as revision
 
 
 @pytest.fixture

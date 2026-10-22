@@ -10,12 +10,12 @@ from mmengine.model import BaseDataPreprocessor
 from hydrostate.data.input_products import LEGACY_PROFILE
 from hydrostate.data.model_inputs import input_keys, prepare_model_inputs
 from hydrostate.registry import MODELS
-from hydrostate.tasks import resolve_tasks
+from hydrostate.tasks import LEGACY_TASKS, resolve_tasks
 
 from .temporal_metadata import prepare_temporal_metadata
 
 
-def aggregate_targets(targets: dict[str, Any], factor: int = 3, tasks=None) -> None:
+def aggregate_targets(targets: dict[str, Any], factor: int = 3, tasks=LEGACY_TASKS) -> None:
     """Aggregate water labels; preserve native ET weights and scalar SMAP labels."""
     import torch.nn.functional as F
 
@@ -48,7 +48,7 @@ class HydroDataPreprocessor(BaseDataPreprocessor):
     same preprocessing version is recorded in every shard's attributes.
     """
 
-    def __init__(self, tasks=None, output_scale=3, input_profile=LEGACY_PROFILE, **kwargs):
+    def __init__(self, tasks=LEGACY_TASKS, output_scale=3, input_profile=LEGACY_PROFILE, **kwargs):
         super().__init__(**kwargs)
         if type(output_scale) is not int or output_scale < 1:
             raise ValueError("output_scale must be a positive integer")
@@ -69,7 +69,7 @@ class HydroDataPreprocessor(BaseDataPreprocessor):
         }
         if "observation_time" in temporal:
             metadata, inputs["_temporal_indices"] = prepare_temporal_metadata(
-                temporal["sensor_valid"], temporal["observation_time"]
+                temporal["sensor_valid"], temporal["observation_time"], inputs.get("slot_bounds")
             )
         data = dict(data, inputs=inputs)
         data = self.cast_data(data)

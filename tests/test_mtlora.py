@@ -15,7 +15,7 @@ from hydrostate.cli import configure_data_contract
 from hydrostate.models.mtlora import AlignedLandCoupling, MTLoRALinear
 from hydrostate.models.multilevel_temporal_model import MultiLevelTemporalOlmoEarthEncoder
 from hydrostate.registry import MODELS
-from hydrostate.tasks import task_config
+from hydrostate.tasks import LEGACY_TASKS, task_config
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +61,21 @@ def config(tmp_path, checkpoint=False):
     cfg.model.decoder.update(in_channels=32, channels=8)
     for head in cfg.model.heads.values():
         head.in_channels = 8
-    cfg.model.target_statistics = moments(task_config())
+    # Generic routing tests use three tasks; the production seven-head contract
+    # is exercised end-to-end in tests/retrieval/test_model.py.
+    cfg.model.tasks = task_config(LEGACY_TASKS)
+    cfg.model.heads = {
+        name: dict(type="RegressionHead", in_channels=8, activation=activation)
+        for name, activation in (
+            ("water", "sigmoid"), ("soil_moisture", "sigmoid"), ("et", "softplus"))}
+    cfg.model.encoder.input_profile = "olmoearth_l1_v1"
+    cfg.model.data_preprocessor.input_profile = "olmoearth_l1_v1"
+    cfg.model.input_fusion = None
+    cfg.model.fraction_groups = []
+    cfg.model.water_soil_coupling = dict(enabled=True, min_land_fraction=.01,
+                                       min_window_land_fraction=.01)
+    cfg.model.land_time_policy = "aligned_or_window"
+    cfg.model.target_statistics = moments(task_config(LEGACY_TASKS))
     return cfg
 
 
@@ -97,7 +111,7 @@ def test_single_attention_path_and_private_gradient_isolation(tmp_path, checkpoi
 
 def test_zero_adapters_match_original_and_private_exits_do_not_feed_back(tmp_path):
     cfg = config(tmp_path)
-    encoder = MODELS.build(dict(cfg.model.encoder, tasks=task_config())).eval()
+    encoder = MODELS.build(dict(cfg.model.encoder, tasks=task_config(LEGACY_TASKS))).eval()
     original = MultiLevelTemporalOlmoEarthEncoder(
         model_path=str(tmp_path), embedding_channels=32, out_indices=[1, 3, 5]
     ).eval()
@@ -134,7 +148,7 @@ def test_mask_batch_invariance_query_independence_and_checkpoint(tmp_path):
     with torch.no_grad():
         baseline, masked, alone = model(x), model(altered), model(single)
         altered = copy.deepcopy(x)
-        altered["target_time"]["et"] += 86400
+        altered["target_time"]["et"] += 32 * 86400
         changed = model(altered)
     for task in model.tasks:
         torch.testing.assert_close(baseline[task], masked[task])
@@ -197,16 +211,18 @@ def test_real_loss_optimizer_freezing_and_predict(tmp_path):
     assert all(not m.private for m in shared.encoder.modules() if isinstance(m, MTLoRALinear))
 
 
-def test_config_selects_new_architecture_without_altering_legacy():
+def test_config_selects_current_five_slot_product_contract():
     cfg = Config.fromfile("configs/hydrostate_mtlora.py")
     configure_data_contract(cfg)
     assert cfg.model.encoder.out_indices == [3, 7, 11]
     assert cfg.model.type == "MTLoRAHydroStateModel"
-    assert cfg.input_profile == "olmoearth_l1_v1" and not cfg.input_packs
-    assert cfg.train_dataloader.dataset.target_time_queries
+    assert cfg.input_profile == "landsat_l1_toa_mean_v1"
+    assert cfg.train_dataloader.dataset.type == "RetrievalDataset"
+    assert len(cfg.tasks) == 7
+    assert cfg.tasks.soil_moisture.support == "tile_mean_weak"
     assert cfg.optim_wrapper.optimizer.lr == 1e-4
     assert "constructor" not in cfg.optim_wrapper
     assert (
-        Config.fromfile("configs/hydrostate_multilevel.py").model.type
+        Config.fromfile("configs/experiments/legacy/hydrostate_multilevel.py").model.type
         == "MultiLevelHydroStateModel"
     )
