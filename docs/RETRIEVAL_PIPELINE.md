@@ -175,5 +175,7 @@ Zarr 输入/标签、`samples.parquet` 和 `collection_report.json`。
 ## 实测与实现状态
 
 [阈值与完整样本试采记录](validation/RETRIEVAL_PILOT_20261022.md) 保存本次小规模 GEE 证据。
+[候选池与实时均衡试采](validation/RETRIEVAL_BALANCED_PILOT_20261023.md) 记录 4 并发
+140 样本的实际速度、年月分布和监督不足。
 [实现状态](IMPLEMENTATION_STATUS.md) 单独记录回归结果、正式数据进度和未决项。
 正式执行入口与 HPC 参数见 [DATA_PREPARATION](DATA_PREPARATION.md)。
