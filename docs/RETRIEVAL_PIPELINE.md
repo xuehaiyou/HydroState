@@ -196,5 +196,6 @@ QA、产品、时空定义或像素生产依赖变化仍需新数据集。纯调
 [候选池与实时均衡试采](validation/RETRIEVAL_BALANCED_PILOT_20261023.md) 记录 4 并发
 140 样本的实际速度、年月分布和监督不足。
 [八组与冰雪试采](validation/RETRIEVAL_EIGHT_GROUP_PILOT_20261023.md) 记录第八组加入后的吞吐与有效监督量。
+[滚动补池与扩容验收](validation/RETRIEVAL_ROLLING_POOL_20261023.md) 记录无损切换、固定容量与续采检查。
 [实现状态](IMPLEMENTATION_STATUS.md) 单独记录回归结果、正式数据进度和未决项。
 正式执行入口与 HPC 参数见 [DATA_PREPARATION](DATA_PREPARATION.md)。
