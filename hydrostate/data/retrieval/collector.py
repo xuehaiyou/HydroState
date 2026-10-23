@@ -28,6 +28,7 @@ from .gee_labels import fetch_cover, fetch_products
 from .labels import build_targets, cover_targets, sm_tile_eligible
 from .sampling import SamplingLedger, location_key, quotas
 from .scheduling import completed_samples
+from .specs import specification_snapshot
 from .validation import validate_arrays
 
 LOG = logging.getLogger(__name__)
@@ -203,6 +204,7 @@ def collect_sample(ee, sample, root, config, norm, calendar):
             observation_time_semantics="slot_midpoint_reference",
             normalization="S1/S2 pretrained; L1 TOA physical scales",
             normalization_hash=fingerprint(norm),
+            specifications=specification_snapshot(),
         ),
     )
     writer.write(inputs, targets)

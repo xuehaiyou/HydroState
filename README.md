@@ -9,6 +9,7 @@ Outputs are 30 m; product losses respect each label's observation support.
 
 - [Scientific and sampling specification](docs/RETRIEVAL_PIPELINE.md)
 - [Collect, prepare, train and validate](docs/DATA_PREPARATION.md)
+- [Input specifications and independent label packs](docs/EXTENDING_VARIABLES.md)
 - [MTLoRA and shared-LoRA architectures](docs/MTLORA.md)
 - [Repository responsibilities](docs/REPOSITORY_STRUCTURE.md)
 - [Implementation and validation status](docs/IMPLEMENTATION_STATUS.md)

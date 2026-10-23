@@ -120,6 +120,8 @@ SM 同时检查 SMAP 在 GEE 中发布的网格（产品标称 9 km）和以该�
 | 文件/目录 | 职责 |
 |---|---|
 | `hydrostate/data/retrieval/contract.py` | 唯一新数据版本、变量和数组形状 |
+| `specs.py` | 产品、输入波段和标签的统一规格定义 |
+| `label_packs.py` | 不重采输入的独立标签扩展、关联和审计 |
 | `sampling.py` / `catalog.py` / `collector.py` | 配额、时空去重、元数据缓存、续采和提交 |
 | `composites.py` | QA、逐日去重、均值和观测质量统计 |
 | `alignment.py` | 读取时统一 10 m，按相同索引对齐光谱、掩膜和日期 |

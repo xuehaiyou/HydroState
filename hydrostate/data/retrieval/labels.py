@@ -8,6 +8,7 @@ import numpy as np
 from hydrostate.data.native_support import NativeSupport
 
 from .contract import COVER, ET, OUTPUT_SCALE, RetrievalSchema
+from .specs import LABEL_SPECS
 
 
 def block_mean(value, factor=OUTPUT_SCALE):
@@ -85,8 +86,9 @@ def build_targets(sample, cover, pml, sm, config):
     if len(weights) > schema.native_capacity:
         raise ValueError("PML support exceeds schema capacity")
     known = cover["known"] > 0
-    for task, cls in zip(ET, COVER):
-        band = "ET" if task == "et_land" else "Ew"
+    for task in ET:
+        spec = LABEL_SPECS[task]
+        cls, band = spec.coverage_class, spec.band
         purity = (fine_weights * (cover[cls] * known)[None]).sum((-2, -1))
         n = len(centres)
         targets[f"{task}_native_weights"][:n] = weights

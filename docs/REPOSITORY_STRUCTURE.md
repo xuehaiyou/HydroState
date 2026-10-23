@@ -36,6 +36,7 @@ tests/                         共享模块及历史回归；retrieval/ 为当�
 ## 当前采样包
 
 - `contract.py`：唯一当前版本、任务、输入配置和数组形状。
+- `specs.py`：产品来源、波段/分辨率/单位、归一化和标签监督规格；契约从这里派生。
 - `configuration.py`：训练配置与该契约的一致性检查。
 - `cli.py`：解析采样参数，离线预览，绑定生产代码哈希。
 - `catalog.py`：候选点和影像元数据缓存；`sampling.py`：配额与时空去重。
@@ -43,6 +44,8 @@ tests/                         共享模块及历史回归；retrieval/ 为当�
 - `alignment.py`：产品分辨率网格定义、本地对齐 10 m 和跨组有效性合并。
 - `gee_labels.py`：产品读取；`labels.py`：监督掩膜与面积聚合。
 - `collector.py`：输入提取、样本提交、续采和完成标记。
+- `label_packs.py`：独立标签包发布、按样本 ID 关联、时间/单位/网格校验及审计。
+  复用公共 `storage/packs.py`，当前命令是 `tools/data/build_label_pack.py`。
 - `validation.py`：数组检查；`audit.py`：已发布数据审计。
 - `statistics.py`：训练集监督尺度上的统计；`release.py`：成对训练准备。
 

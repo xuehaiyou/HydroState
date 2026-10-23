@@ -9,7 +9,13 @@ from mmengine.config import Config
 from hydrostate.cli import configure_data_contract, configure_target_statistics
 from hydrostate.data.gee.contracts import fingerprint
 from hydrostate.data.retrieval.alignment import grid_metadata
-from hydrostate.data.retrieval.contract import INPUT_GROUPS, PROFILE, VERSION, RetrievalSchema
+from hydrostate.data.retrieval.contract import (
+    INPUT_GROUPS,
+    PROFILE,
+    VERSION,
+    RetrievalSchema,
+    intervals,
+)
 from hydrostate.data.retrieval.statistics import compute_retrieval_statistics
 from hydrostate.data.retrieval.validation import validate_arrays
 from hydrostate.datasets.retrieval_dataset import RetrievalDataset
@@ -35,9 +41,10 @@ def make_dataset(root):
         # A 15 m spatial pattern detects noninteger resampling and flip mistakes.
         inputs["landsat_15m"][:, 0] = np.arange(80)[None, :]
         inputs["sensor_valid"][:] = 1
-        inputs["slot_bounds"][:] = np.array(
-            [[1600000000 + i * 86400 * 8, 1600000000 + (i + 1) * 86400 * 8] for i in range(5)]
-        )
+        inputs["slot_bounds"][:] = [
+            [int(pd.Timestamp(v, tz="UTC").timestamp()) for v in slot]
+            for slot in intervals("2020-01-01")
+        ]
         inputs["observation_time"][:] = inputs["slot_bounds"].mean(-1).astype("int64")[:, None]
         inputs["target_bounds"][:] = inputs["slot_bounds"][2]
         labels["water"][:] = 0.01 * index
@@ -80,6 +87,7 @@ def make_dataset(root):
                 split="train",
                 frequency_bin=index,
                 target_time="2020-01-01",
+                target_end="2020-01-09",
                 climate_class=1,
                 crs=sample["crs"],
                 transform=json.dumps(sample["transform"]),

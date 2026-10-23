@@ -18,6 +18,7 @@ from numcodecs import Blosc
 IDENTITY_COLUMNS = (
     "sample_id", "split", "crs", "transform", "target_time", "tile_id", "site_id",
     "height", "width", "resolution", "time_steps", "sample_key",
+    "target_end", "version", "input_profile",
 )
 
 

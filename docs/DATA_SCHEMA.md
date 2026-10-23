@@ -3,6 +3,8 @@
 可执行定义位于 [`contract.py`](../hydrostate/data/retrieval/contract.py)，
 版本为 `hydrostate_retrieval_5x8_native_v2`。训练配置从这里导入 `TASKS`、`PROFILE`、
 `VERSION` 和 `OUTPUT_SCALE`，不再复制任务字典。
+产品来源、波段、单位、归一化、时间支持和监督定义统一在
+[`specs.py`](../hydrostate/data/retrieval/specs.py)，数组契约从这些规格派生。
 
 - 存储：5 个时间槽，1.2 km 同范围图块；各波段保留产品发布分辨率，见下表。
 - 模型输入：读取时统一为 120×120、10 m；S1/S2/Landsat 分别为 2/12/11 通道。
@@ -41,8 +43,11 @@ Landsat B10/B11 按产品发布的 30 m 保存，不能还原传感器的 100 m 
 版本、中心频率组、地理划分、目标日期等。`collection.json` 固定参数与生产代码哈希；
 逐样本提交记录用于续采。七组配额全部完成后才发布 `_COLLECTION_SUCCESS.json`。
 改变参数、生产代码或数据定义时使用新目录，不将新旧样本混写。
+新增监督变量可通过独立标签包复用这个基础集合，不需要重采输入或修改基础目录。
+标签包有自己的版本和发布标记；见 [扩展输入与标签](EXTENDING_VARIABLES.md)。
 
-`RetrievalDataset` 验证版本、输入配置、任务和分片属性；`audit.py` 检查全部分片契约，
+`RetrievalDataset` 验证版本、输入规格、已注册任务和分片属性，并按 ID 关联所选标签包；
+`audit.py` 检查全部分片契约，
 并按 `--pixel-limit` 抽查或全查数组。统计量只从训练划分生成，绑定 manifest 和数据契约；
 训练前重新检查指纹。
 

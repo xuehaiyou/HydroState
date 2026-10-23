@@ -59,9 +59,10 @@ class OlmoEarthEncoder(nn.Module):
         self.landsat_toa_adapter = None
         from hydrostate.data.retrieval.contract import PROFILE
         if input_profile == PROFILE:
+            from hydrostate.data.retrieval.contract import SENSORS
             if not inputs_are_normalized:
                 raise ValueError("TOA composites require explicit physical normalization")
-            self.landsat_toa_adapter = nn.Conv2d(11, 11, 1)
+            self.landsat_toa_adapter = nn.Conv2d(SENSORS["landsat"], SENSORS["landsat"], 1)
             nn.init.eye_(self.landsat_toa_adapter.weight[:, :, 0, 0])
             nn.init.zeros_(self.landsat_toa_adapter.bias)
         if input_profile == L2_PROFILE:
@@ -139,7 +140,11 @@ class OlmoEarthEncoder(nn.Module):
 
         for batch_index, modalities in enumerate(metadata):
             sample: dict[str, RasterImage] = {}
-            pairs = zip(self.input_keys, MODALITIES)
+            from hydrostate.data.retrieval.contract import PROFILE
+            from hydrostate.data.retrieval.specs import INPUT_SPECS
+            modality_names = (tuple(INPUT_SPECS[k].modality for k in self.input_keys)
+                          if self.input_profile == PROFILE else MODALITIES)
+            pairs = zip(self.input_keys, modality_names)
             for modality_index, (input_key, modality) in enumerate(pairs):
                 item = modalities[modality_index]
                 if item.start == item.stop:

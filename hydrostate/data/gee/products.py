@@ -2,20 +2,14 @@
 
 import numpy as np
 
+from hydrostate.data.retrieval.specs import INPUT_SPECS, SOURCES
 from hydrostate.data.temporal_sampling import observation_slots
 
-BANDS = {
-    "s1": ["VV", "VH"],
-    "s2": ["B2", "B3", "B4", "B8", "B5", "B6", "B7", "B8A", "B11", "B12", "B1", "B9"],
-    "landsat": ["B8", "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11"],
-}
+BANDS = {name: [band.name for band in spec.bands] for name, spec in INPUT_SPECS.items()}
 COLLECTIONS = {
-    "s1": "COPERNICUS/S1_GRD",
-    "s2": "COPERNICUS/S2_SR_HARMONIZED",
-    "dw": "GOOGLE/DYNAMICWORLD/V1",
-    "pml": "projects/pml_evapotranspiration/PML/OUTPUT/PML_V22a",
+    name: sources[0].collection for name, sources in SOURCES.items() if len(sources) == 1
 }
-MODALITIES = {"s1": "sentinel1", "s2": "sentinel2_l2a", "landsat": "landsat"}
+MODALITIES = {name: spec.modality for name, spec in INPUT_SPECS.items()}
 
 
 def slots(target):
@@ -50,53 +44,26 @@ def prepare(ee, key, image):
 
 
 def collection(ee, key):
-    if key == "landsat":
-        return (
-            ee.ImageCollection("LANDSAT/LC08/C02/T1")
-            .map(
-                lambda im: im.set(
-                    "asset_id", ee.String("LANDSAT/LC08/C02/T1/").cat(im.get("system:index"))
-                )
-            )
-            .merge(
-                ee.ImageCollection("LANDSAT/LC09/C02/T1").map(
-                    lambda im: im.set(
-                        "asset_id", ee.String("LANDSAT/LC09/C02/T1/").cat(im.get("system:index"))
-                    )
-                )
+    merged = None
+    source_key = INPUT_SPECS[key].source if key in INPUT_SPECS else key
+    for source in SOURCES[source_key]:
+        images = ee.ImageCollection(source.collection)
+        if source.start:
+            images = images.filterDate(source.start, source.end)
+        images = images.map(
+            lambda im: im.set(
+                "asset_id", ee.String(source.collection + "/").cat(im.get("system:index"))
             )
         )
-    if key == "sm":
-        return (
-            ee.ImageCollection("NASA/SMAP/SPL3SMP_E/005")
-            .filterDate("2015-01-01", "2023-12-04")
-            .map(
-                lambda im: im.set(
-                    "asset_id", ee.String("NASA/SMAP/SPL3SMP_E/005/").cat(im.get("system:index"))
-                )
-            )
-            .merge(
-                ee.ImageCollection("NASA/SMAP/SPL3SMP_E/006")
-                .filterDate("2023-12-04", "2100-01-01")
-                .map(
-                    lambda im: im.set(
-                        "asset_id",
-                        ee.String("NASA/SMAP/SPL3SMP_E/006/").cat(im.get("system:index")),
-                    )
-                )
-            )
-        )
-    c = ee.ImageCollection(COLLECTIONS[key])
-    if key == "s1":
-        c = (
-            c.filter(ee.Filter.eq("instrumentMode", "IW"))
+        merged = images if merged is None else merged.merge(images)
+    if key in INPUT_SPECS and INPUT_SPECS[key].qa == "grd_iw_valid":
+        merged = (
+            merged.filter(ee.Filter.eq("instrumentMode", "IW"))
             .filter(ee.Filter.eq("resolution_meters", 10))
             .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
             .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
         )
-    return c.map(
-        lambda im: im.set("asset_id", ee.String(COLLECTIONS[key] + "/").cat(im.get("system:index")))
-    )
+    return merged
 
 
 def normalize_pixels(key, values, valid, norm):

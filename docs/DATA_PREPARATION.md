@@ -64,6 +64,8 @@ python tools/data/prepare_training.py prepare   --data-root "$HYDROSTATE_DATA_RO
 
 该入口检查完成数据、生成或验证统计、检查两个模型的读取和数据一致性，
 保存展开配置及 `provenance/ready.json`。它不提交训练。
+使用独立标签包时传 `--config configs/hydrostate_extended.py`；新标签声明、
+发布命令和环境变量见 [扩展指南](EXTENDING_VARIABLES.md)。已有统计不能用于不同标签包版本。
 
 ## 3. 模型选择和验证
 

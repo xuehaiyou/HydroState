@@ -5,6 +5,8 @@ from datetime import date, timedelta
 
 from hydrostate.storage.schema import ArraySpec
 
+from .specs import INPUT_SPECS, LABEL_SPECS
+
 VERSION = "hydrostate_retrieval_5x8_native_v2"
 PROFILE = "landsat_l1_toa_native_mean_v2"
 # The existing centre-pool key is independent of the spectral storage version.
@@ -14,7 +16,7 @@ OUTPUT_SCALE = 3
 TIME_STEPS = 5
 INPUT_SIZE = 120
 OUTPUT_SIZE = INPUT_SIZE // OUTPUT_SCALE
-SENSORS = {"s1": 2, "s2": 12, "landsat": 11}
+SENSORS = {name: len(spec.bands) for name, spec in INPUT_SPECS.items()}
 QUALITY_CHANNELS = 4
 
 
@@ -43,22 +45,17 @@ class InputGroup:
 
 # Published product grids, not detector footprints (Landsat thermal is published at 30 m).
 INPUT_GROUPS = {
-    "s1_10m": InputGroup("s1", 10, ("VV", "VH")),
-    "s2_10m": InputGroup("s2", 10, ("B2", "B3", "B4", "B8")),
-    "s2_20m": InputGroup("s2", 20, ("B5", "B6", "B7", "B8A", "B11", "B12")),
-    "s2_60m": InputGroup("s2", 60, ("B1", "B9")),
-    "landsat_15m": InputGroup("landsat", 15, ("B8",)),
-    "landsat_30m": InputGroup(
-        "landsat", 30, ("B1", "B2", "B3", "B4", "B5", "B6", "B7", "B9", "B10", "B11")
-    ),
+    f"{sensor}_{resolution}m": InputGroup(
+        sensor,
+        resolution,
+        tuple(band.name for band in spec.bands if band.resolution_m == resolution),
+    )
+    for sensor, spec in INPUT_SPECS.items()
+    for resolution in dict.fromkeys(band.resolution_m for band in spec.bands)
 }
-COVER = ("water", "snow_ice", "land")
-ET = ("et_water", "et_ice", "et_land")
-TASKS = {
-    **{name: dict(support="pixel", grid="output", station_index=None) for name in COVER},
-    "soil_moisture": dict(support="tile_mean_weak", grid="scalar", station_index=None),
-    **{name: dict(support="native", grid="native", station_index=None) for name in ET},
-}
+COVER = tuple(name for name, spec in LABEL_SPECS.items() if spec.source == "dw")
+ET = tuple(name for name, spec in LABEL_SPECS.items() if spec.source == "pml")
+TASKS = {name: spec.task() for name, spec in LABEL_SPECS.items()}
 
 
 def intervals(start):
@@ -123,22 +120,15 @@ class RetrievalSchema:
     def targets(self):
         h, w = self.height // OUTPUT_SCALE, self.width // OUTPUT_SCALE
         specs = {}
-        for name in COVER:
-            specs[name] = ArraySpec((1, h, w), "float32")
-            specs[f"{name}_valid"] = ArraySpec((1, h, w), "uint8")
+        for name, spec in LABEL_SPECS.items():
+            specs.update(spec.arrays(name, (h, w), self.native_capacity))
         specs.update(
             cover_known=ArraySpec((1, h, w), "float32"),
             cover_days=ArraySpec((1, h, w), "float32"),
             cover_time_span=ArraySpec((1, h, w), "float32"),
             cover_observed_days=ArraySpec((1, h, w), "float32"),
             cover_unknown_fraction=ArraySpec((1, h, w), "float32"),
-            soil_moisture=ArraySpec((1, 1, 1), "float32"),
-            soil_moisture_valid=ArraySpec((1, 1, 1), "uint8"),
             soil_moisture_domain_valid=ArraySpec((1, h, w), "uint8"),
             soil_moisture_weight=ArraySpec((1, 1, 1), "float32"),
         )
-        for name in ET:
-            specs[f"{name}_native_value"] = ArraySpec((self.native_capacity,), "float32")
-            specs[f"{name}_native_valid"] = ArraySpec((self.native_capacity,), "uint8")
-            specs[f"{name}_native_weights"] = ArraySpec((self.native_capacity, h, w), "float32")
         return specs

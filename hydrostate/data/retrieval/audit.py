@@ -17,7 +17,7 @@ from .contract import PROFILE, VERSION, RetrievalSchema
 from .sampling import SamplingLedger, inside_split_block, quotas
 
 
-def audit(root, *, pixel_limit=64, require_complete=True):
+def audit(root, *, pixel_limit=64, require_complete=True, label_packs=None, label_specs=None):
     from .validation import validate_arrays
 
     root = Path(root)
@@ -80,7 +80,7 @@ def audit(root, *, pixel_limit=64, require_complete=True):
             for name, value in loaded[1].items():
                 if name.endswith("_valid"):
                     valid_counts[name] += int(value.sum())
-    return dict(
+    result = dict(
         samples=len(table),
         version=VERSION,
         frequency_counts=dict(counts),
@@ -89,3 +89,10 @@ def audit(root, *, pixel_limit=64, require_complete=True):
         audited_valid_counts=dict(valid_counts),
         manifest_sha256=file_hash(root / "samples.parquet"),
     )
+    if label_packs or label_specs:
+        from .label_packs import audit_label_packs
+
+        result["label_extensions"] = audit_label_packs(
+            root / "samples.parquet", label_packs, label_specs, root=root, pixel_limit=pixel_limit
+        )
+    return result

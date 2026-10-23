@@ -17,6 +17,8 @@ from hydrostate.data.retrieval.contract import (
     VERSION,
     RetrievalSchema,
 )
+from hydrostate.data.retrieval.label_packs import LabelPackSet
+from hydrostate.data.retrieval.specs import resolve_label_specs, specification_snapshot
 from hydrostate.registry import DATASETS
 from hydrostate.storage.reader import ShardCache
 from hydrostate.tasks import task_config
@@ -41,11 +43,16 @@ class RetrievalDataset(Dataset):
         input_profile=PROFILE,
         output_scale=OUTPUT_SCALE,
         flip_probability=0.5,
+        label_specs=None,
+        label_packs=None,
     ):
+        definitions = resolve_label_specs(label_specs)
+        expected_tasks = {name: spec.task() for name, spec in definitions.items()}
         if (
             input_profile != PROFILE
             or output_scale != OUTPUT_SCALE
-            or task_config(tasks or TASKS) != task_config(TASKS)
+            or task_config(expected_tasks if tasks is None else tasks)
+            != task_config(expected_tasks)
         ):
             raise ValueError("RetrievalDataset requires the current task/input/grid contract")
         self.manifest = str(manifest)
@@ -63,19 +70,26 @@ class RetrievalDataset(Dataset):
         self.config_hash = fingerprint(
             {k: v for k, v in config.items() if k not in ("version", "input_profile")}
         )
+        self.pack_set = LabelPackSet(label_packs, table, self.root, definitions)
+        snapshot = specification_snapshot(definitions)
         self.data_contract = dict(
             version=VERSION,
             input_profile=PROFILE,
             config_sha256=self.config_hash,
-            tasks=task_config(TASKS),
+            tasks=task_config(expected_tasks),
+            specifications=snapshot,
+            label_specs={
+                name: value for name, value in snapshot["labels"].items() if name not in TASKS
+            },
+            label_packs=self.pack_set.identity,
         )
         self.table = table.loc[table.split == split].reset_index(drop=True)
         if self.table.empty:
             raise ValueError(f"Empty {split} split")
-        self.input_profile, self.tasks = PROFILE, task_config(TASKS)
+        self.input_profile, self.tasks = PROFILE, task_config(expected_tasks)
         self.training, self.flip_probability = training, flip_probability
         self.cache, self.schema = ShardCache(), RetrievalSchema()
-        self.input_packs, self.label_packs = [], []
+        self.input_packs, self.label_packs = [], self.pack_set.packs
 
     def __len__(self):
         return len(self.table)
@@ -102,12 +116,22 @@ class RetrievalDataset(Dataset):
             result[name] = array[int(row.shard_index)].copy()
         return result
 
+    def _load_targets(self, row, metadata):
+        targets = self._arrays(row, "label", self.schema.targets)
+        bounds = metadata["target_bounds"]
+        times = {name: bounds.copy() for name in self.tasks}
+        extra, observed_times = self.pack_set.read(
+            row.sample_id, self.cache, bounds, metadata["slot_bounds"][[0, -1], [0, 1]]
+        )
+        targets.update(extra)
+        times.update(observed_times)
+        return as_tensors(targets), {name: torch.from_numpy(t) for name, t in times.items()}
+
     def __getitem__(self, index):
         row = self.table.iloc[index]
-        inputs = as_tensors(
-            align_inputs(self._arrays(row, "input", self.schema.inputs), self.schema)
-        )
-        targets = as_tensors(self._arrays(row, "label", self.schema.targets))
+        raw = self._arrays(row, "input", self.schema.inputs)
+        targets, times = self._load_targets(row, raw)
+        inputs = as_tensors(align_inputs(raw, self.schema))
         if self.training:
             for axis in (-1, -2):
                 if torch.rand(()) < self.flip_probability:
@@ -121,7 +145,7 @@ class RetrievalDataset(Dataset):
                                 ),
                             ):
                                 arrays[name] = value.flip(axis)
-        inputs["target_time"] = {name: inputs["target_bounds"].clone() for name in TASKS}
+        inputs["target_time"] = times
         targets["metainfo"] = {
             name: str(row[name])
             for name in ("sample_id", "frequency_bin", "target_time", "climate_class")

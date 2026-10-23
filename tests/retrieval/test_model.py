@@ -55,10 +55,12 @@ def batch():
     return dict(inputs=inputs, data_samples=labels)
 
 
-@pytest.mark.parametrize("private_rank", [0, 2])
-@pytest.mark.parametrize("checkpoint", [False, True])
+@pytest.mark.parametrize(
+    "private_rank,checkpoint,extended",
+    [(0, False, False), (2, False, False), (0, True, False), (2, True, False), (2, True, True)],
+)
 def test_current_model_forward_backward_and_prediction(
-    monkeypatch, tmp_path, private_rank, checkpoint
+    monkeypatch, tmp_path, private_rank, checkpoint, extended
 ):
     from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.nn.flexi_vit import EncoderConfig
     from rslearn.models.olmoearth_pretrain import model as wrapper
@@ -84,6 +86,20 @@ def test_current_model_forward_backward_and_prediction(
     torch.set_num_threads(1)
     try:
         cfg = Config.fromfile("configs/hydrostate_mtlora.py")
+        if extended:
+            cfg.label_specs = dict(
+                swe=dict(
+                    source="fixture",
+                    band="SWE",
+                    units="mm",
+                    support="native",
+                    resolution_m=500,
+                    qa="fixture",
+                    aggregation="target_period_mean",
+                    activation="softplus",
+                    valid_min=0,
+                )
+            )
         configure_data_contract(cfg)
         cfg.model.encoder.update(
             model_path=str(tmp_path),
@@ -98,8 +114,19 @@ def test_current_model_forward_backward_and_prediction(
         for head in cfg.model.heads.values():
             head.in_channels = 8
         cfg.model.target_statistics = statistics()
+        sample = batch()
+        if extended:
+            cfg.model.target_statistics["task_specs"] = task_config(cfg.model.tasks)
+            cfg.model.target_statistics["tasks"]["swe"] = dict(count=10, mean=1, std=0.5)
+            sample["inputs"]["target_time"]["swe"] = sample["inputs"]["target_time"][
+                "et_land"
+            ].clone()
+            for suffix in ("value", "valid", "weights"):
+                sample["data_samples"][f"swe_native_{suffix}"] = sample["data_samples"][
+                    f"et_land_native_{suffix}"
+                ].clone()
         model = MODELS.build(cfg.model).train()
-        data = model.data_preprocessor(batch(), training=True)
+        data = model.data_preprocessor(sample, training=True)
         output = model(data["inputs"])
         assert all(v.shape == (2, 1, 4, 4) for v in output.values())
         torch.testing.assert_close(
@@ -111,6 +138,9 @@ def test_current_model_forward_backward_and_prediction(
         assert model.encoder.landsat_toa_adapter.weight.grad is not None
         assert all(torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None)
         assert model.input_fusion.layers[-1].weight.grad.abs().sum() > 0
+        if extended:
+            assert model.heads["swe"].layers[-1].weight.grad.abs().sum() > 0
+            assert loss["valid_count_swe"] > 0
         predictions = model.predict(**data)
         for p in predictions:
             torch.testing.assert_close(

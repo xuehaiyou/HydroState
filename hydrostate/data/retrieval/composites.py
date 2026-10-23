@@ -4,6 +4,8 @@ import numpy as np
 
 from hydrostate.data.gee.products import BANDS, MODALITIES, collection
 
+from .specs import INPUT_SPECS
+
 DW_CLASSES = [
     "water",
     "trees",
@@ -19,23 +21,29 @@ QUALITY = ["days", "mean_day", "first_day", "last_day"]
 
 
 def optical_mask(image, sensor):
-    if sensor == "landsat":
+    qa = INPUT_SPECS[sensor].qa
+    if qa == "landsat_c2_clear_water_snow":
         # Bits 0..4: fill, dilated cloud, cirrus, cloud, shadow. Snow (5) stays.
         return image.select("QA_PIXEL").bitwiseAnd(31).eq(0).And(image.select("QA_RADSAT").eq(0))
+    if qa != "scl_clear_water_snow":
+        raise ValueError(f"No optical QA adapter for {qa}")
     scl = image.select("SCL")
     return scl.remap([0, 1, 3, 8, 9, 10], [0] * 6, 1).eq(1)
 
 
 def prepare_sensor(ee, image, sensor, bands=None):
     bands = list(bands or BANDS[sensor])
-    if sensor == "landsat":
+    spec = INPUT_SPECS[sensor]
+    if spec.normalization == "toa_physical":
         value = ee.Algorithms.Landsat.TOA(image).select(bands)
         value = value.updateMask(optical_mask(image, sensor))
-    elif sensor == "s2":
+    elif spec.qa == "scl_clear_water_snow":
         value = image.select(bands).updateMask(optical_mask(image, sensor))
-    else:
+    elif spec.qa == "grd_iw_valid":
         # GRD catalog values are calibrated dB; average linear power, not dB.
         value = ee.Image.constant(10).pow(image.select(bands).divide(10))
+    else:
+        raise ValueError(f"No input preparation adapter for {sensor}: {spec.qa}")
     valid = value.mask().reduce(ee.Reducer.min()).gt(0)
     return ee.Image(
         value.updateMask(valid).copyProperties(image, ["system:time_start", "system:index"])
@@ -94,7 +102,7 @@ def sensor_composite(ee, sensor, scene_ids, start, bands=None):
         images.map(lambda im: prepare_sensor(ee, im, sensor, bands)),
         bands,
         start,
-        radar=sensor == "s1",
+        radar=INPUT_SPECS[sensor].aggregation == "linear_power_daily_mean",
     )
 
 
@@ -165,19 +173,17 @@ def normalize(sensor, values, valid, norm, bands=None):
     """
     values = values.astype(np.float32)
     bands = list(bands or BANDS[sensor])
-    if sensor == "landsat":
+    spec = INPUT_SPECS[sensor]
+    band_specs = {band.name: band for band in spec.bands}
+    if spec.normalization == "toa_physical":
         for index, band in enumerate(bands):
-            if band in ("B10", "B11"):
-                values[index] = (values[index] - 290) / 80 + 0.5
-            else:
-                values[index] = values[index] / 2 + 0.5
-    else:
+            definition = band_specs[band]
+            values[index] = (values[index] - definition.offset) / definition.divisor + 0.5
+    elif spec.normalization == "pretrained":
         for index, band in enumerate(bands):
-            name = (
-                band.lower()
-                if sensor == "s1"
-                else ("B" + band[1:].zfill(2) if band != "B8A" else band)
-            )
+            name = band_specs[band].normalization_key
             stats = norm[MODALITIES[sensor]][name]
             values[index] = (values[index] - stats["mean"]) / (4 * stats["std"]) + 0.5
+    else:
+        raise ValueError(f"No normalization adapter for {spec.normalization}")
     return np.where(valid[None], values, 0).astype(np.float16)

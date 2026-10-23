@@ -3,6 +3,7 @@
 import importlib
 
 _contract = importlib.import_module("hydrostate.data.retrieval.contract")
+_specs = importlib.import_module("hydrostate.data.retrieval.specs")
 
 _base_ = ["./_base_/runtime.py"]
 custom_imports = dict(
@@ -16,6 +17,8 @@ if manifest == "__data_root__":
 input_profile = _contract.PROFILE
 tasks = _contract.TASKS
 data_contract = _contract.VERSION
+label_specs = dict()
+label_packs = []
 
 model = dict(
     type="MTLoRAHydroStateModel",
@@ -45,13 +48,7 @@ model = dict(
         name: dict(
             type="RegressionHead",
             in_channels=64,
-            activation=(
-                "identity"
-                if name in ("water", "snow_ice", "land")
-                else "sigmoid"
-                if name == "soil_moisture"
-                else "softplus"
-            ),
+            activation=_specs.LABEL_SPECS[name].activation,
         )
         for name in tasks
     },

@@ -9,6 +9,9 @@ from .retrieval.contract import PROFILE
 def input_keys(profile):
     if profile not in {LEGACY_PROFILE, L2_PROFILE, PROFILE}:
         raise ValueError(f"Unknown model input profile: {profile}")
+    if profile == PROFILE:
+        from .retrieval.specs import INPUT_SPECS
+        return tuple(INPUT_SPECS)
     return ("s1", "s2", "landsat_l2" if profile == L2_PROFILE else "landsat")
 
 

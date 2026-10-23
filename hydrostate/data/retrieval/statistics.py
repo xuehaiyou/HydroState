@@ -24,21 +24,23 @@ class _RetrievalSupportDataset(RetrievalDataset):
         specs = {
             key: spec
             for key, spec in self.schema.inputs.items()
-            if key in {f"{name}_valid" for name in INPUT_GROUPS}
+            if key in {f"{name}_valid" for name in INPUT_GROUPS} | {"slot_bounds", "target_bounds"}
         }
-        masks = sensor_masks(
-            self._arrays(row, "input", specs), (self.schema.height, self.schema.width)
-        )
+        raw = self._arrays(row, "input", specs)
+        masks = sensor_masks(raw, (self.schema.height, self.schema.width))
+        targets, _ = self._load_targets(row, raw)
         return dict(
             inputs=as_tensors({f"{name}_valid": value for name, value in masks.items()}),
-            data_samples=as_tensors(self._arrays(row, "label", self.schema.targets)),
+            data_samples=targets,
         )
 
 
 def compute_retrieval_statistics(cfg, num_workers=0, batch_size=4):
     """Read only validity and labels; use exactly the training SM coupling masks."""
+    from hydrostate.cli import configure_data_contract
     from hydrostate.models.water_soil_coupling import WaterSoilCoupling
 
+    configure_data_contract(cfg)
     options = {k: v for k, v in cfg.train_dataloader.dataset.items() if k != "type"}
     dataset = _RetrievalSupportDataset(**dict(options, training=False, split="train"))
     original_hash = file_hash(dataset.manifest)

@@ -8,6 +8,7 @@ from .catalog import cached_json
 from .composites import QUALITY, cover_composite
 from .contract import COVER, INPUT_SIZE
 from .labels import sm_support_eligible
+from .specs import LABEL_SPECS
 
 
 def pixels(ee, image, names, sample):
@@ -167,7 +168,13 @@ def fetch_products(ee, sample, cover, pml_scene, config, cache, *, sm_enabled):
     start, end = sample["target_time"], sample["target_end"]
     pml = None
     if pml_scene:
-        image = ee.Image(pml_scene["asset_id"]).select(["ET", "Ew"]).multiply(0.01)
+        spec = LABEL_SPECS["et_land"]
+        image = (
+            ee.Image(pml_scene["asset_id"])
+            .select(["ET", "Ew"])
+            .multiply(spec.scale)
+            .add(spec.offset)
+        )
         names = ["ET", "Ew", "ET_valid", "Ew_valid"]
         masked = image.updateMask(image.gte(0))
         expression = ee.Image.cat([masked, masked.mask().gt(0).rename(names[2:])]).unmask(0, False)

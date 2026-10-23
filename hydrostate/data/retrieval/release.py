@@ -8,13 +8,14 @@ from pathlib import Path
 import pandas as pd
 from mmengine.config import Config
 
-from hydrostate.cli import configure_target_statistics
+from hydrostate.cli import configure_data_contract, configure_target_statistics
 from hydrostate.data.gee.contracts import atomic_json
 from hydrostate.datasets.retrieval_dataset import RetrievalDataset
+from hydrostate.normalization import training_fingerprint
 from hydrostate.storage.packs import file_hash
 
 from .audit import audit
-from .contract import PROFILE, SENSORS, TASKS, TIME_STEPS, VERSION
+from .contract import PROFILE, SENSORS, TIME_STEPS, VERSION
 from .statistics import compute_retrieval_statistics
 
 
@@ -36,14 +37,26 @@ def verify(root, statistics):
     table = pd.read_parquet(manifest)
     if len(table) != marker["samples"] or not table.sample_id.is_unique:
         raise ValueError("Incomplete or duplicated samples")
+    if contract := stats.get("data_contract"):
+        packs = [
+            {k: item[k] for k in ("path", "variables", "max_uncertainty")}
+            for item in contract.get("label_packs", [])
+        ]
+        dataset = RetrievalDataset(
+            manifest,
+            "train",
+            data_root=root,
+            label_specs=contract.get("label_specs"),
+            label_packs=packs,
+        )
+        if training_fingerprint(table, dataset.data_contract) != stats["training_fingerprint"]:
+            raise ValueError("Dataset or label packs differ from frozen target statistics")
     return dict(samples=len(table), manifest_sha256=digest, version=VERSION)
 
 
-def prepare(root, statistics, run_root, *, num_workers=4):
+def prepare(root, statistics, run_root, *, num_workers=4, config=None):
     """Audit, freeze training moments, and check both configs before marking ready."""
     root, statistics, run_root = (Path(p).resolve() for p in (root, statistics, run_root))
-    report = audit(root)
-    print("Collection audit:", report, flush=True)
     os.environ.update(
         HYDROSTATE_DATA_ROOT=str(root),
         HYDROSTATE_MANIFEST=str(root / "samples.parquet"),
@@ -55,6 +68,15 @@ def prepare(root, statistics, run_root, *, num_workers=4):
     base = None
     for name, rank in (("mtlora", 4), ("mtlora_shared", 0)):
         cfg = Config.fromfile(str(repo / f"configs/hydrostate_{name}.py"))
+        if config is not None:
+            cfg = Config.fromfile(str(config))
+            cfg.model.encoder.private_rank = rank
+        configure_data_contract(cfg)
+        if base is None:
+            report = audit(
+                root, label_packs=cfg.get("label_packs"), label_specs=cfg.get("label_specs")
+            )
+            print("Collection audit:", report, flush=True)
         if not statistics.exists():
             moments = compute_retrieval_statistics(cfg, num_workers=num_workers)
             statistics.parent.mkdir(parents=True, exist_ok=True)
@@ -75,7 +97,7 @@ def prepare(root, statistics, run_root, *, num_workers=4):
                     sample = dataset[index]
                     if sample["inputs"]["sensor_valid"].shape != (TIME_STEPS, len(SENSORS)) or set(
                         sample["inputs"]["target_time"]
-                    ) != set(TASKS):
+                    ) != set(cfg.model.tasks):
                         raise ValueError("Invalid temporal inputs in prepared release")
         cfg.work_dir = str(run_root / ("lora" if rank == 0 else "mtlora"))
         cfg.dump(str(provenance / f"{name}.py"))
@@ -96,6 +118,9 @@ def main():
     parser.add_argument("--statistics", type=Path, required=True)
     parser.add_argument("--run-root", type=Path)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--config", type=Path, help="Training config declaring optional label packs"
+    )
     args = parser.parse_args()
     if args.num_workers < 0:
         parser.error("--num-workers must be nonnegative")
@@ -103,7 +128,11 @@ def main():
         if args.run_root is None:
             parser.error("prepare requires --run-root")
         result = prepare(
-            args.data_root, args.statistics, args.run_root, num_workers=args.num_workers
+            args.data_root,
+            args.statistics,
+            args.run_root,
+            num_workers=args.num_workers,
+            config=args.config,
         )
     else:
         result = verify(args.data_root, args.statistics)
