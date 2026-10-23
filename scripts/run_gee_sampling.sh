@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # Current contract: eight centre-source quotas, five 8-day mean composites.
-# Change collection parameters in the config; a resumed directory is immutable.
+# Keep data definitions fixed; --samples may increase the separate collection target.
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 HYDROSTATE_PYTHON="${HYDROSTATE_PYTHON:-python}"
 COLLECTION_CONFIG="${COLLECTION_CONFIG:-configs/data/collection/retrieval.py}"

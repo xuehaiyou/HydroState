@@ -10,11 +10,12 @@ split_seed = 42
 candidate_seed = 42
 candidates_per_bin = 24
 candidate_block_degrees = 2
-candidate_block_batch = 16
-candidate_pool_factor = 3
+candidate_pool_capacity = 128
+candidate_low_watermark = 32
 # One small DW query shares the same four worker slots as sample collection.
 ice_candidates_per_query = 8
 ice_candidate_buffer = 16
+ice_candidate_low_watermark = 4
 ice_search_degrees = 0.5
 min_center_ice_fraction = 0.50
 candidate_dir = "/mnt/d/Hydrostate/candidates/retrieval_5x8_v1"

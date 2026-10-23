@@ -2,7 +2,6 @@
 
 import json
 import random
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -79,42 +78,51 @@ def centre_sample(feature, block, config):
     )
 
 
-def candidate_blocks(ee, config):
-    """Finite, shuffled global blocks; no global per-stratum histogram scan."""
-    from pyproj import CRS
+class CandidateCatalog:
+    """One cached JRC block per worker task; no nested thread pool."""
 
-    step = config["candidate_block_degrees"]
-    blocks = global_blocks(config)
-    occurrence = ee.Image("JRC/GSW1_4/GlobalSurfaceWater").select("occurrence").unmask(0)
-    occurrence = occurrence.mask(ee.Image.constant(1))
-    observed = ee.ImageCollection("JRC/GSW1_4/YearlyHistory").select("waterClass").max().gt(0)
-    bins = (
-        occurrence.divide(20)
-        .floor()
-        .add(1)
-        .where(occurrence.eq(0), 0)
-        .where(occurrence.eq(100), 6)
-        .toInt()
-        .rename("frequency_bin")
-        .updateMask(observed)
-    )
-    climate = ee.Image(config["climate_asset"]).select(0).unmask(0, False).rename("climate_class")
-    strata = bins.addBands(climate).addBands(occurrence.rename("occurrence"))
-    contract = {
-        k: config[k]
-        for k in (
-            "candidate_seed",
-            "candidate_block_degrees",
-            "candidates_per_bin",
-            "climate_asset",
-            "split_margin_m",
+    def __init__(self, ee, config):
+        from pyproj import CRS
+
+        step = config["candidate_block_degrees"]
+        occurrence = ee.Image("JRC/GSW1_4/GlobalSurfaceWater").select("occurrence").unmask(0)
+        occurrence = occurrence.mask(ee.Image.constant(1))
+        observed = ee.ImageCollection("JRC/GSW1_4/YearlyHistory").select("waterClass").max().gt(0)
+        bins = (
+            occurrence.divide(20)
+            .floor()
+            .add(1)
+            .where(occurrence.eq(0), 0)
+            .where(occurrence.eq(100), 6)
+            .toInt()
+            .rename("frequency_bin")
+            .updateMask(observed)
         )
-    }
-    cache = Path(config["candidate_dir"]) / fingerprint(dict(contract, version=CANDIDATE_VERSION))
-    projection = CRS.from_epsg(6933).to_wkt(version="WKT1_GDAL")
-    batch_size = config["candidate_block_batch"]
+        climate = (
+            ee.Image(config["climate_asset"]).select(0).unmask(0, False).rename("climate_class")
+        )
+        strata = bins.addBands(climate).addBands(occurrence.rename("occurrence"))
+        contract = {
+            k: config[k]
+            for k in (
+                "candidate_seed",
+                "candidate_block_degrees",
+                "candidates_per_bin",
+                "climate_asset",
+                "split_margin_m",
+            )
+        }
+        cache = Path(config["candidate_dir"]) / fingerprint(
+            dict(contract, version=CANDIDATE_VERSION)
+        )
+        projection = CRS.from_epsg(6933).to_wkt(version="WKT1_GDAL")
 
-    def read(item):
+        self.ee, self.config, self.step = ee, config, step
+        self.cache, self.strata, self.projection = cache, strata, projection
+
+    def fetch(self, item):
+        ee, config, step = self.ee, self.config, self.step
+        cache, strata, projection = self.cache, self.strata, self.projection
         i, (x, y) = item
         area = ee.Geometry.Rectangle([x, y, x + step, min(y + step, 84)], geodesic=False)
         rows = cached_json(
@@ -137,12 +145,6 @@ def candidate_blocks(ee, config):
                     dict(sample, sampling_group=sample["frequency_bin"], jrc_observed=True)
                 )
         return result
-
-    indexed = list(enumerate(blocks))
-    with ThreadPoolExecutor(max_workers=config["concurrency"]) as pool:
-        for offset in range(0, len(blocks), batch_size):
-            batch = indexed[offset : offset + batch_size]
-            yield [sample for rows in pool.map(read, batch) for sample in rows]
 
 
 def catalog(ee, cache, sensor, sample, start, end):

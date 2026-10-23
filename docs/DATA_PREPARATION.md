@@ -20,7 +20,8 @@ bash scripts/run_gee_sampling.sh
 `--dry-run` 只解析参数和生产代码哈希，不创建输出目录或连接 GEE。
 可用 `--samples`、`--output`、`--candidate-dir`、`--project`、`--concurrency` 覆盖参数；
 `COLLECTION_CONFIG` 可指定另一份完整的当前配置，不接受旧 `_base_` 采样配置。
-已开始采样的目录绑定配置和代码，参数改变后使用新目录。
+数据定义、分片指纹固定；目标数量、并发和候选池容量独立保存为运行计划。
+目标数量只允许增加；改变 QA、标签或影像定义仍需新目录。
 
 HPC 在联网 IO 节点执行 `scripts/run_gee_collection_io.sh`。
 该脚本额外要求 `HYDROSTATE_CODE_ROOT`、`HYDROSTATE_SOURCE_HASHES`，并使用上述
@@ -28,8 +29,9 @@ Python、样本目录和候选目录；校验冻结代码后调用同一个 `run
 不能将 WSL 的 `/mnt/d` 默认路径用于 HPC。
 
 默认候选查询和样本采集合计最多 4 个任务；IO 启动器仍限制为 2 CPU、单线程数学库，不使用 GPU。
-`candidate_pool_factor=3` 控制每组候选点数量相对剩余配额的倍数。
-候选点先跨区域混合、随机打乱，像素下载按成功配额滚动补位。
+JRC 每组 `candidate_pool_capacity=128`、`candidate_low_watermark=32`；
+冰雪组容量 16、低水位 4。池容量不随目标总量增长；末期只按剩余配额补充。
+候选来自打乱的全球块，小池内混合抽取；单块查询与像素下载在同一个线程池滚动补位。
 每次提交前选择日期，将在途任务计入年份、月份、气候区和位置日期限制；
 失败释放全部预占。默认不对已经下载的成功样本做 reservoir 替换。
 可先用 `--samples 160 --concurrency 4` 试采，检查报告中的 `year_month_counts`、
@@ -52,6 +54,27 @@ GEE 覆盖表达式（来源影像、日期、阈值和投影），不会仅凭�
 JRC 中心点候选池仍可复用。冰雪候选缓存在独立 `dw_ice_v1` 子目录；
 位置绑定实际 PML 日期，最终中心冰雪覆盖 ≥50% 才下载输入。每组成功 20 个构成 160 个试采。
 `sampling_group_counts` 是八组硬配额，`frequency_counts` 是实际 JRC 频率组成。
+
+## 原目录续采与扩容
+
+相同目标重新执行采样命令即可恢复。增加总量时保持同一数据目录及数据定义：
+
+```bash
+# 例如从 20,000 扩到 40,000；八组各从 2,500 补到 5,000。
+bash scripts/run_gee_sampling.sh --samples 40000 --concurrency 4
+```
+
+HPC 同样通过冻结代码的 `run_gee_collection_io.sh` 执行，并先确认旧采样进程退出。
+`collection.json` 保留原始生产配置，`collection_plan.json` 的数量才是当前目标。
+候选余量、源游标和在途请求保存在 `sampling_state.json`，缓存可继续复用。
+SIGTERM/SIGINT 会等待在途写盘后退出；失败请求在下次运行时重试。
+已经完成的版本在扩容前保存到 `releases/`，旧统计量保留；为扩容结果指定新的
+统计文件，例如 `target_stats_n40000.json`。使用旧清单训练时，`manifest` 指向快照，
+`data_root` 仍指向原样本根目录，不能将相对分片路径误解为快照目录中的文件。
+
+从本次修改前的冻结版本切换时，仅第一次增加：
+`--adopt-from /path/to/previous/frozen/code`。工具会核对旧完整生产哈希，并确认
+输入/标签函数与其依赖的生产签名一致；不会改写旧分片或放行 QA 变化。
 
 ## 2. 审计与训练统计
 

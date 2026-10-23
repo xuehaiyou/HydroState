@@ -47,7 +47,11 @@ Landsat B10/B11 按产品发布的 30 m 保存，不能还原传感器的 100 m 
 `frequency_bin=0..6` 保留真实 JRC 分组，无观测时为 `-1`，并保存 `jrc_observed`。
 冰雪组的 `candidate_target_time` 必须等于 `target_time`；所有冰雪中心都会审计
 有效性及覆盖 ≥50%，不受数组抽查数量限制。
-改变参数、生产代码或数据定义时使用新目录，不将新旧样本混写。
+`collection.json` 与既有分片指纹不变，`collection_producer.json` 绑定像素生产依赖。
+目标数量、并发与池容量由 `collection_plan.json` 管理；`sampling_state.json` 保存
+候选队列、来源游标与在途请求。扩容不重写旧分片，发布前按新目标审计八组配额。
+旧完成清单与统计量保存在 `releases/`；扩容后的清单需要新的训练统计量。
+改变 QA、产品或数据定义仍使用新目录，不将新旧标签定义混写。
 新增监督变量可通过独立标签包复用这个基础集合，不需要重采输入或修改基础目录。
 标签包有自己的版本和发布标记；见 [扩展输入与标签](EXTENDING_VARIABLES.md)。
 

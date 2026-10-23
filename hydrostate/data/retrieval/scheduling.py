@@ -1,10 +1,14 @@
 """Rolling workers with just-in-time dates and successful + in-flight balance."""
 
+import logging
+import time
 from collections import defaultdict, deque
 from concurrent.futures import FIRST_COMPLETED, wait
 from datetime import date
 
 from .sampling import ICE_GROUP, SamplingLedger, location_key
+
+LOG = logging.getLogger(__name__)
 
 
 class SamplePlanner:
@@ -20,13 +24,37 @@ class SamplePlanner:
         self.seen = set()
         self.extend(candidates, ledger)
 
-    def extend(self, candidates, ledger):
+    def extend(self, candidates, ledger, limits=None):
         candidates = list(candidates)
         self.rng.shuffle(candidates)
         for sample in candidates:
-            identity = location_key(sample), sample.get("candidate_target_time")
-            if identity not in self.seen:
+            identity = self.identity(sample)
+            if identity not in self.seen and (
+                limits is None
+                or self.count({sample["sampling_group"]}) < limits[sample["sampling_group"]]
+            ):
                 self.put(sample, ledger)
+
+    @staticmethod
+    def identity(sample):
+        return location_key(sample), sample.get("candidate_target_time") or sample.get(
+            "target_time"
+        )
+
+    def snapshot(self):
+        return [sample for queue in self.queues.values() for sample in queue]
+
+    def trim(self, limits):
+        for group, limit in limits.items():
+            excess = self.count({group}) - limit
+            for key in list(self.queues):
+                if key[0] != group:
+                    continue
+                while excess > 0 and self.queues[key]:
+                    self.seen.discard(self.identity(self.queues[key].pop()))
+                    excess -= 1
+                if not self.queues[key]:
+                    del self.queues[key]
 
     def count(self, groups):
         return sum(len(queue) for key, queue in self.queues.items() if key[0] in groups)
@@ -34,7 +62,7 @@ class SamplePlanner:
     def put(self, sample, ledger):
         visits = len(ledger.dates.get(location_key(sample), ()))
         if visits < ledger.max_dates:
-            self.seen.add((location_key(sample), sample.get("candidate_target_time")))
+            self.seen.add(self.identity(sample))
             self.queues[
                 sample["sampling_group"],
                 visits,
@@ -48,7 +76,7 @@ class SamplePlanner:
         key = location_key(sample)
         if len(ledger.dates.get(key, ())) + len(reserved.dates.get(key, ())) >= ledger.max_dates:
             return None
-        if fixed := sample.get("candidate_target_time"):
+        if fixed := sample.get("candidate_target_time") or sample.get("target_time"):
             period = int(fixed[:4]), int(fixed[5:7])
             if fixed not in self.calendar.get(period, ()):
                 raise ValueError("Ice candidate date is outside the product calendar")
@@ -118,7 +146,9 @@ class SamplePlanner:
                     ),
                 )
                 sample = self.queues[chosen].popleft()
-                self.seen.discard((location_key(sample), sample.get("candidate_target_time")))
+                self.seen.discard(self.identity(sample))
+                if not self.queues[chosen]:
+                    del self.queues[chosen]
                 day = self.choose_date(sample, ledger, reserved)
                 if day is None:
                     # A pending neighbour may temporarily block all dates.
@@ -146,67 +176,149 @@ def completed_samples(
     rng,
     tried,
     ice_source=None,
-    next_candidates=None,
+    water_source=None,
+    capacity=128,
+    low_watermark=32,
     ice_buffer=16,
+    ice_low_watermark=4,
+    state=None,
+    checkpoint=None,
+    stop=None,
 ):
-    """Sample downloads and one DW query share the same worker budget.
+    """Queries and downloads share one executor; available groups never wait for others.
 
-    Water-pool refills happen only after active workers drain: their metadata
-    fetcher can then use all four slots without overlapping another four jobs.
+    One query may refill a low pool while samples occupy the other slots. When
+    there are no ready samples, idle slots can search more water blocks. Each
+    query is a single RPC, with no hidden inner executor. State includes queues,
+    source cursors and uncompleted operations for crash-safe replay from caches.
     """
-    planner, pending = SamplePlanner(candidates, dates, ledger, rng, tried), {}
-    water_exhausted = next_candidates is None
+    state = state or {}
+    restored = state.get("candidates", [])
+    replay = deque(state.get("pending_queries", []))
+    planner = SamplePlanner(
+        [*candidates, *restored, *state.get("pending_samples", [])], dates, ledger, rng, tried
+    )
+    pending, refilling, exhausted = {}, set(), set()
+    sources = {"water": water_source, "ice": ice_source}
+    source_turn, last_checkpoint = 0, 0.0
+
+    def stopped():
+        return stop is not None and stop.is_set()
+
+    def save(force=False):
+        nonlocal last_checkpoint
+        if checkpoint is None or (not force and time.monotonic() - last_checkpoint < 15):
+            return
+        checkpoint(
+            dict(
+                version=1,
+                candidates=planner.snapshot(),
+                pending_samples=[item for kind, item in pending.values() if kind == "sample"],
+                pending_queries=[list(pair) for pair in pending.values() if pair[0] != "sample"]
+                + list(replay),
+                water=water_source.snapshot() if water_source is not None else {},
+                ice=ice_source.snapshot() if ice_source is not None else {},
+            )
+        )
+        LOG.info(
+            "Candidate buffers: %s; active=%d",
+            {g: planner.count({g}) for g in target},
+            len(pending),
+        )
+        last_checkpoint = time.monotonic()
+
     try:
         while True:
-            water_groups = {k for k in target if k != ICE_GROUP and ledger.counts[k] < target[k]}
-            refill = bool(water_groups) and not planner.count(water_groups) and not water_exhausted
-            if refill and not pending:
-                batch = next_candidates()
-                if batch is None:
-                    water_exhausted = True
-                else:
-                    planner.extend(batch, ledger)
-                continue
             reserved = SamplingLedger(
                 [item for kind, item in pending.values() if kind == "sample"],
                 ledger.max_dates,
                 ledger.min_days,
             )
-            ice_needed = (
-                ICE_GROUP in target
-                and ledger.counts[ICE_GROUP] + reserved.counts[ICE_GROUP] < target[ICE_GROUP]
-            )
-            if (
-                not refill
-                and ice_source is not None
-                and ice_needed
-                and planner.count({ICE_GROUP})
-                < min(
-                    ice_buffer,
-                    target[ICE_GROUP] - ledger.counts[ICE_GROUP] - reserved.counts[ICE_GROUP],
-                )
-                and len(pending) < concurrency
-                and not any(kind == "query" for kind, _ in pending.values())
-            ):
-                query = ice_source.next_query(ledger, reserved)
-                if query is not None:
-                    pending[workers.submit(ice_source.fetch, query)] = ("query", query)
-            while not refill and len(pending) < concurrency:
-                sample = planner.next(ledger, reserved, target)
-                if sample is None:
-                    break
-                pending[workers.submit(collect_one, sample)] = ("sample", sample)
-                reserved.add(sample)
+            remaining = {
+                g: max(0, n - ledger.counts[g] - reserved.counts[g]) for g, n in target.items()
+            }
+            limits = {
+                g: min(ice_buffer if g == ICE_GROUP else capacity, 3 * n)
+                for g, n in remaining.items()
+            }
+            planner.trim({g: ice_buffer if g == ICE_GROUP else capacity for g in target})
+            for group, limit in limits.items():
+                count = planner.count({group})
+                low = ice_low_watermark if group == ICE_GROUP else low_watermark
+                if not limit or count >= limit:
+                    refilling.discard(group)
+                elif count <= min(low, limit - 1):
+                    refilling.add(group)
+
+            def query_slot():
+                nonlocal source_turn
+                # next() may discard many blocked centres since the outer check.
+                # Recompute low-water flags before deciding the source is empty.
+                for group, total in target.items():
+                    left = max(0, total - ledger.counts[group] - reserved.counts[group])
+                    limit = min(ice_buffer if group == ICE_GROUP else capacity, 3 * left)
+                    count = planner.count({group})
+                    low = ice_low_watermark if group == ICE_GROUP else low_watermark
+                    if not limit or count >= limit:
+                        refilling.discard(group)
+                    elif count <= min(low, limit - 1):
+                        refilling.add(group)
+                choices = []
+                needs = {g for g in refilling if ledger.counts[g] + reserved.counts[g] < target[g]}
+                if any(g != ICE_GROUP for g in needs):
+                    choices.append("water")
+                if ICE_GROUP in needs:
+                    choices.append("ice")
+                if len(choices) == 2 and source_turn % 2:
+                    choices.reverse()
+                for kind in choices:
+                    source = sources[kind]
+                    if source is None or kind in exhausted:
+                        continue
+                    if kind == "ice" and any(k == "ice" for k, _ in pending.values()):
+                        continue
+                    query = None
+                    for pair in list(replay):
+                        if pair[0] == kind:
+                            replay.remove(pair)
+                            query = pair[1]
+                            break
+                    if query is None:
+                        query = source.next_query(ledger, reserved)
+                    if query is None:
+                        # Ice hints may become available after a sample finishes.
+                        if kind == "water":
+                            exhausted.add(kind)
+                        continue
+                    pending[workers.submit(source.fetch, query)] = (kind, query)
+                    source_turn += 1
+                    return True
+                return False
+
+            if not stopped():
+                # Reserve at most one refill slot when sample work is available.
+                if len(pending) < concurrency and not any(
+                    k != "sample" for k, _ in pending.values()
+                ):
+                    query_slot()
+                while len(pending) < concurrency:
+                    sample = planner.next(ledger, reserved, target)
+                    if sample is not None:
+                        pending[workers.submit(collect_one, sample)] = ("sample", sample)
+                        reserved.add(sample)
+                    elif not query_slot():
+                        break
+            save()
             if not pending:
-                if not water_exhausted and water_groups:
-                    continue
                 return
             done, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in done:
-                kind, _ = pending.pop(future)
+                kind, item = pending[future]
+                # Leave failures in the checkpoint so a restart retries them.
                 result = future.result()
-                if kind == "query":
-                    planner.extend(result, ledger)
+                pending.pop(future)
+                if kind != "sample":
+                    planner.extend(result, ledger, limits)
                     continue
                 if result is not None:
                     ledger.add(result)
@@ -214,5 +326,6 @@ def completed_samples(
                         ice_source.observe(result)
                 yield result
     finally:
+        save(force=True)
         for future in pending:
             future.cancel()

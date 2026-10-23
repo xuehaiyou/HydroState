@@ -33,10 +33,11 @@ def resolve_config(args):
         "max_dates_per_location",
         "min_date_gap_days",
         "concurrency",
-        "candidate_block_batch",
-        "candidate_pool_factor",
+        "candidate_pool_capacity",
+        "candidate_low_watermark",
         "ice_candidates_per_query",
         "ice_candidate_buffer",
+        "ice_candidate_low_watermark",
         "ice_search_degrees",
         "min_center_ice_fraction",
         "split_margin_m",
@@ -66,10 +67,14 @@ def resolve_config(args):
         raise ValueError("Require at least eight samples and an ordered year range")
     if not 1 <= config["max_dates_per_location"] <= 4 or config["min_date_gap_days"] < 40:
         raise ValueError("At most four dates per location, separated by at least 40 days")
-    if config["concurrency"] < 1 or config["candidate_block_batch"] < 1:
-        raise ValueError("Concurrency and block batch must be positive")
-    if not isinstance(config["candidate_pool_factor"], int) or config["candidate_pool_factor"] < 1:
-        raise ValueError("Candidate pool factor must be a positive integer")
+    if config["concurrency"] < 1:
+        raise ValueError("Concurrency must be positive")
+    for capacity, low in (
+        ("candidate_pool_capacity", "candidate_low_watermark"),
+        ("ice_candidate_buffer", "ice_candidate_low_watermark"),
+    ):
+        if not 0 <= config[low] < config[capacity]:
+            raise ValueError("Require 0 <= low watermark < pool capacity")
     if min(config["ice_candidates_per_query"], config["ice_candidate_buffer"]) < 1:
         raise ValueError("Ice candidate batch and buffer must be positive")
     if not 0 < config["min_center_ice_fraction"] <= 1:
@@ -117,6 +122,11 @@ def main():
         "--concurrency", type=int, help="Maximum concurrent queries and samples (default: config)"
     )
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--adopt-from",
+        type=Path,
+        help="Previous frozen source for a verified scheduler-only migration",
+    )
     args = parser.parse_args()
     config = resolve_config(args)
     if args.dry_run:
@@ -125,7 +135,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     from .collector import collect
 
-    collect(config)
+    collect(config, adopt_from=args.adopt_from)
 
 
 if __name__ == "__main__":

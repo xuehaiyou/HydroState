@@ -40,8 +40,9 @@ tests/                         共享模块及历史回归；retrieval/ 为当�
 - `configuration.py`：训练配置与该契约的一致性检查。
 - `cli.py`：解析采样参数，离线预览，绑定生产代码哈希。
 - `catalog.py`：候选点和影像元数据缓存；`sampling.py`：配额与时空去重。
-- `candidates.py`：按剩余配额建立七组轻量候选池；`scheduling.py`：逐任务选日期，
-  结合已完成与在途计数进行软均衡，滚动提交和释放失败预占。
+- `candidates.py`：可恢复的 JRC 块游标；`scheduling.py`：固定容量池、低水位补充，
+  逐任务选日期并进行软均衡；查询与下载共用线程池，保存队列和在途操作。
+- `plan.py`：不变生产契约、可扩展目标、生产签名核验及清单快照。
 - `ice_candidates.py`：独立 DW 冰雪候选，绑定目标日期、缓存空查询并共享四任务并发。
 - `composites.py`：逐景 QA、均值合成、观测质量摘要。
 - `alignment.py`：产品分辨率网格定义、本地对齐 10 m 和跨组有效性合并。

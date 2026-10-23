@@ -7,7 +7,7 @@ from threading import Barrier, Event, Lock
 
 import pytest
 
-from hydrostate.data.retrieval.candidates import candidate_pools
+from hydrostate.data.retrieval.candidates import WaterCandidateSource
 from hydrostate.data.retrieval.sampling import SamplingLedger, location_key, quotas
 from hydrostate.data.retrieval.scheduling import SamplePlanner, completed_samples
 
@@ -39,6 +39,8 @@ def run(rows, ledger, target, collect=lambda row: row, concurrency=4, dates=None
                 dates=dates or ["2020-01-01"],
                 rng=random.Random(43),
                 tried=set() if tried is None else tried,
+                capacity=max(128, len(rows)),
+                ice_buffer=max(16, len(rows)),
             )
         )
 
@@ -151,31 +153,34 @@ def test_network_failure_propagates_without_consuming_quota():
     assert ledger.counts[0] == 0
 
 
-def test_pool_is_bounded_deduplicated_and_refills_only_unfinished_groups():
-    ledger, target = SamplingLedger(), {0: 2, 1: 1}
-    batches = [
-        [sample(i, frequency_bin=i % 2, sampling_group=i % 2) for i in range(j, j + 20)]
-        for j in (0, 20, 40)
-    ]
-    batches[0] += [sample(0)]
-    pools = candidate_pools(batches, ledger, target, random.Random(43), factor=3)
-    first = next(pools)
-    assert Counter(s["frequency_bin"] for s in first) == {0: 6, 1: 3}
-    assert len({location_key(s) for s in first}) == len(first)
-    for row in first:
-        if row["frequency_bin"] == 1:
-            ledger.add(dict(row, target_time="2020-01-01"))
-            break
-    second = next(pools)
-    assert len(second) == 6 and all(s["frequency_bin"] == 0 for s in second)
-    assert not {location_key(s) for s in first} & {location_key(s) for s in second}
+def test_fixed_pool_capacity_is_independent_of_total_quota():
+    rows = [sample(i, sampling_group=i % 2) for i in range(1000)]
+    planner = SamplePlanner([], ["2020-01-01"], SamplingLedger(), random.Random(0), set())
+    planner.extend(rows, SamplingLedger(), limits={0: 128, 1: 128})
+    assert planner.count({0}) == planner.count({1}) == 128
+    planner.extend(rows, SamplingLedger(), limits={0: 128, 1: 128})
+    assert len(planner.snapshot()) == 256
 
 
-def test_sparse_pool_yields_available_centres_without_impossible_wait():
-    pools = list(
-        candidate_pools([[sample(1), sample(2)]], SamplingLedger(), {0: 1, 1: 1}, random.Random(43))
-    )
-    assert len(pools) == 1 and len(pools[0]) == 2
+def test_water_cursor_resumes_and_exhausts_without_an_inner_executor(monkeypatch):
+    import hydrostate.data.retrieval.candidates as candidates
+
+    monkeypatch.setattr(candidates, "global_blocks", lambda cfg: [(0, 0), (2, 0)])
+
+    class Catalog:
+        def __init__(self, *args):
+            pass
+
+        def fetch(self, query):
+            return [sample(query[0])]
+
+    monkeypatch.setattr(candidates, "CandidateCatalog", Catalog)
+    cfg = dict(max_dates_per_location=2)
+    first = WaterCandidateSource(None, cfg)
+    assert first.next_query(None, None) == 0
+    second = WaterCandidateSource(None, cfg, first.snapshot())
+    assert [second.next_query(None, None) for _ in range(4)] == [1, 0, 1, None]
+    assert len(second.fetch(0)) == 1
 
 
 def test_full_pilot_simulation_keeps_quotas_dates_and_fresh_locations_after_failures():
@@ -197,3 +202,207 @@ def test_full_pilot_simulation_keeps_quotas_dates_and_fresh_locations_after_fail
     assert len(ledger.years) == 8 and len(ledger.months) == 12
     assert max(ledger.years.values()) <= 26 and max(ledger.months.values()) <= 20
     assert len(ledger.climates) == 5
+
+
+def test_low_water_refill_starts_before_empty_and_queue_size_is_fixed():
+    ledger, observed = SamplingLedger(), []
+
+    class Source:
+        index = 0
+
+        def next_query(self, *args):
+            if self.index >= 4:
+                return None
+            self.index += 1
+            return self.index
+
+        def fetch(self, query):
+            return [sample(query * 100 + i) for i in range(30)]
+
+        def snapshot(self):
+            return dict(index=self.index)
+
+    source = Source()
+    with ThreadPoolExecutor(max_workers=4) as workers:
+        results = list(
+            completed_samples(
+                workers,
+                [sample(i) for i in range(3)],
+                ledger,
+                {0: 15},
+                4,
+                lambda r: r,
+                dates=["2020-01-01"],
+                rng=random.Random(0),
+                tried=set(),
+                water_source=source,
+                capacity=8,
+                low_watermark=3,
+                checkpoint=lambda state: observed.append(state),
+            )
+        )
+    assert len(results) == 15
+    assert observed[0]["pending_queries"], "Low-water refill was not started"
+    assert observed[0]["pending_samples"], "Existing candidates waited for the refill"
+    assert all(len(s["candidates"]) <= 8 for s in observed)
+
+
+def test_stop_resume_and_extension_retain_unused_candidates_and_global_ledger():
+    stop, saved, ledger = Event(), [], SamplingLedger()
+    rows = [sample(i) for i in range(12)]
+
+    def collect(row):
+        if row["index"] % 2 == 0:
+            stop.set()
+        return row
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        list(
+            completed_samples(
+                workers,
+                rows,
+                ledger,
+                {0: 8},
+                2,
+                collect,
+                dates=["2020-01-01"],
+                rng=random.Random(1),
+                tried=set(),
+                stop=stop,
+                capacity=12,
+                low_watermark=3,
+                checkpoint=lambda s: saved.append(s),
+            )
+        )
+    before = ledger.counts[0]
+    assert 0 < before < 8 and saved[-1]["candidates"]
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        list(
+            completed_samples(
+                workers,
+                [],
+                ledger,
+                {0: 8},
+                2,
+                lambda r: r,
+                dates=["2020-01-01"],
+                rng=random.Random(2),
+                tried=set(),
+                state=saved[-1],
+                capacity=12,
+                low_watermark=3,
+                checkpoint=lambda s: saved.append(s),
+            )
+        )
+    assert ledger.counts[0] == 8 and len(saved[-1]["candidates"]) == 4
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        list(
+            completed_samples(
+                workers,
+                [],
+                ledger,
+                {0: 12},
+                2,
+                lambda r: r,
+                dates=["2020-01-01"],
+                rng=random.Random(3),
+                tried=set(),
+                state=saved[-1],
+                capacity=12,
+            )
+        )
+    assert ledger.counts[0] == len(ledger.dates) == 12
+
+
+def test_failed_query_is_replayed_after_source_cursor_has_advanced():
+    saved, ledger = [], SamplingLedger()
+
+    class Source:
+        def __init__(self, fail):
+            self.fail, self.cursor = fail, 0
+
+        def next_query(self, *args):
+            self.cursor += 1
+            return 4 if self.cursor == 1 else None
+
+        def fetch(self, query):
+            assert query == 4
+            if self.fail:
+                raise ConnectionError("network")
+            return [sample(4)]
+
+        def snapshot(self):
+            return dict(cursor=self.cursor)
+
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        with pytest.raises(ConnectionError):
+            list(
+                completed_samples(
+                    workers,
+                    [],
+                    ledger,
+                    {0: 1},
+                    1,
+                    lambda r: r,
+                    dates=["2020-01-01"],
+                    rng=random.Random(0),
+                    tried=set(),
+                    water_source=Source(True),
+                    checkpoint=lambda s: saved.append(s),
+                )
+            )
+    resumed = Source(False)
+    resumed.cursor = 1
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        result = list(
+            completed_samples(
+                workers,
+                [],
+                ledger,
+                {0: 1},
+                1,
+                lambda r: r,
+                dates=["2020-01-01"],
+                rng=random.Random(0),
+                tried=set(),
+                water_source=resumed,
+                state=saved[-1],
+            )
+        )
+    assert len(result) == ledger.counts[0] == 1
+
+
+def test_blocked_full_buffer_refills_instead_of_reporting_exhaustion():
+    committed = [dict(sample(i), target_time="2020-01-01") for i in range(5)]
+    ledger = SamplingLedger(committed)
+
+    class Source:
+        called = 0
+
+        def next_query(self, *args):
+            self.called += 1
+            return 0 if self.called == 1 else None
+
+        def fetch(self, query):
+            return [sample(100)]
+
+    source = Source()
+    with ThreadPoolExecutor(max_workers=1) as workers:
+        results = list(
+            completed_samples(
+                workers,
+                [sample(i) for i in range(5)],
+                ledger,
+                {0: 6},
+                1,
+                lambda r: r,
+                dates=["2020-01-01"],
+                rng=random.Random(0),
+                tried=set(),
+                capacity=5,
+                low_watermark=1,
+                water_source=source,
+            )
+        )
+    assert len(results) == 1 and results[0]["index"] == 100
+    assert ledger.counts[0] == 6

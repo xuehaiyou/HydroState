@@ -15,6 +15,7 @@ from hydrostate.storage.packs import file_hash
 from .alignment import grid_metadata
 from .contract import PROFILE, VERSION, RetrievalSchema
 from .labels import ice_centre_eligible
+from .plan import target_samples
 from .sampling import ICE_GROUP, SAMPLING_VERSION, SamplingLedger, inside_split_block, quotas
 
 
@@ -40,7 +41,7 @@ def audit(root, *, pixel_limit=64, require_complete=True, label_packs=None, labe
             not marker.get("complete")
             or marker.get("version") != VERSION
             or marker.get("manifest_sha256") != file_hash(root / "samples.parquet")
-            or counts != Counter(quotas(config["samples"]))
+            or counts != Counter(quotas(target_samples(root, config)))
         ):
             raise ValueError("Collection has not completed all eight hard quotas")
     schema = RetrievalSchema()
@@ -52,6 +53,7 @@ def audit(root, *, pixel_limit=64, require_complete=True, label_packs=None, labe
     valid_counts = Counter()
     for index, row in enumerate(table.to_dict("records")):
         row["transform"] = json.loads(row["transform"])
+        row["block"] = json.loads(row["block"])
         sampling_group, fb = row["sampling_group"], row["frequency_bin"]
         if (
             sampling_group not in range(8)

@@ -21,13 +21,14 @@ from hydrostate.data.gee.products import BANDS
 from hydrostate.storage import SampleShardWriter
 
 from .alignment import grid_metadata, sensor_masks
-from .candidates import candidate_pools
-from .catalog import candidate_blocks, catalog, pml_calendar
+from .candidates import WaterCandidateSource
+from .catalog import catalog, pml_calendar
 from .composites import QUALITY, normalize, sensor_composite
 from .contract import INPUT_GROUPS, PROFILE, VERSION, RetrievalSchema, intervals, product_end
 from .gee_labels import fetch_cover, fetch_products
 from .ice_candidates import IceCandidateSource
 from .labels import build_targets, cover_targets, ice_centre_eligible, sm_tile_eligible
+from .plan import bind_plan, collection_stop, snapshot_release
 from .sampling import ICE_GROUP, SAMPLING_VERSION, SamplingLedger, location_key, quotas
 from .scheduling import completed_samples
 from .specs import specification_snapshot
@@ -284,19 +285,15 @@ def publish(root, rows, config, *, complete, ice_search=None):
         atomic_json(root / "_COLLECTION_SUCCESS.json", report)
 
 
-def collect(config):
+def collect(config, *, adopt_from=None):
     from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.data.normalize import load_computed_config
 
     root = Path(config["output_dir"])
     root.mkdir(parents=True, exist_ok=True)
     with locked(root / ".collection.lock", blocking=False):
-        identity = dict(config, version=VERSION, input_profile=PROFILE)
-        path = root / "collection.json"
-        if path.exists() and json.loads(path.read_text()) != identity:
-            raise ValueError("Collection contract changed; use a new output directory")
-        if not path.exists() and any(p.name != ".collection.lock" for p in root.iterdir()):
-            raise ValueError("Refusing to adopt an existing dataset")
-        atomic_json(path, identity)
+        sample_config = bind_plan(root, config, adopt_from=adopt_from)
+        state_path = root / "sampling_state.json"
+        state = json.loads(state_path.read_text()) if state_path.exists() else {}
         rows = [json.loads(p.read_text()) for p in sorted((root / "records").glob("*.json"))]
         ledger = SamplingLedger(rows, config["max_dates_per_location"], config["min_date_gap_days"])
         target = quotas(config["samples"])
@@ -318,30 +315,20 @@ def collect(config):
             for path in (root / "rejected").glob("*.json")
             if "target_time" in (row := json.loads(path.read_text()))
         }
-        ice_source = IceCandidateSource(ee, config, calendar, rows)
-
-        def water_batches():
-            water_target = {k: n for k, n in target.items() if k != ICE_GROUP}
-            for _ in range(config["max_dates_per_location"]):
-                yield from candidate_pools(
-                    candidate_blocks(ee, config),
-                    ledger,
-                    water_target,
-                    rng,
-                    factor=config["candidate_pool_factor"],
-                )
-
-        batches = iter(water_batches())
-        first = next(batches, [])
+        ice_source = IceCandidateSource(ee, config, calendar, rows, state=state.get("ice"))
+        water_source = WaterCandidateSource(ee, config, state=state.get("water"))
         last_publish = 0.0
-        with ThreadPoolExecutor(max_workers=config["concurrency"]) as workers:
+        with (
+            collection_stop() as stop,
+            ThreadPoolExecutor(max_workers=config["concurrency"]) as workers,
+        ):
 
             def collect_one(sample):
-                return collect_sample(ee, sample, root, config, norm, calendar)
+                return collect_sample(ee, sample, root, sample_config, norm, calendar)
 
             for row in completed_samples(
                 workers,
-                first,
+                [],
                 ledger,
                 target,
                 config["concurrency"],
@@ -350,8 +337,14 @@ def collect(config):
                 rng=rng,
                 tried=tried,
                 ice_source=ice_source,
-                next_candidates=lambda: next(batches, None),
+                water_source=water_source,
+                capacity=config["candidate_pool_capacity"],
+                low_watermark=config["candidate_low_watermark"],
                 ice_buffer=config["ice_candidate_buffer"],
+                ice_low_watermark=config["ice_candidate_low_watermark"],
+                state=state,
+                checkpoint=lambda value: atomic_json(state_path, value),
+                stop=stop,
             ):
                 if row is not None:
                     rows.append(row)
@@ -364,11 +357,15 @@ def collect(config):
                     config["samples"],
                     dict(ledger.counts),
                 )
-                if all(ledger.counts[k] == target[k] for k in target):
-                    publish(root, rows, config, complete=True, ice_search=ice_source.stats)
-                    return
+        complete = all(ledger.counts[k] == target[k] for k in target)
         if rows:
-            publish(root, rows, config, complete=False, ice_search=ice_source.stats)
+            publish(root, rows, config, complete=complete, ice_search=ice_source.stats)
+        if complete:
+            snapshot_release(root)
+            return
+        if stop.is_set():
+            LOG.info("Collection stopped cleanly; queues and cursors saved")
+            return
         raise RuntimeError(
             "Candidate pool exhausted before hard quotas; inspect collection_report.json"
         )

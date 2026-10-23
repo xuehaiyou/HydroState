@@ -70,13 +70,30 @@ def test_quota_refill_and_resume(tmp_path, monkeypatch, samples, max_dates):
         )
         for i in range(samples + 7)
     ]
-    monkeypatch.setattr(
-        collector, "candidate_blocks", lambda *a: iter([candidates[:7], candidates[7:]])
-    )
+
+    class FakeWater:
+        def __init__(self, *args, state=None):
+            self.index = (state or {}).get("index", 0)
+
+        def next_query(self, *args):
+            index = self.index
+            self.index += 1
+            return index if index < 2 else None
+
+        def fetch(self, index):
+            return candidates[:7] if index == 0 else candidates[7:]
+
+        def snapshot(self):
+            return dict(index=self.index)
+
+    monkeypatch.setattr(collector, "WaterCandidateSource", FakeWater)
 
     class FakeIce:
-        def __init__(self, *args):
+        def __init__(self, *args, state=None):
             self.stats = {}
+
+        def snapshot(self):
+            return {}
 
         def next_query(self, *args):
             return {"target_time": "2020-03-01"}

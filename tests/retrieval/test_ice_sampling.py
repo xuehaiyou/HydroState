@@ -55,7 +55,7 @@ def test_same_location_date_cannot_fill_two_groups():
     assert len(ledger.dates[location_key(first)]) == 1
 
 
-def test_slow_query_shares_four_workers_and_water_refill_waits_for_drain():
+def test_slow_refill_shares_four_workers_without_draining_samples():
     lock, filled = Lock(), Event()
     active = peak = 0
 
@@ -96,10 +96,15 @@ def test_slow_query_shares_four_workers_and_water_refill_waits_for_drain():
 
     refills = []
 
-    def refill():
-        assert active == 0, "Water metadata started while other requests were active"
-        refills.append(True)
-        return [row(i) for i in range(3, 6)] if len(refills) == 1 else None
+    class Water:
+        def next_query(self, *args):
+            refills.append(True)
+            return 1 if len(refills) == 1 else None
+
+        def fetch(self, query):
+            with operation():
+                assert filled.wait(5), "Refill prevented the sample workers from running"
+                return [row(i) for i in range(3, 6)]
 
     ledger = SamplingLedger()
     with ThreadPoolExecutor(max_workers=4) as workers:
@@ -115,7 +120,7 @@ def test_slow_query_shares_four_workers_and_water_refill_waits_for_drain():
                 rng=random.Random(0),
                 tried=set(),
                 ice_source=Ice(),
-                next_candidates=refill,
+                water_source=Water(),
             )
         )
     assert len(results) == 7 and peak == 4 and refills
@@ -187,3 +192,26 @@ class TestIceEE(ApiTestCase):
                     assert not result[0]["jrc_observed"]
             assert source.stats["cache_hits"] == 2
             assert len(list((Path(directory) / "dw_ice_v1").glob("*.json"))) == 2
+
+
+def test_ice_cursor_and_random_search_resume_from_checkpoint(tmp_path, monkeypatch):
+    import hydrostate.data.retrieval.ice_candidates as module
+
+    monkeypatch.setattr(
+        module, "global_blocks", lambda *args, **kwargs: [(10, 40), (20, 50), (30, 60)]
+    )
+    cfg = dict(
+        seed=43,
+        candidate_seed=42,
+        candidate_block_degrees=2,
+        ice_search_degrees=0.5,
+        candidate_dir=str(tmp_path),
+        min_center_ice_fraction=0.5,
+    )
+    first = IceCandidateSource(None, cfg, ["2020-01-01", "2021-03-01"])
+    ledger = SamplingLedger()
+    first.next_query(ledger, ledger)
+    state = json.loads(json.dumps(first.snapshot()))
+    resumed = IceCandidateSource(None, cfg, first.dates, state=state)
+    assert first.next_query(ledger, ledger) == resumed.next_query(ledger, ledger)
+    assert first.block_index == resumed.block_index == 2

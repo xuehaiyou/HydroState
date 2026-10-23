@@ -1,47 +1,41 @@
-"""Small, shuffled centre pools, built from cached blocks before pixel downloads."""
+"""Finite cached-block cursor for rolling, fixed-capacity candidate pools."""
 
 import logging
-from collections import Counter
+import time
 
-from .sampling import location_key
+from .catalog import CandidateCatalog, global_blocks
 
 LOG = logging.getLogger(__name__)
 
 
-def candidate_pools(blocks, ledger, target, rng, factor=3):
-    """Fill unfinished strata to factor times their remaining sample quotas.
+class WaterCandidateSource:
+    def __init__(self, ee, config, state=None):
+        self.catalog = CandidateCatalog(ee, config)
+        self.blocks = global_blocks(config)
+        self.max_passes = config["max_dates_per_location"]
+        state = state or {}
+        self.index, self.pass_index = state.get("index", 0), state.get("pass_index", 0)
 
-    Only lightweight coordinates/metadata are retained. Each block batch mixes
-    shuffled global regions. Full strata retain no additional centres; source
-    blocks remain cached for later passes. This is not a global pixel census.
-    """
-    source, exhausted, seen = iter(blocks), False, set()
-    while not exhausted:
-        capacity = {k: factor * max(0, n - ledger.counts[k]) for k, n in target.items()}
-        if not any(capacity.values()):
-            return
-        pool, counts, batches = [], Counter(), 0
-        while any(counts[k] < n for k, n in capacity.items()):
-            try:
-                batch = list(next(source))
-            except StopIteration:
-                exhausted = True
-                break
-            batches += 1
-            rng.shuffle(batch)
-            for sample in batch:
-                key, fb = location_key(sample), sample["sampling_group"]
-                if (
-                    counts[fb] >= capacity.get(fb, 0)
-                    or key in seen
-                    or len(ledger.dates.get(key, ())) >= ledger.max_dates
-                ):
-                    continue
-                seen.add(key)
-                pool.append(sample)
-                counts[fb] += 1
-            LOG.info("Building candidate pool: counts=%s; targets=%s", dict(counts), capacity)
-        if pool:
-            rng.shuffle(pool)
-            LOG.info("Candidate pool ready: %d centres from %d block batches", len(pool), batches)
-            yield pool
+    def next_query(self, ledger, reserved):
+        if self.index >= len(self.blocks):
+            self.index = 0
+            self.pass_index += 1
+        if self.pass_index >= self.max_passes:
+            return None
+        index = self.index
+        self.index += 1
+        return index
+
+    def fetch(self, index):
+        started = time.monotonic()
+        result = self.catalog.fetch((index, self.blocks[index]))
+        LOG.info(
+            "JRC candidates: block=%s count=%d seconds=%.2f",
+            self.blocks[index],
+            len(result),
+            time.monotonic() - started,
+        )
+        return result
+
+    def snapshot(self):
+        return dict(index=self.index, pass_index=self.pass_index)

@@ -46,17 +46,35 @@ class IceCandidateSource:
     observation mask. Empty responses are cached as well as successful ones.
     """
 
-    def __init__(self, ee, config, dates, rows=()):
+    def __init__(self, ee, config, dates, rows=(), state=None):
         self.ee, self.config = ee, config
         self.rng = random.Random(config["seed"] + 1)
         self.dates = sorted(dates)
-        self.blocks = iter(global_blocks(config, seed_offset=1))
+        self.blocks = global_blocks(config, seed_offset=1)
+        self.block_index = 0
         self.hints, self.queried = {}, set()
         self.dispatched = 0
         self.stats = dict(queries=0, cache_hits=0, empty_queries=0, candidates=0, seconds=0.0)
         self.cache = Path(config["candidate_dir"]) / "dw_ice_v1"
+        if state:
+            self.block_index = state["block_index"]
+            self.hints = state["hints"]
+            self.queried = set(state["queried"])
+            self.dispatched = state["dispatched"]
+            self.stats = state["stats"]
+            self.rng.setstate((state["rng"][0], tuple(state["rng"][1]), state["rng"][2]))
         for row in rows:
             self.observe(row)
+
+    def snapshot(self):
+        return dict(
+            block_index=self.block_index,
+            hints=dict(self.hints),
+            queried=sorted(self.queried),
+            dispatched=self.dispatched,
+            stats=dict(self.stats),
+            rng=self.rng.getstate(),
+        )
 
     def observe(self, row):
         if row.get("max_snow_ice", 0) < self.config["min_center_ice_fraction"]:
@@ -83,14 +101,14 @@ class IceCandidateSource:
             key = min(keys, key=lambda k: self.priority(self.hints[k], ledger, reserved))
             query = self.hints.pop(key)
         else:
-            try:
-                x, y = next(self.blocks)
-            except StopIteration:
+            if self.block_index >= len(self.blocks):
                 if not self.hints:
                     return None
                 key = next(iter(self.hints))
                 query = self.hints.pop(key)
             else:
+                x, y = self.blocks[self.block_index]
+                self.block_index += 1
                 step, size = (
                     self.config["candidate_block_degrees"],
                     self.config["ice_search_degrees"],
