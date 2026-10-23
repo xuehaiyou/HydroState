@@ -4,7 +4,7 @@ from collections import defaultdict, deque
 from concurrent.futures import FIRST_COMPLETED, wait
 from datetime import date
 
-from .sampling import SamplingLedger, location_key
+from .sampling import ICE_GROUP, SamplingLedger, location_key
 
 
 class SamplePlanner:
@@ -17,22 +17,50 @@ class SamplePlanner:
         for day in sorted(dates):
             when = date.fromisoformat(day)
             self.calendar[when.year, when.month].append(day)
+        self.seen = set()
+        self.extend(candidates, ledger)
+
+    def extend(self, candidates, ledger):
         candidates = list(candidates)
-        rng.shuffle(candidates)
+        self.rng.shuffle(candidates)
         for sample in candidates:
-            self.put(sample, ledger)
+            identity = location_key(sample), sample.get("candidate_target_time")
+            if identity not in self.seen:
+                self.put(sample, ledger)
+
+    def count(self, groups):
+        return sum(len(queue) for key, queue in self.queues.items() if key[0] in groups)
 
     def put(self, sample, ledger):
         visits = len(ledger.dates.get(location_key(sample), ()))
         if visits < ledger.max_dates:
-            self.queues[sample["frequency_bin"], visits, sample.get("climate_class", 0)].append(
-                sample
-            )
+            self.seen.add((location_key(sample), sample.get("candidate_target_time")))
+            self.queues[
+                sample["sampling_group"],
+                visits,
+                sample.get("climate_class", 0),
+                sample.get("candidate_target_time"),
+                sample.get("split", ""),
+                tuple(sample.get("block", ())),
+            ].append(sample)
 
     def choose_date(self, sample, ledger, reserved):
         key = location_key(sample)
         if len(ledger.dates.get(key, ())) + len(reserved.dates.get(key, ())) >= ledger.max_dates:
             return None
+        if fixed := sample.get("candidate_target_time"):
+            period = int(fixed[:4]), int(fixed[5:7])
+            if fixed not in self.calendar.get(period, ()):
+                raise ValueError("Ice candidate date is outside the product calendar")
+            return (
+                fixed
+                if (
+                    (key, fixed) not in self.tried
+                    and ledger.allows(sample, fixed)
+                    and reserved.allows(sample, fixed)
+                )
+                else None
+            )
         # Shuffle before stable sorting: equal priorities must not all select
         # the same date. In-flight counts change immediately after each submit.
         periods = list(self.calendar)
@@ -69,20 +97,35 @@ class SamplePlanner:
                 if not available:
                     return None
                 self.rng.shuffle(available)
-                fb, visits, climate = min(
+                chosen = min(
                     available,
                     key=lambda k: (
                         (ledger.counts[k[0]] + reserved.counts[k[0]]) / target[k[0]],
                         k[1],
-                        ledger.climates[k[2]] + reserved.climates[k[2]],
+                        ledger.climates[k[2]]
+                        + reserved.climates[k[2]]
+                        + (
+                            ledger.years[int(k[3][:4])]
+                            + reserved.years[int(k[3][:4])]
+                            + ledger.months[int(k[3][5:7])]
+                            + reserved.months[int(k[3][5:7])]
+                            if k[3]
+                            else 0
+                        ),
+                        (ledger.splits[k[4]] + reserved.splits[k[4]])
+                        / {"train": 0.7, "validation": 0.15, "test": 0.15}.get(k[4], 1),
+                        ledger.blocks[k[5]] + reserved.blocks[k[5]],
                     ),
                 )
-                sample = self.queues[fb, visits, climate].popleft()
+                sample = self.queues[chosen].popleft()
+                self.seen.discard((location_key(sample), sample.get("candidate_target_time")))
                 day = self.choose_date(sample, ledger, reserved)
                 if day is None:
                     # A pending neighbour may temporarily block all dates.
                     # Revisit after completion, without spinning in this call.
-                    deferred.append(sample)
+                    empty = SamplingLedger(max_dates=ledger.max_dates, min_days=ledger.min_days)
+                    if self.choose_date(sample, ledger, empty) is not None:
+                        deferred.append(sample)
                     continue
                 self.tried.add((location_key(sample), day))
                 return dict(sample, target_time=day)
@@ -92,33 +135,84 @@ class SamplePlanner:
 
 
 def completed_samples(
-    workers, candidates, ledger, target, concurrency, collect_one, *, dates, rng, tried
+    workers,
+    candidates,
+    ledger,
+    target,
+    concurrency,
+    collect_one,
+    *,
+    dates,
+    rng,
+    tried,
+    ice_source=None,
+    next_candidates=None,
+    ice_buffer=16,
 ):
-    """Keep workers busy; a rejection releases every reservation, not just quota.
+    """Sample downloads and one DW query share the same worker budget.
 
-    Only this thread owns the ledgers. Each centre is attempted once per pool;
-    subsequent pools supply fresh centres. Later cached passes may try new dates.
-    Network errors propagate instead of being recorded as unsuitable geography.
+    Water-pool refills happen only after active workers drain: their metadata
+    fetcher can then use all four slots without overlapping another four jobs.
     """
     planner, pending = SamplePlanner(candidates, dates, ledger, rng, tried), {}
+    water_exhausted = next_candidates is None
     try:
         while True:
-            reserved = SamplingLedger(pending.values(), ledger.max_dates, ledger.min_days)
-            while len(pending) < concurrency:
+            water_groups = {k for k in target if k != ICE_GROUP and ledger.counts[k] < target[k]}
+            refill = bool(water_groups) and not planner.count(water_groups) and not water_exhausted
+            if refill and not pending:
+                batch = next_candidates()
+                if batch is None:
+                    water_exhausted = True
+                else:
+                    planner.extend(batch, ledger)
+                continue
+            reserved = SamplingLedger(
+                [item for kind, item in pending.values() if kind == "sample"],
+                ledger.max_dates,
+                ledger.min_days,
+            )
+            ice_needed = (
+                ICE_GROUP in target
+                and ledger.counts[ICE_GROUP] + reserved.counts[ICE_GROUP] < target[ICE_GROUP]
+            )
+            if (
+                not refill
+                and ice_source is not None
+                and ice_needed
+                and planner.count({ICE_GROUP})
+                < min(
+                    ice_buffer,
+                    target[ICE_GROUP] - ledger.counts[ICE_GROUP] - reserved.counts[ICE_GROUP],
+                )
+                and len(pending) < concurrency
+                and not any(kind == "query" for kind, _ in pending.values())
+            ):
+                query = ice_source.next_query(ledger, reserved)
+                if query is not None:
+                    pending[workers.submit(ice_source.fetch, query)] = ("query", query)
+            while not refill and len(pending) < concurrency:
                 sample = planner.next(ledger, reserved, target)
                 if sample is None:
                     break
-                pending[workers.submit(collect_one, sample)] = sample
+                pending[workers.submit(collect_one, sample)] = ("sample", sample)
                 reserved.add(sample)
             if not pending:
+                if not water_exhausted and water_groups:
+                    continue
                 return
             done, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in done:
-                pending.pop(future)
-                row = future.result()
-                if row is not None:
-                    ledger.add(row)
-                yield row
+                kind, _ = pending.pop(future)
+                result = future.result()
+                if kind == "query":
+                    planner.extend(result, ledger)
+                    continue
+                if result is not None:
+                    ledger.add(result)
+                    if ice_source is not None:
+                        ice_source.observe(result)
+                yield result
     finally:
         for future in pending:
             future.cancel()

@@ -48,7 +48,7 @@ def test_real_launchers_preview_same_contract_without_remote_calls(tmp_path, ent
         HYDROSTATE_CANDIDATE_ROOT=str(candidates),
     )
     result = subprocess.run(
-        ["bash", str(ROOT / "scripts" / entry), "--dry-run", "--samples", "7"],
+        ["bash", str(ROOT / "scripts" / entry), "--dry-run", "--samples", "8"],
         cwd=tmp_path,
         env=env,
         text=True,
@@ -57,7 +57,7 @@ def test_real_launchers_preview_same_contract_without_remote_calls(tmp_path, ent
         check=True,
     )
     cfg = json.loads(result.stdout)
-    assert cfg["samples"] == 7 and cfg["start_year"] == 2017
+    assert cfg["samples"] == 8 and cfg["start_year"] == 2017
     assert cfg["output_dir"] == str(output) and cfg["candidate_dir"] == str(candidates)
     assert not output.exists() and not candidates.exists()
 

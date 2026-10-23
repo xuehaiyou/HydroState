@@ -45,6 +45,15 @@ def sm_tile_eligible(targets, config):
     return tile_land > config["min_tile_land_fraction"]
 
 
+def ice_centre_eligible(targets, threshold=0.5):
+    """Group 7 requires a valid target-window centre, not merely a snowy scene."""
+    h, w = targets["snow_ice"].shape[-2:]
+    return bool(
+        targets["snow_ice_valid"][0, h // 2, w // 2]
+        and targets["snow_ice"][0, h // 2, w // 2] >= threshold
+    )
+
+
 def sm_eligible(quality, threshold=0.95, water_ice_limit=0.05):
     """Both 9 km grid and approximate wider footprint must pass independently."""
     for support in ("grid", "footprint"):

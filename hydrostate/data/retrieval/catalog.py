@@ -52,13 +52,39 @@ def pml_calendar(ee, config, cache):
     return calendar
 
 
+def global_blocks(config, seed_offset=0):
+    step = config["candidate_block_degrees"]
+    blocks = [(x, y) for y in range(-60, 84, step) for x in range(-180, 180, step)]
+    random.Random(config["candidate_seed"] + seed_offset).shuffle(blocks)
+    return blocks
+
+
+def centre_sample(feature, block, config):
+    """Make the sampled coordinate exactly output pixel (20,20)'s centre."""
+    from pyproj import Transformer
+
+    lon, lat = feature["geometry"]["coordinates"]
+    if not inside_split_block(lon, lat, config["split_margin_m"]):
+        return None
+    crs, _ = grid(lon, lat)
+    cx, cy = Transformer.from_crs(4326, crs, always_xy=True).transform(lon, lat)
+    return dict(
+        feature["properties"],
+        lon=lon,
+        lat=lat,
+        crs=crs,
+        transform=[10, 0, cx - 615, 0, -10, cy + 615],
+        block=block,
+        split=geographic_split(dict(lon=lon, lat=lat), config["split_seed"]),
+    )
+
+
 def candidate_blocks(ee, config):
     """Finite, shuffled global blocks; no global per-stratum histogram scan."""
     from pyproj import CRS
 
     step = config["candidate_block_degrees"]
-    blocks = [(x, y) for y in range(-60, 84, step) for x in range(-180, 180, step)]
-    random.Random(config["candidate_seed"]).shuffle(blocks)
+    blocks = global_blocks(config)
     occurrence = ee.Image("JRC/GSW1_4/GlobalSurfaceWater").select("occurrence").unmask(0)
     occurrence = occurrence.mask(ee.Image.constant(1))
     observed = ee.ImageCollection("JRC/GSW1_4/YearlyHistory").select("waterClass").max().gt(0)
@@ -106,27 +132,10 @@ def candidate_blocks(ee, config):
         )
         result = []
         for feature in rows:
-            lon, lat = feature["geometry"]["coordinates"]
-            if not inside_split_block(lon, lat, config["split_margin_m"]):
-                continue
-            crs, transform = grid(lon, lat)
-            from pyproj import Transformer
-
-            cx, cy = Transformer.from_crs(4326, crs, always_xy=True).transform(lon, lat)
-            # The sampled JRC point is exactly the centre of output pixel (20,20),
-            # not a nearby rounded UTM pixel with potentially another frequency.
-            transform = [10, 0, cx - 615, 0, -10, cy + 615]
-            result.append(
-                dict(
-                    feature["properties"],
-                    lon=lon,
-                    lat=lat,
-                    crs=crs,
-                    transform=transform,
-                    block=[x, y, step],
-                    split=geographic_split(dict(lon=lon, lat=lat), config["split_seed"]),
+            if sample := centre_sample(feature, [x, y, step], config):
+                result.append(
+                    dict(sample, sampling_group=sample["frequency_bin"], jrc_observed=True)
                 )
-            )
         return result
 
     indexed = list(enumerate(blocks))

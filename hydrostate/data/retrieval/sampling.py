@@ -4,6 +4,9 @@ import math
 from collections import Counter, defaultdict
 from datetime import date
 
+ICE_GROUP = 7
+SAMPLING_VERSION = "jrc7_dwice_v1"
+
 
 def frequency_bin(value):
     if value is None or not math.isfinite(value) or not 0 <= value <= 100:
@@ -12,7 +15,7 @@ def frequency_bin(value):
 
 
 def quotas(total):
-    return {i: total // 7 + (i < total % 7) for i in range(7)}
+    return {i: total // 8 + (i < total % 8) for i in range(8)}
 
 
 def location_key(sample):
@@ -26,6 +29,7 @@ class SamplingLedger:
         self.max_dates, self.min_days = max_dates, min_days
         self.dates = defaultdict(list)
         self.counts, self.years, self.months, self.climates = (Counter() for _ in range(4))
+        self.blocks, self.splits = Counter(), Counter()
         self.windows = defaultdict(list)
         for row in rows:
             self.add(row)
@@ -58,10 +62,12 @@ class SamplingLedger:
         self.dates[key].append(when)
         crs, x, y = key
         self.windows[(crs, math.floor(x / 1200), math.floor(y / 1200))].append((x, y, when))
-        self.counts[sample["frequency_bin"]] += 1
+        self.counts[sample["sampling_group"]] += 1
         self.years[when.year] += 1
         self.months[when.month] += 1
         self.climates[sample.get("climate_class", 0)] += 1
+        self.blocks[tuple(sample.get("block", ()))] += 1
+        self.splits[sample.get("split", "")] += 1
 
 
 def inside_split_block(lon, lat, margin_m=35000):

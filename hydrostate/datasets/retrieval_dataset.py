@@ -148,6 +148,12 @@ class RetrievalDataset(Dataset):
         inputs["target_time"] = times
         targets["metainfo"] = {
             name: str(row[name])
-            for name in ("sample_id", "frequency_bin", "target_time", "climate_class")
+            for name in (
+                "sample_id",
+                "sampling_group",
+                "frequency_bin",
+                "target_time",
+                "climate_class",
+            )
         }
         return dict(inputs=inputs, data_samples=targets)

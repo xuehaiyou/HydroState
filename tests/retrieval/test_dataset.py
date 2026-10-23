@@ -16,6 +16,7 @@ from hydrostate.data.retrieval.contract import (
     RetrievalSchema,
     intervals,
 )
+from hydrostate.data.retrieval.sampling import SAMPLING_VERSION
 from hydrostate.data.retrieval.statistics import compute_retrieval_statistics
 from hydrostate.data.retrieval.validation import validate_arrays
 from hydrostate.datasets.retrieval_dataset import RetrievalDataset
@@ -24,7 +25,7 @@ from hydrostate.storage import SampleShardWriter
 
 def make_dataset(root):
     schema = RetrievalSchema()
-    cfg = dict(samples=2, output_dir=str(root))
+    cfg = dict(samples=2, output_dir=str(root), sampling_version=SAMPLING_VERSION)
     (root / "collection.json").write_text(
         json.dumps(dict(cfg, version=VERSION, input_profile=PROFILE))
     )
@@ -86,6 +87,8 @@ def make_dataset(root):
                 input_profile=PROFILE,
                 split="train",
                 frequency_bin=index,
+                sampling_group=index,
+                jrc_observed=True,
                 target_time="2020-01-01",
                 target_end="2020-01-09",
                 climate_class=1,

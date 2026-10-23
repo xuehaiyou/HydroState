@@ -26,8 +26,9 @@ from .catalog import candidate_blocks, catalog, pml_calendar
 from .composites import QUALITY, normalize, sensor_composite
 from .contract import INPUT_GROUPS, PROFILE, VERSION, RetrievalSchema, intervals, product_end
 from .gee_labels import fetch_cover, fetch_products
-from .labels import build_targets, cover_targets, sm_tile_eligible
-from .sampling import SamplingLedger, location_key, quotas
+from .ice_candidates import IceCandidateSource
+from .labels import build_targets, cover_targets, ice_centre_eligible, sm_tile_eligible
+from .sampling import ICE_GROUP, SAMPLING_VERSION, SamplingLedger, location_key, quotas
 from .scheduling import completed_samples
 from .specs import specification_snapshot
 from .validation import validate_arrays
@@ -146,6 +147,10 @@ def collect_sample(ee, sample, root, config, norm, calendar):
     reliable = coverage["water_valid"].sum()
     if reliable < config["min_cover_pixels"]:
         return reject("no reliable coverage labels")
+    if sample["sampling_group"] == ICE_GROUP and not ice_centre_eligible(
+        coverage, config["min_center_ice_fraction"]
+    ):
+        return reject("insufficient target-window centre ice")
     checkpoint = root / "cache" / "inputs" / f"{sid}.npz"
     checkpoint.parent.mkdir(exist_ok=True)
     if checkpoint.exists():
@@ -212,6 +217,7 @@ def collect_sample(ee, sample, root, config, norm, calendar):
     writer.finalize()
     row = dict(
         sample,
+        max_snow_ice=float(np.where(coverage["snow_ice_valid"], coverage["snow_ice"], 0).max()),
         input_path=str((base / "inputs.zarr").relative_to(root)),
         label_path=str((base / "labels.zarr").relative_to(root)),
         shard_index=0,
@@ -225,7 +231,7 @@ def collect_sample(ee, sample, root, config, norm, calendar):
     return row
 
 
-def publish(root, rows, config, *, complete):
+def publish(root, rows, config, *, complete, ice_search=None):
     from hydrostate.storage.packs import file_hash
 
     table = pd.DataFrame(
@@ -245,7 +251,10 @@ def publish(root, rows, config, *, complete):
         samples=len(rows),
         requested=config["samples"],
         quotas=quotas(config["samples"]),
-        frequency_counts=dict(ledger.counts),
+        sampling_version=SAMPLING_VERSION,
+        sampling_group_counts=dict(ledger.counts),
+        frequency_counts=dict(Counter(row["frequency_bin"] for row in rows)),
+        ice_search=dict(ice_search or {}),
         unique_locations=len(ledger.dates),
         rejected_candidates=sum(1 for _ in (root / "rejected").glob("*.json")),
         valid_label_counts=dict(
@@ -292,9 +301,14 @@ def collect(config):
         ledger = SamplingLedger(rows, config["max_dates_per_location"], config["min_date_gap_days"])
         target = quotas(config["samples"])
         if any(ledger.counts[k] > target[k] for k in target):
-            raise ValueError("Committed frequency quota exceeded")
+            raise ValueError("Committed sampling-group quota exceeded")
         if ledger.counts == Counter(target):
-            publish(root, rows, config, complete=True)
+            # A completed collection is immutable, including its timestamp and
+            # query statistics. Rebuild only a missing final publication.
+            if not (root / "_COLLECTION_SUCCESS.json").exists():
+                report_path = root / "collection_report.json"
+                previous = json.loads(report_path.read_text()) if report_path.exists() else {}
+                publish(root, rows, config, complete=True, ice_search=previous.get("ice_search"))
             return
         ee, norm = initialize(config["project"]), load_computed_config()
         calendar = pml_calendar(ee, config, root / "cache")
@@ -304,50 +318,57 @@ def collect(config):
             for path in (root / "rejected").glob("*.json")
             if "target_time" in (row := json.loads(path.read_text()))
         }
-        last_publish = 0.0
-        with ThreadPoolExecutor(max_workers=config["concurrency"]) as workers:
-            # Traverse fresh locations before using additional dates. Subsequent
-            # passes reuse the on-disk candidate pool and only refill missing bins.
+        ice_source = IceCandidateSource(ee, config, calendar, rows)
+
+        def water_batches():
+            water_target = {k: n for k, n in target.items() if k != ICE_GROUP}
             for _ in range(config["max_dates_per_location"]):
-                pools = candidate_pools(
+                yield from candidate_pools(
                     candidate_blocks(ee, config),
                     ledger,
-                    target,
+                    water_target,
                     rng,
                     factor=config["candidate_pool_factor"],
                 )
-                for candidates in pools:
 
-                    def collect_one(sample):
-                        return collect_sample(ee, sample, root, config, norm, calendar)
+        batches = iter(water_batches())
+        first = next(batches, [])
+        last_publish = 0.0
+        with ThreadPoolExecutor(max_workers=config["concurrency"]) as workers:
 
-                    for row in completed_samples(
-                        workers,
-                        candidates,
-                        ledger,
-                        target,
-                        config["concurrency"],
-                        collect_one,
-                        dates=calendar,
-                        rng=rng,
-                        tried=tried,
-                    ):
-                        if row is not None:
-                            rows.append(row)
-                        if rows and time.monotonic() - last_publish >= 60:
-                            publish(root, rows, config, complete=False)
-                            last_publish = time.monotonic()
-                        LOG.info(
-                            "Accepted %d/%d; bins=%s",
-                            len(rows),
-                            config["samples"],
-                            dict(ledger.counts),
-                        )
-                        if all(ledger.counts[k] == target[k] for k in target):
-                            publish(root, rows, config, complete=True)
-                            return
+            def collect_one(sample):
+                return collect_sample(ee, sample, root, config, norm, calendar)
+
+            for row in completed_samples(
+                workers,
+                first,
+                ledger,
+                target,
+                config["concurrency"],
+                collect_one,
+                dates=calendar,
+                rng=rng,
+                tried=tried,
+                ice_source=ice_source,
+                next_candidates=lambda: next(batches, None),
+                ice_buffer=config["ice_candidate_buffer"],
+            ):
+                if row is not None:
+                    rows.append(row)
+                if rows and time.monotonic() - last_publish >= 60:
+                    publish(root, rows, config, complete=False, ice_search=ice_source.stats)
+                    last_publish = time.monotonic()
+                LOG.info(
+                    "Accepted %d/%d; sampling_groups=%s",
+                    len(rows),
+                    config["samples"],
+                    dict(ledger.counts),
+                )
+                if all(ledger.counts[k] == target[k] for k in target):
+                    publish(root, rows, config, complete=True, ice_search=ice_source.stats)
+                    return
         if rows:
-            publish(root, rows, config, complete=False)
+            publish(root, rows, config, complete=False, ice_search=ice_source.stats)
         raise RuntimeError(
             "Candidate pool exhausted before hard quotas; inspect collection_report.json"
         )

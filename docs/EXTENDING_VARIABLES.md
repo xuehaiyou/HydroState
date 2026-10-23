@@ -114,4 +114,4 @@ python tools/train.py configs/hydrostate_extended.py
 
 准备成对 MTLoRA / LoRA 时，在 `tools/data/prepare_training.py prepare` 后加入
 `--config configs/hydrostate_extended.py`。准备工具将相同标签选择写入两个展开配置。
-基础集合是否完成仍按原七组配额检查；独立标签包不改变该集合的完成状态。
+基础集合是否完成仍按当前八个采样来源组配额检查；独立标签包不改变该集合的完成状态。

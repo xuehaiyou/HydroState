@@ -22,7 +22,7 @@ def test_seven_boundaries_and_calendar():
         6,
     ]
     assert frequency_bin(float("nan")) is None
-    assert max(quotas(20000).values()) - min(quotas(20000).values()) == 1
+    assert quotas(20000) == {i: 2500 for i in range(8)}
     slots = intervals("2020-01-01")
     assert len(slots) == 5 and slots[2] == ("2020-01-01", "2020-01-09")
     assert slots[0][0] == "2019-12-16"
@@ -30,7 +30,9 @@ def test_seven_boundaries_and_calendar():
 
 
 def test_dates_overlap_and_location_cap():
-    sample = dict(crs="EPSG:32650", transform=[10, 0, 10000, 0, -10, 10000], frequency_bin=1)
+    sample = dict(
+        crs="EPSG:32650", transform=[10, 0, 10000, 0, -10, 10000], frequency_bin=1, sampling_group=1
+    )
     ledger = SamplingLedger()
     for day in ("2020-01-01", "2020-04-01", "2021-07-01", "2022-10-01"):
         assert ledger.allows(sample, day)

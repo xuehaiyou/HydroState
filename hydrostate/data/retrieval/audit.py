@@ -14,7 +14,8 @@ from hydrostate.storage.packs import file_hash
 
 from .alignment import grid_metadata
 from .contract import PROFILE, VERSION, RetrievalSchema
-from .sampling import SamplingLedger, inside_split_block, quotas
+from .labels import ice_centre_eligible
+from .sampling import ICE_GROUP, SAMPLING_VERSION, SamplingLedger, inside_split_block, quotas
 
 
 def audit(root, *, pixel_limit=64, require_complete=True, label_packs=None, label_specs=None):
@@ -24,13 +25,15 @@ def audit(root, *, pixel_limit=64, require_complete=True, label_packs=None, labe
     config = json.loads((root / "collection.json").read_text())
     if config.get("version") != VERSION or config.get("input_profile") != PROFILE:
         raise ValueError("Unsupported collection contract")
+    if config.get("sampling_version") != SAMPLING_VERSION:
+        raise ValueError("Unsupported sampling contract; require eight sampling groups")
     config_hash = fingerprint(
         {k: v for k, v in config.items() if k not in ("version", "input_profile")}
     )
     table = pd.read_parquet(root / "samples.parquet")
     if table.empty or table.sample_id.duplicated().any() or not (table.version == VERSION).all():
         raise ValueError("Invalid or empty manifest")
-    counts = Counter(table.frequency_bin)
+    counts = Counter(table.sampling_group)
     if require_complete:
         marker = json.loads((root / "_COLLECTION_SUCCESS.json").read_text())
         if (
@@ -39,7 +42,7 @@ def audit(root, *, pixel_limit=64, require_complete=True, label_packs=None, labe
             or marker.get("manifest_sha256") != file_hash(root / "samples.parquet")
             or counts != Counter(quotas(config["samples"]))
         ):
-            raise ValueError("Collection has not completed all seven hard quotas")
+            raise ValueError("Collection has not completed all eight hard quotas")
     schema = RetrievalSchema()
     ledger = SamplingLedger(
         max_dates=config["max_dates_per_location"], min_days=config["min_date_gap_days"]
@@ -49,6 +52,15 @@ def audit(root, *, pixel_limit=64, require_complete=True, label_packs=None, labe
     valid_counts = Counter()
     for index, row in enumerate(table.to_dict("records")):
         row["transform"] = json.loads(row["transform"])
+        sampling_group, fb = row["sampling_group"], row["frequency_bin"]
+        if (
+            sampling_group not in range(8)
+            or fb not in range(-1, 7)
+            or (sampling_group != ICE_GROUP and fb != sampling_group)
+            or (sampling_group == ICE_GROUP and row["candidate_target_time"] != row["target_time"])
+            or bool(row["jrc_observed"]) != (fb >= 0)
+        ):
+            raise ValueError(f"Invalid sampling group/frequency/date: {row['sample_id']}")
         if (
             row["split"] != geographic_split(row, config["split_seed"])
             or not inside_split_block(row["lon"], row["lat"], config["split_margin_m"])
@@ -73,6 +85,10 @@ def audit(root, *, pixel_limit=64, require_complete=True, label_packs=None, labe
                 array = group[name]
                 if array.shape != (1, *spec.tail_shape) or array.dtype != np.dtype(spec.dtype):
                     raise ValueError(f"Wrong shape/dtype: {path}/{name}")
+            if kind == "label" and sampling_group == ICE_GROUP:
+                centre = {name: group[name][0] for name in ("snow_ice", "snow_ice_valid")}
+                if not ice_centre_eligible(centre, config["min_center_ice_fraction"]):
+                    raise ValueError(f"Ice centre fails target-window coverage: {row['sample_id']}")
             if index in selected:
                 loaded.append({name: group[name][0] for name in specs})
         if loaded:
@@ -83,7 +99,8 @@ def audit(root, *, pixel_limit=64, require_complete=True, label_packs=None, labe
     result = dict(
         samples=len(table),
         version=VERSION,
-        frequency_counts=dict(counts),
+        sampling_group_counts=dict(counts),
+        frequency_counts=dict(Counter(table.frequency_bin)),
         unique_locations=len(ledger.dates),
         pixel_audited=len(selected),
         audited_valid_counts=dict(valid_counts),

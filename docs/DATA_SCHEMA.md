@@ -40,8 +40,13 @@ Landsat B10/B11 按产品发布的 30 m 保存，不能还原传感器的 100 m 
 增强在完成 10 m 对齐后统一执行，30 m 标签同步翻转。
 
 每个成功样本写入一对不可变输入/标签 Zarr 分片。`samples.parquet` 记录分片位置、
-版本、中心频率组、地理划分、目标日期等。`collection.json` 固定参数与生产代码哈希；
-逐样本提交记录用于续采。七组配额全部完成后才发布 `_COLLECTION_SUCCESS.json`。
+版本、采样组、原始 JRC 频率、地理划分、目标日期等。`collection.json` 固定参数与生产代码哈希；
+逐样本提交记录用于续采。八组配额全部完成后才发布 `_COLLECTION_SUCCESS.json`。
+采样契约另记为 `sampling_version=jrc7_dwice_v1`，不改变影像数组格式。
+元数据中 `sampling_group=0..6` 表示 JRC 来源组，`7` 表示 DW 冰雪来源组；
+`frequency_bin=0..6` 保留真实 JRC 分组，无观测时为 `-1`，并保存 `jrc_observed`。
+冰雪组的 `candidate_target_time` 必须等于 `target_time`；所有冰雪中心都会审计
+有效性及覆盖 ≥50%，不受数组抽查数量限制。
 改变参数、生产代码或数据定义时使用新目录，不将新旧样本混写。
 新增监督变量可通过独立标签包复用这个基础集合，不需要重采输入或修改基础目录。
 标签包有自己的版本和发布标记；见 [扩展输入与标签](EXTENDING_VARIABLES.md)。

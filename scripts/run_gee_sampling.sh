@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-# Current contract: seven centre quotas, five 8-day mean composites.
+# Current contract: eight centre-source quotas, five 8-day mean composites.
 # Change collection parameters in the config; a resumed directory is immutable.
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 HYDROSTATE_PYTHON="${HYDROSTATE_PYTHON:-python}"

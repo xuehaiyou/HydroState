@@ -1,6 +1,6 @@
 """Current product-supervised collection; fixed contract, new output directory."""
 
-output_dir = "/mnt/d/Hydrostate/samples/retrieval_5x8_native_v2"
+output_dir = "/mnt/d/Hydrostate/samples/retrieval_5x8_eight_groups"
 project = "cropland-477906"
 samples = 20000
 start_year = 2017
@@ -12,6 +12,11 @@ candidates_per_bin = 24
 candidate_block_degrees = 2
 candidate_block_batch = 16
 candidate_pool_factor = 3
+# One small DW query shares the same four worker slots as sample collection.
+ice_candidates_per_query = 8
+ice_candidate_buffer = 16
+ice_search_degrees = 0.5
+min_center_ice_fraction = 0.50
 candidate_dir = "/mnt/d/Hydrostate/candidates/retrieval_5x8_v1"
 climate_asset = "users/xiaozhen6666666/cloud/Beck_KG_V1_present_0p0083"
 max_dates_per_location = 4

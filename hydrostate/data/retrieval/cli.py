@@ -10,6 +10,8 @@ from pathlib import Path
 from hydrostate.data.gee.contracts import fingerprint
 from hydrostate.storage.packs import file_hash
 
+from .sampling import SAMPLING_VERSION
+
 DEFAULT_CONFIG = Path(__file__).resolve().parents[3] / "configs/data/collection/retrieval.py"
 
 
@@ -33,6 +35,10 @@ def resolve_config(args):
         "concurrency",
         "candidate_block_batch",
         "candidate_pool_factor",
+        "ice_candidates_per_query",
+        "ice_candidate_buffer",
+        "ice_search_degrees",
+        "min_center_ice_fraction",
         "split_margin_m",
         "water_confidence",
         "ice_confidence",
@@ -56,14 +62,20 @@ def resolve_config(args):
     }
     if missing := required - config.keys():
         raise ValueError(f"Not a current retrieval collection config; missing: {sorted(missing)}")
-    if config["samples"] < 7 or config["start_year"] > config["end_year"]:
-        raise ValueError("Require at least seven samples and an ordered year range")
+    if config["samples"] < 8 or config["start_year"] > config["end_year"]:
+        raise ValueError("Require at least eight samples and an ordered year range")
     if not 1 <= config["max_dates_per_location"] <= 4 or config["min_date_gap_days"] < 40:
         raise ValueError("At most four dates per location, separated by at least 40 days")
     if config["concurrency"] < 1 or config["candidate_block_batch"] < 1:
         raise ValueError("Concurrency and block batch must be positive")
     if not isinstance(config["candidate_pool_factor"], int) or config["candidate_pool_factor"] < 1:
         raise ValueError("Candidate pool factor must be a positive integer")
+    if min(config["ice_candidates_per_query"], config["ice_candidate_buffer"]) < 1:
+        raise ValueError("Ice candidate batch and buffer must be positive")
+    if not 0 < config["min_center_ice_fraction"] <= 1:
+        raise ValueError("Centre ice fraction must be in (0,1]")
+    if not 0 < config["ice_search_degrees"] <= config["candidate_block_degrees"]:
+        raise ValueError("Ice search boxes must fit inside candidate blocks")
     if config["split_margin_m"] < 35000:
         raise ValueError("Split margins must separate approximate SMAP supports")
     if any(
@@ -89,6 +101,7 @@ def resolve_config(args):
         repo / "hydrostate/storage/writer.py",
         repo / "hydrostate/storage/schema.py",
     ]
+    config["sampling_version"] = SAMPLING_VERSION
     config["producer_hash"] = fingerprint({str(p.relative_to(repo)): file_hash(p) for p in sources})
     return config
 
@@ -101,7 +114,7 @@ def main():
     parser.add_argument("--project")
     parser.add_argument("--candidate-dir", type=Path)
     parser.add_argument(
-        "--concurrency", type=int, help="Maximum in-flight samples (default: config)"
+        "--concurrency", type=int, help="Maximum concurrent queries and samples (default: config)"
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

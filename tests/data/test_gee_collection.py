@@ -11,7 +11,7 @@ from hydrostate.data.retrieval.cli import DEFAULT_CONFIG, resolve_config
 from hydrostate.data.retrieval.contract import PROFILE, VERSION
 
 
-def config(tmp_path, samples=7):
+def config(tmp_path, samples=8):
     return resolve_config(
         SimpleNamespace(config=DEFAULT_CONFIG, output=tmp_path, samples=samples, project=None)
     )
@@ -24,7 +24,7 @@ def test_current_config_and_dry_run(tmp_path):
     assert cfg["min_date_gap_days"] == 40 and cfg["min_known_fraction"] == 0.95
     assert cfg["water_confidence"] == 0.35 and cfg["ice_confidence"] == 0.60
     assert cfg["land_confidence"] == 0.85 and cfg["land_max_water_ice_probability"] == 0.10
-    with pytest.raises(ValueError, match="seven"):
+    with pytest.raises(ValueError, match="eight"):
         config(tmp_path, 2)
 
 
@@ -43,7 +43,7 @@ def test_changed_contract_cannot_resume(tmp_path, monkeypatch):
         collector.collect(cfg)
 
 
-@pytest.mark.parametrize("samples,max_dates", [(7, 1), (14, 4)])
+@pytest.mark.parametrize("samples,max_dates", [(8, 1), (16, 4)])
 def test_quota_refill_and_resume(tmp_path, monkeypatch, samples, max_dates):
     import olmoearth_pretrain_minimal.olmoearth_pretrain_v1.data.normalize as normalizer
 
@@ -63,6 +63,7 @@ def test_quota_refill_and_resume(tmp_path, monkeypatch, samples, max_dates):
             lon=117.0,
             lat=27.0,
             frequency_bin=i % 7,
+            sampling_group=i % 7,
             climate_class=1,
             block=[116, 26, 2],
             split="train",
@@ -72,6 +73,30 @@ def test_quota_refill_and_resume(tmp_path, monkeypatch, samples, max_dates):
     monkeypatch.setattr(
         collector, "candidate_blocks", lambda *a: iter([candidates[:7], candidates[7:]])
     )
+
+    class FakeIce:
+        def __init__(self, *args):
+            self.stats = {}
+
+        def next_query(self, *args):
+            return {"target_time": "2020-03-01"}
+
+        def fetch(self, query):
+            return [
+                dict(
+                    candidates[0],
+                    sampling_group=7,
+                    frequency_bin=-1,
+                    candidate_target_time=query["target_time"],
+                    transform=[10, 0, (100 + i) * 2000, 0, -10, 10000],
+                )
+                for i in range(8)
+            ]
+
+        def observe(self, row):
+            pass
+
+    monkeypatch.setattr(collector, "IceCandidateSource", FakeIce)
     attempts = []
 
     def collect(ee, sample, root, *args):
@@ -96,7 +121,7 @@ def test_quota_refill_and_resume(tmp_path, monkeypatch, samples, max_dates):
     collector.collect(cfg)
     report = json.loads((tmp_path / "collection_report.json").read_text())
     assert report["complete"] and report["samples"] == samples
-    assert list(report["frequency_counts"].values()) == [samples // 7] * 7
+    assert list(report["sampling_group_counts"].values()) == [samples // 8] * 8
     assert report["unique_locations"] == samples  # Fresh locations precede repeated dates.
     assert len(attempts) == samples + sum(row["transform"][2] == 0 for row in attempts)
     assert sum(report["year_month_counts"].values()) == samples

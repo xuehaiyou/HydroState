@@ -61,8 +61,9 @@ class HydroStateMetric(BaseMetric):
                 result[f"{task}/sum_x2"] = float((estimates**2).sum())
                 result[f"{task}/sum_xy"] = float((estimates * values).sum())
             info = sample.get("metainfo", {})
-            if "frequency_bin" in info:
-                result["frequency_bin"] = str(info["frequency_bin"])
+            for field in ("frequency_bin", "sampling_group"):
+                if field in info:
+                    result[field] = str(info[field])
             if self.sample_metrics_path is not None:
                 info = sample.get("metainfo", {})
                 result["sample_id"] = str(info["sample_id"])
@@ -116,14 +117,15 @@ class HydroStateMetric(BaseMetric):
         # Keep model selection fixed: use training std, never learned task variance.
         metrics["hydro_score"] = -sum(rmse_values) / len(rmse_values) if rmse_values else -math.inf
         # Bin-specific metrics never change the overall model-selection score.
-        for group in sorted({row["frequency_bin"] for row in results if "frequency_bin" in row}):
-            rows = [row for row in results if row.get("frequency_bin") == group]
-            for task in self.tasks:
-                count = sum(row.get(f"{task}/count", 0.) for row in rows)
-                metrics[f"frequency_{group}/{task}_count"] = count
-                if count:
-                    square = sum(row.get(f"{task}/sum_sq", 0.) for row in rows)
-                    metrics[f"frequency_{group}/{task}_rmse"] = math.sqrt(square / count)
+        for field, prefix in (("frequency_bin", "frequency"), ("sampling_group", "sampling")):
+            for group in sorted({row[field] for row in results if field in row}):
+                rows = [row for row in results if row.get(field) == group]
+                for task in self.tasks:
+                    count = sum(row.get(f"{task}/count", 0.) for row in rows)
+                    metrics[f"{prefix}_{group}/{task}_count"] = count
+                    if count:
+                        square = sum(row.get(f"{task}/sum_sq", 0.) for row in rows)
+                        metrics[f"{prefix}_{group}/{task}_rmse"] = math.sqrt(square / count)
         if any(item.get("sm_coupling/enabled", 0) for item in results):
             metrics["soil_moisture_observation_count"] = sum(
                 item.get("soil_moisture/count", 0.0) for item in results

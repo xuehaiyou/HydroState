@@ -37,7 +37,7 @@ collection workflow.
 Run from the repository root. Each stage is explicit; collection does not launch training.
 
 ```bash
-export HYDROSTATE_DATA_ROOT=/path/to/samples/retrieval_5x8_native_v2
+export HYDROSTATE_DATA_ROOT=/path/to/samples/retrieval_5x8_eight_groups
 export HYDROSTATE_CANDIDATE_ROOT=/path/to/candidates/retrieval_5x8_v1
 export HYDROSTATE_MODEL_PATH=/path/to/OlmoEarth-v1_2-Base
 

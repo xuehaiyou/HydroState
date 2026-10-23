@@ -18,6 +18,7 @@ def sample(index, **kwargs):
             crs="EPSG:32650",
             transform=[10, 0, index * 2000, 0, -10, 0],
             frequency_bin=0,
+            sampling_group=0,
             climate_class=0,
             index=index,
         )
@@ -152,7 +153,10 @@ def test_network_failure_propagates_without_consuming_quota():
 
 def test_pool_is_bounded_deduplicated_and_refills_only_unfinished_groups():
     ledger, target = SamplingLedger(), {0: 2, 1: 1}
-    batches = [[sample(i, frequency_bin=i % 2) for i in range(j, j + 20)] for j in (0, 20, 40)]
+    batches = [
+        [sample(i, frequency_bin=i % 2, sampling_group=i % 2) for i in range(j, j + 20)]
+        for j in (0, 20, 40)
+    ]
     batches[0] += [sample(0)]
     pools = candidate_pools(batches, ledger, target, random.Random(43), factor=3)
     first = next(pools)
@@ -175,18 +179,21 @@ def test_sparse_pool_yields_available_centres_without_impossible_wait():
 
 
 def test_full_pilot_simulation_keeps_quotas_dates_and_fresh_locations_after_failures():
-    target, ledger = quotas(140), SamplingLedger()
+    target, ledger = quotas(160), SamplingLedger()
     dates = [f"{year}-{month:02d}-01" for year in range(2017, 2025) for month in range(1, 13)]
-    rows = [sample(i, frequency_bin=i % 7, climate_class=i % 5) for i in range(420)]
+    rows = [
+        sample(i, frequency_bin=i % 7, sampling_group=i % 8, climate_class=i % 5)
+        for i in range(480)
+    ]
     accepted = [
         s
         for s in run(
-            rows, ledger, target, lambda row: None if row["index"] % 4 == 0 else row, dates=dates
+            rows, ledger, target, lambda row: None if row["index"] % 11 == 0 else row, dates=dates
         )
         if s is not None
     ]
-    assert len(accepted) == len(ledger.dates) == 140
+    assert len(accepted) == len(ledger.dates) == 160
     assert ledger.counts == Counter(target)
     assert len(ledger.years) == 8 and len(ledger.months) == 12
-    assert max(ledger.years.values()) <= 24 and max(ledger.months.values()) <= 18
+    assert max(ledger.years.values()) <= 26 and max(ledger.months.values()) <= 20
     assert len(ledger.climates) == 5

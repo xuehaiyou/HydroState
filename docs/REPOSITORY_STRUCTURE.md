@@ -42,6 +42,7 @@ tests/                         共享模块及历史回归；retrieval/ 为当�
 - `catalog.py`：候选点和影像元数据缓存；`sampling.py`：配额与时空去重。
 - `candidates.py`：按剩余配额建立七组轻量候选池；`scheduling.py`：逐任务选日期，
   结合已完成与在途计数进行软均衡，滚动提交和释放失败预占。
+- `ice_candidates.py`：独立 DW 冰雪候选，绑定目标日期、缓存空查询并共享四任务并发。
 - `composites.py`：逐景 QA、均值合成、观测质量摘要。
 - `alignment.py`：产品分辨率网格定义、本地对齐 10 m 和跨组有效性合并。
 - `gee_labels.py`：产品读取；`labels.py`：监督掩膜与面积聚合。

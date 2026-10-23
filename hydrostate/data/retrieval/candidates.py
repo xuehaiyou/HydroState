@@ -30,7 +30,7 @@ def candidate_pools(blocks, ledger, target, rng, factor=3):
             batches += 1
             rng.shuffle(batch)
             for sample in batch:
-                key, fb = location_key(sample), sample["frequency_bin"]
+                key, fb = location_key(sample), sample["sampling_group"]
                 if (
                     counts[fb] >= capacity.get(fb, 0)
                     or key in seen
