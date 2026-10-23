@@ -32,6 +32,7 @@ def resolve_config(args):
         "min_date_gap_days",
         "concurrency",
         "candidate_block_batch",
+        "candidate_pool_factor",
         "split_margin_m",
         "water_confidence",
         "ice_confidence",
@@ -61,6 +62,8 @@ def resolve_config(args):
         raise ValueError("At most four dates per location, separated by at least 40 days")
     if config["concurrency"] < 1 or config["candidate_block_batch"] < 1:
         raise ValueError("Concurrency and block batch must be positive")
+    if not isinstance(config["candidate_pool_factor"], int) or config["candidate_pool_factor"] < 1:
+        raise ValueError("Candidate pool factor must be a positive integer")
     if config["split_margin_m"] < 35000:
         raise ValueError("Split margins must separate approximate SMAP supports")
     if any(

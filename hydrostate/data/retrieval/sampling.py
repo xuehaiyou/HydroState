@@ -32,7 +32,7 @@ class SamplingLedger:
 
     def allows(self, sample, target):
         key, when = location_key(sample), date.fromisoformat(target)
-        dates = self.dates[key]
+        dates = self.dates.get(key, ())
         if len(dates) >= self.max_dates or any(
             abs((when - old).days) < self.min_days for old in dates
         ):
@@ -43,7 +43,7 @@ class SamplingLedger:
         bx, by = math.floor(x / 1200), math.floor(y / 1200)
         for dx in (-1, 0, 1):
             for dy in (-1, 0, 1):
-                for ox, oy, day in self.windows[(crs, bx + dx, by + dy)]:
+                for ox, oy, day in self.windows.get((crs, bx + dx, by + dy), ()):
                     if (
                         abs(x - ox) < 1200
                         and abs(y - oy) < 1200
@@ -51,15 +51,6 @@ class SamplingLedger:
                     ):
                         return False
         return True
-
-    def priority(self, sample, target):
-        when = date.fromisoformat(target)
-        return (
-            len(self.dates[location_key(sample)]),
-            self.years[when.year]
-            + self.months[when.month]
-            + self.climates[sample.get("climate_class", 0)],
-        )
 
     def add(self, sample):
         when = date.fromisoformat(sample["target_time"])

@@ -28,6 +28,12 @@ Python、样本目录和候选目录；校验冻结代码后调用同一个 `run
 不能将 WSL 的 `/mnt/d` 默认路径用于 HPC。
 
 默认同时采集 4 个样本；IO 启动器仍限制为 2 CPU、单线程数学库，不使用 GPU。
+`candidate_pool_factor=3` 控制每组候选点数量相对剩余配额的倍数。
+候选点先跨区域混合、随机打乱，像素下载按成功配额滚动补位。
+每次提交前选择日期，将在途任务计入年份、月份、气候区和位置日期限制；
+失败释放全部预占。默认不对已经下载的成功样本做 reservoir 替换。
+可先用 `--samples 140 --concurrency 4` 试采，检查报告中的 `year_month_counts`、
+`geographic_block_counts` 和 `valid_label_sample_counts` 后再扩大采集。
 每个传感器按产品分辨率分组，每组五个时槽合成一次像素请求
 （最多 6 次输入请求/样本；S1 一组、S2 三组、Landsat 两组）。
 在 GEE 完成逐景 QA、逐日去重均值，按 10/15/20/30/60 m 保存波段与对应

@@ -11,6 +11,7 @@ candidate_seed = 42
 candidates_per_bin = 24
 candidate_block_degrees = 2
 candidate_block_batch = 16
+candidate_pool_factor = 3
 candidate_dir = "/mnt/d/Hydrostate/candidates/retrieval_5x8_v1"
 climate_asset = "users/xiaozhen6666666/cloud/Beck_KG_V1_present_0p0083"
 max_dates_per_location = 4

@@ -7,8 +7,8 @@ import pytest
 
 from hydrostate.data.gee.contracts import atomic_json
 from hydrostate.data.retrieval import collector
-from hydrostate.data.retrieval.contract import PROFILE, VERSION
 from hydrostate.data.retrieval.cli import DEFAULT_CONFIG, resolve_config
+from hydrostate.data.retrieval.contract import PROFILE, VERSION
 
 
 def config(tmp_path, samples=7):
@@ -98,7 +98,9 @@ def test_quota_refill_and_resume(tmp_path, monkeypatch, samples, max_dates):
     assert report["complete"] and report["samples"] == samples
     assert list(report["frequency_counts"].values()) == [samples // 7] * 7
     assert report["unique_locations"] == samples  # Fresh locations precede repeated dates.
-    assert len(attempts) == samples + 1
+    assert len(attempts) == samples + sum(row["transform"][2] == 0 for row in attempts)
+    assert sum(report["year_month_counts"].values()) == samples
+    assert sum(report["split_counts"].values()) == samples
     monkeypatch.setattr(
         collector, "initialize", lambda *_: pytest.fail("remote call on complete resume")
     )

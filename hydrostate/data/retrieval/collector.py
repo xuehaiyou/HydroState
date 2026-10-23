@@ -6,7 +6,7 @@ import os
 import random
 import shutil
 import time
-from collections import Counter, deque
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +21,7 @@ from hydrostate.data.gee.products import BANDS
 from hydrostate.storage import SampleShardWriter
 
 from .alignment import grid_metadata, sensor_masks
+from .candidates import candidate_pools
 from .catalog import candidate_blocks, catalog, pml_calendar
 from .composites import QUALITY, normalize, sensor_composite
 from .contract import INPUT_GROUPS, PROFILE, VERSION, RetrievalSchema, intervals, product_end
@@ -134,7 +135,7 @@ def collect_sample(ee, sample, root, config, norm, calendar):
 
     def reject(reason):
         rejection.parent.mkdir(exist_ok=True)
-        atomic_json(rejection, dict(sample_id=sid, reason=reason))
+        atomic_json(rejection, dict(sample, reason=reason))
         return None
 
     start, end = sample["target_time"], sample["target_end"]
@@ -252,7 +253,19 @@ def publish(root, rows, config, *, complete):
         ),
         year_counts=dict(ledger.years),
         month_counts=dict(ledger.months),
+        year_month_counts=dict(Counter(row["target_time"][:7] for row in rows)),
         climate_counts=dict(ledger.climates),
+        split_counts=dict(Counter(row["split"] for row in rows)),
+        geographic_block_counts=dict(Counter(str(row["block"]) for row in rows)),
+        valid_label_sample_counts=dict(
+            sum(
+                (
+                    Counter({k: int(v > 0) for k, v in row.get("valid_label_counts", {}).items()})
+                    for row in rows
+                ),
+                Counter(),
+            )
+        ),
         sm_supervision="tile_mean_weak; 9km grid + approximate 33km quality screen",
         manifest_sha256=file_hash(root / "samples.parquet"),
     )
@@ -286,34 +299,38 @@ def collect(config):
         ee, norm = initialize(config["project"]), load_computed_config()
         calendar = pml_calendar(ee, config, root / "cache")
         rng = random.Random(config["seed"])
-        dates = sorted(calendar)
-        rng.shuffle(dates)
-        tried = set()
+        tried = {
+            (location_key(row), row["target_time"])
+            for path in (root / "rejected").glob("*.json")
+            if "target_time" in (row := json.loads(path.read_text()))
+        }
         last_publish = 0.0
         with ThreadPoolExecutor(max_workers=config["concurrency"]) as workers:
             # Traverse fresh locations before using additional dates. Subsequent
             # passes reuse the on-disk candidate pool and only refill missing bins.
             for _ in range(config["max_dates_per_location"]):
-                for candidates in candidate_blocks(ee, config):
-                    proposals = deque()
-                    for candidate in sorted(candidates, key=lambda s: ledger.priority(s, dates[0])):
-                        fb = candidate["frequency_bin"]
-                        if ledger.counts[fb] >= target[fb]:
-                            continue
-                        options = sorted(dates, key=lambda day: ledger.priority(candidate, day))
-                        for day in options:
-                            identity = (location_key(candidate), day)
-                            if identity in tried or not ledger.allows(candidate, day):
-                                continue
-                            tried.add(identity)
-                            proposals.append(dict(candidate, target_time=day))
-                            break
+                pools = candidate_pools(
+                    candidate_blocks(ee, config),
+                    ledger,
+                    target,
+                    rng,
+                    factor=config["candidate_pool_factor"],
+                )
+                for candidates in pools:
 
                     def collect_one(sample):
                         return collect_sample(ee, sample, root, config, norm, calendar)
 
                     for row in completed_samples(
-                        workers, proposals, ledger, target, config["concurrency"], collect_one
+                        workers,
+                        candidates,
+                        ledger,
+                        target,
+                        config["concurrency"],
+                        collect_one,
+                        dates=calendar,
+                        rng=rng,
+                        tried=tried,
                     ):
                         if row is not None:
                             rows.append(row)
@@ -329,6 +346,8 @@ def collect(config):
                         if all(ledger.counts[k] == target[k] for k in target):
                             publish(root, rows, config, complete=True)
                             return
+        if rows:
+            publish(root, rows, config, complete=False)
         raise RuntimeError(
             "Candidate pool exhausted before hard quotas; inspect collection_report.json"
         )
