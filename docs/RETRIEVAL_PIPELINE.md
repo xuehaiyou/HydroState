@@ -1,4 +1,4 @@
-# 当前产品监督流程（2026-10-22）
+# 当前产品监督流程（2026-10-23）
 
 当前入口是 `configs/data/collection/retrieval.py` 和
 `configs/hydrostate_retrieval.py`。采样、读取、训练和验证使用同一套新契约，
@@ -9,12 +9,17 @@
 - 目标日期覆盖 2017–2024 年，以 GEE 实际存在的 PML 日期为准。
 - 输入为 **5 × 8 天**，第 3 槽对应目标 PML 周期；左右各两槽。
   年末 PML 周期不足 8 天时，监督保存实际截止日期。
-- 每个图块为 120 × 120 个 10 m 像元；模型输出为 40 × 40 个 30 m 像元。
+- 每个图块覆盖 1.2 km × 1.2 km。采集存储保留产品分辨率：S1 10 m、
+  S2 10/20/60 m、Landsat 15/30 m；本地读取时统一到 120 × 120、10 m，
+  模型输出为 40 × 40、30 m。波段分组及网格定义见 [数据契约](DATA_SCHEMA.md)。
 - 先逐景 QA，同一 UTC 日期的重叠影像先平均，再对不同有效日期等权平均。
   像元没有有效观测时填零并标记无效；零填充值不参加均值。
-- 保存各传感器、各槽、各像元的有效日期数、平均/最早/最晚日期偏移，
+- 保存各传感器的各分辨率组、各槽、各像元的有效日期数、平均/最早/最晚日期偏移，
   并保存源影像 ID。日期统计经独立 `CompositeQualityFusion` 输入模型。
   `observation_time` 是槽中点参考时间，不能当作真实单景获取时间。
+- 光谱、掩膜和日期摘要按相同像元中心最近邻索引对齐，不提前下载插值后的粗波段。
+  同组光谱使用共同有效掩膜；组间允许不同观测日期，保留独立摘要而不合并日期数。
+  模型对同一传感器采用各组有效掩膜交集，缺任一组的像元置零并标为无效。
 - 默认至少两个槽中有一种传感器覆盖图块面积的 50%；不要求三传感器全部齐全。
   中心时间槽两侧使用未来影像，因此这是回溯反演，不是实时预测。
 
@@ -25,7 +30,7 @@
 | Sentinel-1 GRD | IW、10 m、VV/VH，使用产品有效掩膜；同一样本选择同一相对轨道和升降轨方向，dB 转线性功率平均后再转 dB。不用低后向散射阈值剔除水面。 |
 
 Landsat TOA 使用显式物理尺度归一化和可训练的 11 通道输入适配器；
-S1/S2 保留预训练归一化。新输入配置名为 `landsat_l1_toa_mean_v1`，
+S1/S2 保留预训练归一化。新输入配置名为 `landsat_l1_toa_native_mean_v2`，
 不宣称平均后的 TOA 输入仍等同于预训练 L1 DN 分布。
 
 ## 七组中心点均衡采样
@@ -117,6 +122,7 @@ SM 同时检查 SMAP 在 GEE 中发布的网格（产品标称 9 km）和以该�
 | `hydrostate/data/retrieval/contract.py` | 唯一新数据版本、变量和数组形状 |
 | `sampling.py` / `catalog.py` / `collector.py` | 配额、时空去重、元数据缓存、续采和提交 |
 | `composites.py` | QA、逐日去重、均值和观测质量统计 |
+| `alignment.py` | 读取时统一 10 m，按相同索引对齐光谱、掩膜和日期 |
 | `gee_labels.py` / `labels.py` | 产品读取与支持范围、独立监督掩膜、原始网格面积权重 |
 | `validation.py` / `audit.py` / `datasets/retrieval_dataset.py` | 数组检查、发布审计与训练读取 |
 | `models/composite_quality.py` | 观测次数/时间摘要输入模型 |
@@ -128,7 +134,7 @@ bash scripts/run_gee_sampling.sh --dry-run
 
 # 需要已授权的 Earth Engine 项目。修改配额等参数应使用新输出目录。
 bash scripts/run_gee_sampling.sh
-export HYDROSTATE_DATA_ROOT=/mnt/d/Hydrostate/samples/retrieval_5x8_v1
+export HYDROSTATE_DATA_ROOT=/mnt/d/Hydrostate/samples/retrieval_5x8_native_v2
 export HYDROSTATE_MODEL_PATH=/path/to/OlmoEarth-v1_2-Base
 
 # 默认检查全部分片契约及 64 个样本的数组；0 表示全部数组。

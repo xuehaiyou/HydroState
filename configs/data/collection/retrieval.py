@@ -1,6 +1,6 @@
 """Current product-supervised collection; fixed contract, new output directory."""
 
-output_dir = "/mnt/d/Hydrostate/samples/retrieval_5x8_v1"
+output_dir = "/mnt/d/Hydrostate/samples/retrieval_5x8_native_v2"
 project = "cropland-477906"
 samples = 20000
 start_year = 2017

@@ -43,7 +43,7 @@ shared-LoRA 对照将 `private_rank=0`，保留相同的任务查询、融合、
 Backbone 保持 evaluation mode 禁用随机 dropout / band dropping，所选参数仍参与梯度计算。
 启用非重入梯度检查点。`hydrostate_mtlora_frozen_embed.py` 仅用于冻结 patch embedding 消融。
 
-输入配置从契约导入 `landsat_l1_toa_mean_v1`。有效日期均值与 QA 摘要的定义见流程规范。
+输入配置从契约导入 `landsat_l1_toa_native_mean_v2`。有效日期均值与 QA 摘要的定义见流程规范。
 
 ## 覆盖、SM 与 ET
 

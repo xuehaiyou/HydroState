@@ -6,7 +6,7 @@ from mmengine.config import Config
 from mmengine.registry import init_default_scope
 
 from hydrostate.cli import configure_data_contract
-from hydrostate.data.retrieval.contract import TASKS
+from hydrostate.data.retrieval.contract import INPUT_GROUPS, TASKS
 from hydrostate.normalization import CONFIGURED_SUPPORT_VERSION
 from hydrostate.registry import MODELS
 from hydrostate.tasks import task_config
@@ -37,7 +37,9 @@ def batch():
     for sensor, channels in (("s1", 2), ("s2", 12), ("landsat", 11)):
         inputs[sensor] = torch.rand(2, 5, channels, 12, 12)
         inputs[f"{sensor}_valid"] = torch.ones(2, 5, 1, 12, 12, dtype=torch.bool)
-        inputs[f"{sensor}_quality"] = torch.ones(2, 5, 4, 12, 12)
+    for name in INPUT_GROUPS:
+        inputs[f"{name}_quality"] = torch.ones(2, 5, 4, 12, 12)
+        inputs[f"{name}_valid"] = torch.ones(2, 5, 1, 12, 12, dtype=torch.bool)
     labels = {}
     for task in ("water", "snow_ice", "land"):
         labels[task] = torch.full((2, 1, 4, 4), 1.0 if task == "land" else 0.0)

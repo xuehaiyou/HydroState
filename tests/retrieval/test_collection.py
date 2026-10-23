@@ -10,7 +10,7 @@ from ee.apitestcase import ApiTestCase
 from hydrostate.data.gee.products import BANDS, MODALITIES
 from hydrostate.data.retrieval import collector
 from hydrostate.data.retrieval.composites import QUALITY
-from hydrostate.data.retrieval.contract import RetrievalSchema, intervals
+from hydrostate.data.retrieval.contract import INPUT_GROUPS, RetrievalSchema, intervals
 
 
 class TestPackedInputs(ApiTestCase):
@@ -48,13 +48,12 @@ class TestPackedInputs(ApiTestCase):
         )
         requests = []
 
-        def composite(ee, sensor, ids, start):
-            return ee.Image.constant([0] * (len(BANDS[sensor]) + len(QUALITY))).rename(
-                [*BANDS[sensor], *QUALITY]
-            )
+        def composite(ee, sensor, ids, start, bands):
+            return ee.Image.constant([0] * (len(bands) + len(QUALITY))).rename([*bands, *QUALITY])
 
         def pixels(ee, expression, names, crs, transform, width, height):
             assert expression.serialize() and crs == sample["crs"]
+            assert width * transform[0] == height * -transform[4] == 1200
             requests.append(names)
             raw = np.zeros((height, width), dtype=[(name, "f4") for name in names])
             for name in names:
@@ -74,21 +73,23 @@ class TestPackedInputs(ApiTestCase):
             arrays, scenes, eligible = collector.input_arrays(
                 ee, sample, Path("unused"), norm, dict(min_input_fraction=0.5, min_active_slots=2)
             )
-        assert eligible and len(requests) == 2
+        assert eligible and len(requests) == 3
         assert all(len(names) == len(set(names)) for names in requests)
-        for sensor, populated in present.items():
+        for name, group in INPUT_GROUPS.items():
+            sensor, populated = group.sensor, present[group.sensor]
+            assert arrays[name].shape[-2:] == group.shape()
             for slot in range(schema.time_steps):
                 assert scenes[f"{sensor}_{slot}"] == (
                     [f"{sensor}_{slot}"] if slot in populated else []
                 )
                 if slot not in populated:
-                    assert not arrays[sensor][slot].any()
-                    assert not arrays[f"{sensor}_valid"][slot].any()
+                    assert not arrays[name][slot].any()
+                    assert not arrays[f"{name}_valid"][slot].any()
                     continue
-                assert arrays[f"{sensor}_quality"][slot, 0, 1, 1] == slot + 1
-                assert not arrays[sensor][slot, :, 0, 0].any()
+                assert arrays[f"{name}_quality"][slot, 0, 1, 1] == slot + 1
+                assert not arrays[name][slot, :, 0, 0].any()
                 expected = (slot + 1) / (4 if sensor == "s1" else 2) + 0.5
-                assert arrays[sensor][slot, 0, 1, 1] == np.float16(expected)
+                assert arrays[name][slot, 0, 1, 1] == np.float16(expected)
                 assert (
                     arrays["observation_time"][slot, list(BANDS).index(sensor)]
                     == (collector.epoch(slots[slot][0]) + collector.epoch(slots[slot][1])) // 2

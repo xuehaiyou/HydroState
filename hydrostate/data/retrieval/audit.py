@@ -12,6 +12,7 @@ from hydrostate.data.gee.contracts import fingerprint
 from hydrostate.data.spatial import geographic_split
 from hydrostate.storage.packs import file_hash
 
+from .alignment import grid_metadata
 from .contract import PROFILE, VERSION, RetrievalSchema
 from .sampling import SamplingLedger, inside_split_block, quotas
 
@@ -66,6 +67,8 @@ def audit(root, *, pixel_limit=64, require_complete=True):
                 or group.attrs.get("config_sha256") != config_hash
             ):
                 raise ValueError(f"Shard contract mismatch: {path}")
+            if kind == "input" and group.attrs.get("input_grids") != grid_metadata(row):
+                raise ValueError(f"Native input grids disagree with tile bounds: {path}")
             for name, spec in specs.items():
                 array = group[name]
                 if array.shape != (1, *spec.tail_shape) or array.dtype != np.dtype(spec.dtype):

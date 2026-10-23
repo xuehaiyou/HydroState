@@ -8,11 +8,12 @@ from mmengine.config import Config
 
 from hydrostate.cli import configure_data_contract, configure_target_statistics
 from hydrostate.data.gee.contracts import fingerprint
+from hydrostate.data.retrieval.alignment import grid_metadata
+from hydrostate.data.retrieval.contract import INPUT_GROUPS, PROFILE, VERSION, RetrievalSchema
+from hydrostate.data.retrieval.statistics import compute_retrieval_statistics
 from hydrostate.data.retrieval.validation import validate_arrays
-from hydrostate.data.retrieval.contract import PROFILE, VERSION, RetrievalSchema
 from hydrostate.datasets.retrieval_dataset import RetrievalDataset
 from hydrostate.storage import SampleShardWriter
-from hydrostate.data.retrieval.statistics import compute_retrieval_statistics
 
 
 def make_dataset(root):
@@ -22,14 +23,17 @@ def make_dataset(root):
         json.dumps(dict(cfg, version=VERSION, input_profile=PROFILE))
     )
     rows = []
+    sample = dict(crs="EPSG:32650", transform=[10, 0, 400005, 0, -10, 3000015])
     for index in range(2):
         inputs = {k: np.zeros(s.tail_shape, s.dtype) for k, s in schema.inputs.items()}
         labels = {k: np.zeros(s.tail_shape, s.dtype) for k, s in schema.targets.items()}
-        for sensor in ("s1", "s2", "landsat"):
+        for sensor in INPUT_GROUPS:
             inputs[f"{sensor}_valid"][:] = 1
             inputs[f"{sensor}_quality"][:, 0] = 2
             inputs[f"{sensor}_quality"][:, 1:] = 1
             inputs[sensor][:] = 0.5
+        # A 15 m spatial pattern detects noninteger resampling and flip mistakes.
+        inputs["landsat_15m"][:, 0] = np.arange(80)[None, :]
         inputs["sensor_valid"][:] = 1
         inputs["slot_bounds"][:] = np.array(
             [[1600000000 + i * 86400 * 8, 1600000000 + (i + 1) * 86400 * 8] for i in range(5)]
@@ -57,7 +61,11 @@ def make_dataset(root):
         validate_arrays(inputs, labels)
         a, b = root / f"{index}_input.zarr", root / f"{index}_label.zarr"
         writer = SampleShardWriter(
-            str(a), str(b), 1, schema=schema, attrs=dict(config_sha256=fingerprint(cfg))
+            str(a),
+            str(b),
+            1,
+            schema=schema,
+            attrs=dict(config_sha256=fingerprint(cfg), input_grids=grid_metadata(sample)),
         )
         writer.write(inputs, labels)
         writer.finalize()
@@ -73,6 +81,8 @@ def make_dataset(root):
                 frequency_bin=index,
                 target_time="2020-01-01",
                 climate_class=1,
+                crs=sample["crs"],
+                transform=json.dumps(sample["transform"]),
             )
         )
     manifest = root / "samples.parquet"
@@ -86,6 +96,14 @@ def test_strict_storage_roundtrip_statistics_and_config(tmp_path, num_workers):
     dataset = RetrievalDataset(manifest, "train")
     first = dataset[0]
     assert first["inputs"]["s1"].shape == (5, 2, 120, 120)
+    torch.testing.assert_close(
+        first["inputs"]["landsat"][0, 0, 0, :6],
+        torch.tensor([0, 1, 1, 2, 3, 3], dtype=torch.float16),
+    )
+    flipped = RetrievalDataset(manifest, "train", training=True, flip_probability=1)[0]
+    for key, value in first["inputs"].items():
+        if isinstance(value, torch.Tensor) and value.ndim == 4:
+            torch.testing.assert_close(flipped["inputs"][key], value.flip(-1, -2))
     assert first["data_samples"]["soil_moisture_valid"].dtype == torch.bool
     assert first["data_samples"]["et_land_native_weights"].shape == (
         RetrievalSchema().native_capacity,

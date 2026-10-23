@@ -7,14 +7,15 @@ import torch
 from torch.utils.data import DataLoader
 
 from hydrostate.datasets.collate import hydro_collate
-from hydrostate.datasets.retrieval_dataset import RetrievalDataset
+from hydrostate.datasets.retrieval_dataset import RetrievalDataset, as_tensors
 from hydrostate.models.hydrostate_model import supervision_values
 from hydrostate.normalization import CONFIGURED_SUPPORT_VERSION, training_fingerprint
 from hydrostate.statistics import RunningMoments
 from hydrostate.storage.packs import file_hash
 from hydrostate.tasks import task_config
 
-from .contract import OUTPUT_SCALE
+from .alignment import sensor_masks
+from .contract import INPUT_GROUPS, OUTPUT_SCALE
 
 
 class _RetrievalSupportDataset(RetrievalDataset):
@@ -23,11 +24,14 @@ class _RetrievalSupportDataset(RetrievalDataset):
         specs = {
             key: spec
             for key, spec in self.schema.inputs.items()
-            if key in ("s1_valid", "s2_valid", "landsat_valid")
+            if key in {f"{name}_valid" for name in INPUT_GROUPS}
         }
+        masks = sensor_masks(
+            self._arrays(row, "input", specs), (self.schema.height, self.schema.width)
+        )
         return dict(
-            inputs=self._arrays(row, "input", specs),
-            data_samples=self._arrays(row, "label", self.schema.targets),
+            inputs=as_tensors({f"{name}_valid": value for name, value in masks.items()}),
+            data_samples=as_tensors(self._arrays(row, "label", self.schema.targets)),
         )
 
 

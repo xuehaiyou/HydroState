@@ -20,9 +20,10 @@ from hydrostate.data.gee.contracts import atomic_json, fingerprint, locked
 from hydrostate.data.gee.products import BANDS
 from hydrostate.storage import SampleShardWriter
 
+from .alignment import grid_metadata, sensor_masks
 from .catalog import candidate_blocks, catalog, pml_calendar
 from .composites import QUALITY, normalize, sensor_composite
-from .contract import PROFILE, VERSION, RetrievalSchema, intervals, product_end
+from .contract import INPUT_GROUPS, PROFILE, VERSION, RetrievalSchema, intervals, product_end
 from .gee_labels import fetch_cover, fetch_products
 from .labels import build_targets, cover_targets, sm_tile_eligible
 from .sampling import SamplingLedger, location_key, quotas
@@ -54,9 +55,10 @@ def input_arrays(ee, sample, cache, norm, config):
         min(orbit_counts, key=lambda key: (-orbit_counts[key], str(key))) if orbit_counts else None
     )
     scenes = {}
-    for modality, sensor in enumerate(BANDS):
+    for name, group in INPUT_GROUPS.items():
+        sensor = group.sensor
         chunks, packed_names, present = [], [], []
-        names = [*BANDS[sensor], *QUALITY]
+        names = [*group.bands, *QUALITY]
         for slot, (start, end) in enumerate(slots):
             selected = [
                 s
@@ -71,41 +73,43 @@ def input_arrays(ee, sample, cache, norm, config):
             scenes[f"{sensor}_{slot}"] = ids
             if not ids:
                 continue
-            expression = sensor_composite(ee, sensor, ids, start)
+            expression = sensor_composite(ee, sensor, ids, start, group.bands)
             renamed = [f"t{slot}_{name}" for name in names]
             chunks.append(expression.rename(renamed))
             packed_names.extend(renamed)
             present.append(slot)
         if not chunks:
             continue
-        # One bounded request per sensor, preserving each slot's QA and dates.
+        # One bounded request per resolution group, retaining all five slots.
+        height, width = group.shape(schema.height, schema.width)
         packed = compute_pixels(
             ee,
             ee.Image.cat(chunks),
             packed_names,
             sample["crs"],
-            sample["transform"],
-            schema.width,
-            schema.height,
+            group.transform(sample["transform"]),
+            width,
+            height,
         )
         for slot in present:
             start, end = slots[slot]
-            raw = {name: packed[f"t{slot}_{name}"] for name in names}
+            raw = {band: packed[f"t{slot}_{band}"] for band in names}
             valid = raw["days"] > 0
-            arrays[sensor][slot] = normalize(
-                sensor, np.stack([raw[name] for name in BANDS[sensor]]), valid, norm
+            arrays[name][slot] = normalize(
+                sensor, np.stack([raw[band] for band in group.bands]), valid, norm, group.bands
             )
-            arrays[f"{sensor}_valid"][slot, 0] = valid
-            arrays[f"{sensor}_quality"][slot] = np.stack([raw[name] for name in QUALITY])
-            arrays["sensor_valid"][slot, modality] = valid.any()
-            # A structural slot reference, NOT a fabricated acquisition timestamp.
-            # Actual date support remains in per-pixel quality and scene IDs.
-            arrays["observation_time"][slot, modality] = (epoch(start) + epoch(end)) // 2
-    active = sum(
-        any(
-            arrays[f"{sensor}_valid"][slot].mean() >= config["min_input_fraction"]
-            for sensor in BANDS
+            arrays[f"{name}_valid"][slot, 0] = valid
+            arrays[f"{name}_quality"][slot] = np.stack([raw[band] for band in QUALITY])
+    masks = sensor_masks(arrays, (schema.height, schema.width))
+    for modality, sensor in enumerate(BANDS):
+        available = masks[sensor].any(axis=(1, 2, 3))
+        arrays["sensor_valid"][:, modality] = available
+        # Structural references only; actual dates stay in per-group quality.
+        arrays["observation_time"][:, modality] = np.where(
+            available, arrays["slot_bounds"].mean(axis=1).astype(np.int64), 0
         )
+    active = sum(
+        any(masks[sensor][slot].mean() >= config["min_input_fraction"] for sensor in BANDS)
         for slot in range(schema.time_steps)
     )
     return arrays, scenes, active >= config["min_active_slots"]
@@ -191,6 +195,8 @@ def collect_sample(ee, sample, root, config, norm, calendar):
             sample=sample,
             input_profile=PROFILE,
             scenes=scenes,
+            input_grids=grid_metadata(sample),
+            local_alignment="pixel_center_nearest; common_tile_extent; model_10m",
             label_sources=dict(dynamic_world=dw_ids, pml=calendar[start]),
             sm_quality=sm,
             config_sha256=fingerprint(config),

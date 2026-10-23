@@ -9,6 +9,7 @@ import torch
 from torch.utils.data import Dataset
 
 from hydrostate.data.gee.contracts import fingerprint
+from hydrostate.data.retrieval.alignment import align_inputs, grid_metadata
 from hydrostate.data.retrieval.contract import (
     OUTPUT_SCALE,
     PROFILE,
@@ -19,6 +20,13 @@ from hydrostate.data.retrieval.contract import (
 from hydrostate.registry import DATASETS
 from hydrostate.storage.reader import ShardCache
 from hydrostate.tasks import task_config
+
+
+def as_tensors(arrays):
+    return {
+        name: torch.from_numpy(value.astype(bool) if name.endswith("_valid") else value)
+        for name, value in arrays.items()
+    }
 
 
 @DATASETS.register_module()
@@ -82,19 +90,24 @@ class RetrievalDataset(Dataset):
             or group.attrs.get("config_sha256") != self.config_hash
         ):
             raise ValueError(f"Shard contract mismatch: {path}")
+        if kind == "input" and group.attrs.get("input_grids") != grid_metadata(
+            dict(crs=row["crs"], transform=json.loads(row["transform"]))
+        ):
+            raise ValueError(f"Native input grids disagree with tile bounds: {path}")
         result = {}
         for name, spec in specs.items():
             array = group[name]
             if array.shape[1:] != spec.tail_shape or array.dtype != np.dtype(spec.dtype):
                 raise ValueError(f"Invalid schema for {path}/{name}")
-            value = torch.from_numpy(array[int(row.shard_index)].copy())
-            result[name] = value.bool() if name.endswith("_valid") else value
+            result[name] = array[int(row.shard_index)].copy()
         return result
 
     def __getitem__(self, index):
         row = self.table.iloc[index]
-        inputs = self._arrays(row, "input", self.schema.inputs)
-        targets = self._arrays(row, "label", self.schema.targets)
+        inputs = as_tensors(
+            align_inputs(self._arrays(row, "input", self.schema.inputs), self.schema)
+        )
+        targets = as_tensors(self._arrays(row, "label", self.schema.targets))
         if self.training:
             for axis in (-1, -2):
                 if torch.rand(()) < self.flip_probability:

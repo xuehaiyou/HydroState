@@ -26,15 +26,16 @@ def optical_mask(image, sensor):
     return scl.remap([0, 1, 3, 8, 9, 10], [0] * 6, 1).eq(1)
 
 
-def prepare_sensor(ee, image, sensor):
+def prepare_sensor(ee, image, sensor, bands=None):
+    bands = list(bands or BANDS[sensor])
     if sensor == "landsat":
-        value = ee.Algorithms.Landsat.TOA(image).select(BANDS[sensor])
+        value = ee.Algorithms.Landsat.TOA(image).select(bands)
         value = value.updateMask(optical_mask(image, sensor))
     elif sensor == "s2":
-        value = image.select(BANDS[sensor]).updateMask(optical_mask(image, sensor))
+        value = image.select(bands).updateMask(optical_mask(image, sensor))
     else:
         # GRD catalog values are calibrated dB; average linear power, not dB.
-        value = ee.Image.constant(10).pow(image.select(BANDS[sensor]).divide(10))
+        value = ee.Image.constant(10).pow(image.select(bands).divide(10))
     valid = value.mask().reduce(ee.Reducer.min()).gt(0)
     return ee.Image(
         value.updateMask(valid).copyProperties(image, ["system:time_start", "system:index"])
@@ -85,12 +86,13 @@ def mean_composite(ee, images, bands, start, *, radar=False):
     return ee.Image.cat([value, stats]).unmask(0, False).toFloat()
 
 
-def sensor_composite(ee, sensor, scene_ids, start):
+def sensor_composite(ee, sensor, scene_ids, start, bands=None):
+    bands = list(bands or BANDS[sensor])
     images = ee.ImageCollection.fromImages([ee.Image(sid) for sid in scene_ids])
     return mean_composite(
         ee,
-        images.map(lambda im: prepare_sensor(ee, im, sensor)),
-        BANDS[sensor],
+        images.map(lambda im: prepare_sensor(ee, im, sensor, bands)),
+        bands,
         start,
         radar=sensor == "s1",
     )
@@ -154,7 +156,7 @@ def scene_catalog(ee, sensor, area, start, end):
     ).getInfo()["features"]
 
 
-def normalize(sensor, values, valid, norm):
+def normalize(sensor, values, valid, norm, bands=None):
     """Calibrated L1 has explicit physical scaling and a trainable input adapter.
 
     S1/S2 retain the published pretraining normalization. TOA reflective channels
@@ -162,11 +164,15 @@ def normalize(sensor, values, valid, norm):
     These are physical scales, not purported pretrained DN statistics.
     """
     values = values.astype(np.float32)
+    bands = list(bands or BANDS[sensor])
     if sensor == "landsat":
-        values[:-2] = values[:-2] / 2 + 0.5
-        values[-2:] = (values[-2:] - 290) / 80 + 0.5
+        for index, band in enumerate(bands):
+            if band in ("B10", "B11"):
+                values[index] = (values[index] - 290) / 80 + 0.5
+            else:
+                values[index] = values[index] / 2 + 0.5
     else:
-        for index, band in enumerate(BANDS[sensor]):
+        for index, band in enumerate(bands):
             name = (
                 band.lower()
                 if sensor == "s1"

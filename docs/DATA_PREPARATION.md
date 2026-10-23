@@ -7,7 +7,7 @@
 
 ```bash
 export HYDROSTATE_PYTHON=python
-export HYDROSTATE_DATA_ROOT=/path/to/samples/retrieval_5x8_v1
+export HYDROSTATE_DATA_ROOT=/path/to/samples/retrieval_5x8_native_v2
 export HYDROSTATE_CANDIDATE_ROOT=/path/to/candidates/retrieval_5x8_v1
 export HYDROSTATE_MODEL_PATH=/path/to/OlmoEarth-v1_2-Base
 export GEE_PROJECT=cropland-477906
@@ -28,8 +28,12 @@ Python、样本目录和候选目录；校验冻结代码后调用同一个 `run
 不能将 WSL 的 `/mnt/d` 默认路径用于 HPC。
 
 默认同时采集 4 个样本；IO 启动器仍限制为 2 CPU、单线程数学库，不使用 GPU。
-每个传感器的五个时槽合成一次像素请求（最多 3 次输入请求/样本），
-保留逐景 QA、逐日去重均值和各槽有效观测次数、时间统计。
+每个传感器按产品分辨率分组，每组五个时槽合成一次像素请求
+（最多 6 次输入请求/样本；S1 一组、S2 三组、Landsat 两组）。
+在 GEE 完成逐景 QA、逐日去重均值，按 10/15/20/30/60 m 保存波段与对应
+有效日期数、时间统计；本地数据读取时才统一到 10 m。
+完整五槽的光谱数组元素数比全部保存为 10 m 减少约 64%；这不是压缩文件大小
+或总采样耗时的保证，请求数增加后的实际吞吐需实测。
 工作线程完成即补位；在途样本也预留频率配额、位置日期及邻近图块约束，
 样本不合格时释放预留，网络失败仍报错并保留断点。
 
@@ -38,6 +42,8 @@ SM 监督先用原有规则检查图块陆地比例，不合格时仅跳过 SMAP
 产品元数据、同格同周期 SM 观测和地形统计使用带锁缓存；覆盖质量缓存还绑定完整
 GEE 覆盖表达式（来源影像、日期、阈值和投影），不会仅凭空间邻近复用。
 所有覆盖和 ET 标签的计算规则保持一致。
+新格式使用 `retrieval_5x8_native_v2` 样本目录，旧试采样本不会自动转换或混写；
+JRC 中心点候选池仍可复用。
 
 ## 2. 审计与训练统计
 

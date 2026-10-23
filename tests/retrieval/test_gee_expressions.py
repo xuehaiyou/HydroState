@@ -8,6 +8,7 @@ import ee
 from ee.apitestcase import ApiTestCase
 
 from hydrostate.data.retrieval.composites import cover_composite, mean_composite, prepare_sensor
+from hydrostate.data.retrieval.contract import INPUT_GROUPS
 from hydrostate.data.retrieval.gee_labels import fetch_products, smap_label
 
 SM_CONFIG = dict(min_known_fraction=0.95, max_water_ice_fraction=0.05)
@@ -20,6 +21,8 @@ class TestExpressions(ApiTestCase):
             prepared = prepare_sensor(ee, image, sensor)
             assert isinstance(prepared, ee.Image)
             assert prepared.serialize()
+        for group in INPUT_GROUPS.values():
+            assert prepare_sensor(ee, image, group.sensor, group.bands).serialize()
         assert mean_composite(ee, ee.ImageCollection([image]), ["x"], "2020-01-01").serialize()
         assert cover_composite(
             ee, [], "2020-01-01", dict(water=0.35, snow_ice=0.6, land=0.85, land_max_water_ice=0.1)

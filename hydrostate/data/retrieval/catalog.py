@@ -14,7 +14,7 @@ from hydrostate.data.gee.products import collection
 from hydrostate.data.spatial import geographic_split, grid
 
 from .composites import scene_catalog
-from .contract import VERSION
+from .contract import CANDIDATE_VERSION
 from .sampling import inside_split_block
 
 
@@ -84,7 +84,7 @@ def candidate_blocks(ee, config):
             "split_margin_m",
         )
     }
-    cache = Path(config["candidate_dir"]) / fingerprint(dict(contract, version=VERSION))
+    cache = Path(config["candidate_dir"]) / fingerprint(dict(contract, version=CANDIDATE_VERSION))
     projection = CRS.from_epsg(6933).to_wkt(version="WKT1_GDAL")
     batch_size = config["candidate_block_batch"]
 

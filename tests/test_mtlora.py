@@ -216,7 +216,7 @@ def test_config_selects_current_five_slot_product_contract():
     configure_data_contract(cfg)
     assert cfg.model.encoder.out_indices == [3, 7, 11]
     assert cfg.model.type == "MTLoRAHydroStateModel"
-    assert cfg.input_profile == "landsat_l1_toa_mean_v1"
+    assert cfg.input_profile == "landsat_l1_toa_native_mean_v2"
     assert cfg.train_dataloader.dataset.type == "RetrievalDataset"
     assert len(cfg.tasks) == 7
     assert cfg.tasks.soil_moisture.support == "tile_mean_weak"

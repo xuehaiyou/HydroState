@@ -9,7 +9,7 @@ custom_imports = dict(
     imports=["hydrostate.models", "hydrostate.datasets", "hydrostate.evaluation"],
     allow_failed_imports=False,
 )
-data_root = "{{$HYDROSTATE_DATA_ROOT:/fossfs/xiaozhen/HydroState/retrieval_5x8_v1}}"
+data_root = "{{$HYDROSTATE_DATA_ROOT:/fossfs/xiaozhen/HydroState/retrieval_5x8_native_v2}}"
 manifest = "{{$HYDROSTATE_MANIFEST:__data_root__}}"
 if manifest == "__data_root__":
     manifest = f"{data_root}/samples.parquet"

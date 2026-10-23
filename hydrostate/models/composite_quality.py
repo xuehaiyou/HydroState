@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from hydrostate.data.retrieval.contract import QUALITY_CHANNELS, SENSORS, TIME_STEPS
+from hydrostate.data.retrieval.contract import INPUT_GROUPS, QUALITY_CHANNELS, TIME_STEPS
 from hydrostate.registry import MODELS
 
 
@@ -12,9 +12,9 @@ from hydrostate.registry import MODELS
 class CompositeQualityFusion(nn.Module):
     def __init__(self, feature_channels=768, hidden_channels=32):
         super().__init__()
-        # Five slots, three sensors, four statistics plus explicit availability.
+        # Five slots, six native groups, four statistics plus availability.
         self.layers = nn.Sequential(
-            nn.Conv2d(TIME_STEPS * len(SENSORS) * (QUALITY_CHANNELS + 1), hidden_channels, 1),
+            nn.Conv2d(TIME_STEPS * len(INPUT_GROUPS) * (QUALITY_CHANNELS + 1), hidden_channels, 1),
             nn.GELU(),
             nn.Conv2d(hidden_channels, feature_channels, 1, bias=False),
         )
@@ -22,9 +22,9 @@ class CompositeQualityFusion(nn.Module):
 
     def forward(self, features, inputs):
         parts = []
-        for sensor in SENSORS:
-            quality = inputs[f"{sensor}_quality"].float()
-            valid = inputs[f"{sensor}_valid"].bool()
+        for name in INPUT_GROUPS:
+            quality = inputs[f"{name}_quality"].float()
+            valid = inputs[f"{name}_valid"].bool()
             if quality.shape[1:3] != (TIME_STEPS, QUALITY_CHANNELS):
                 raise ValueError("Quality fusion requires five slots and four statistics")
             # Count is valid dates (at most eight); dates are offsets within slot.
