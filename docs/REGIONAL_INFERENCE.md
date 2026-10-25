@@ -75,6 +75,17 @@ bash scripts/run_region_download_io.sh --root "$HYDROSTATE_REGION_ROOT"
 代码同步仍走 Git；不要覆盖正在运行的冻结发布。采集使用 CPU，模型推理默认单 GPU。
 运行是否启动、已完成多少日期须查看对应运行回执、进程和日志。
 
+HPC 当前鄱阳湖全量输入的存储根目录为：
+
+```bash
+export HYDROSTATE_REGION_ROOT=/fossfs/xiaozhen/HydroState/inference/poyang_retrieval_5x8_201704_202412_f9fce12
+```
+
+采集和模型推理都直接传入这个 `--root`；旧 `/scr/u/xiaoz/HydroState/inference`
+不保留路径别名。目录名末尾的提交号记录最初建库来源，当前执行代码以
+`submission.json` 的 commit 和冻结源码路径为准。
+迁移校验及续跑记录见 [FossFS 迁移验收](validation/REGIONAL_FOSSFS_MIGRATION_20261025.md)。
+
 从正在运行的当前五槽 Drive 采集切换时，先停止其本地调度进程，再完成已提交任务：
 
 ```bash
@@ -123,10 +134,11 @@ Drive 明确失败的远端任务保留错误，排除原因后通过 `--backend
 每请求最多 32 MiB、2 CPU、0 GPU；不为每个模型窗口或请求重新建池。
 若单槽超出配置预算，明确报错，使用 Drive 或新建较小空间块的计划，不静默更改数据定义。
 Drive 默认最多 2 个在途逻辑导出、2 个下载入库线程，加 1 个有界规划线程。
-两条通道都检查 scratch 余量，并保留默认全域 20 GiB 预留。
+两条通道都检查输出目录所在文件系统的余量，并保留默认全域 20 GiB 预留。
 只有完整入库后才删除本流程记录的 Drive 导出文件及对应 staging 文件，
-不清空用户回收站。容量不足会在 `capacity.json` 指明 Google Drive、HPC scratch
-或在途预算哪一项不足，保留任务状态。
+不清空用户回收站。容量不足会在 `capacity.json` 指明 Google Drive、输出文件系统
+或在途预算哪一项不足，保留任务状态；`hpc_scratch` 是现有诊断字段名，
+空间检查实际作用于传入的根目录，目录迁入 FossFS 后检查的也是 FossFS。
 
 ## 区域输出与验证含义
 
