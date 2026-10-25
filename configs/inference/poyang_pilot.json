@@ -1,0 +1,30 @@
+{
+  "name": "poyang_retrieval_pilot",
+  "project": "cropland-477906",
+  "crs": "EPSG:32650",
+  "aoi": {
+    "bbox": [
+      116.145,
+      29.175,
+      116.151,
+      29.181
+    ]
+  },
+  "start": "2020-07-11",
+  "end": "2020-07-12",
+  "block_size": 120,
+  "core_size": 32,
+  "stride": 16,
+  "min_active_slots": 2,
+  "min_input_fraction": 0.5,
+  "drive": {
+    "max_exports": 2,
+    "download_workers": 2,
+    "file_dimensions": 2048,
+    "max_export_gib": 0.5,
+    "max_pending_gib": 1.0,
+    "drive_reserve_gib": 0.5,
+    "min_free_gib": 2,
+    "poll_seconds": 15
+  }
+}

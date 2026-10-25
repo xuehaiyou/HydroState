@@ -1,5 +1,7 @@
 """Server-side QA, daily deduplication and date-weighted composites."""
 
+from collections import Counter
+
 import numpy as np
 
 from hydrostate.data.gee.products import BANDS, MODALITIES, collection
@@ -18,6 +20,14 @@ DW_CLASSES = [
     "snow_and_ice",
 ]
 QUALITY = ["days", "mean_day", "first_day", "last_day"]
+
+
+def radar_orbit(scenes):
+    """One deterministic relative orbit/pass over the complete five-slot context."""
+    counts = Counter(
+        (s.get("relativeOrbitNumber_start"), s.get("orbitProperties_pass")) for s in scenes
+    )
+    return min(counts, key=lambda key: (-counts[key], str(key))) if counts else None
 
 
 def optical_mask(image, sensor):

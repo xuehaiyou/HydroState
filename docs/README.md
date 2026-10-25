@@ -6,6 +6,7 @@
 |---|---|
 | [RETRIEVAL_PIPELINE](RETRIEVAL_PIPELINE.md) | 科学定义、采样、时间匹配、质量控制及监督尺度 |
 | [DATA_PREPARATION](DATA_PREPARATION.md) | 本地/HPC 的正式执行入口和环境参数 |
+| [REGIONAL_INFERENCE](REGIONAL_INFERENCE.md) | 区域 Drive 准备、断点恢复和当前模型推理 |
 | [DATA_SCHEMA](DATA_SCHEMA.md) | 数据契约、分片和数据发布约定 |
 | [MTLORA](MTLORA.md) | 当前两个模型、融合模块和冻结策略 |
 | [REPOSITORY_STRUCTURE](REPOSITORY_STRUCTURE.md) | 目录职责、依赖方向和历史代码边界 |

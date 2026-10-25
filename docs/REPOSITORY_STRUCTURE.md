@@ -20,9 +20,12 @@ hydrostate/
   statistics.py                 通用流式统计
   models/, losses/, evaluation/ 模型、损失及指标；架构仍由 config 选择
   legacy/                       历史采样器、读取器、schema 和统计
-  data/local/, data/regional/    历史区域影像准备组件
-  inference/, experiments/      区域导出和历史实验组件
+  data/regional/                正式区域合成规划与 Drive 准备；原单景实现保留原位
+  data/local/                   本地历史影像准备组件
+  inference/                    正式七任务区域导出及已有三变量导出
+  experiments/                  专项实验组件
 scripts/
+  run_region_download_io.sh      当前区域 Drive 准备包装
   run_gee_sampling.sh            唯一本地采样包装入口
   run_gee_collection_io.sh       HPC IO 环境检查后调用同一采样入口
   train.sh                      单 GPU 训练运行器
@@ -66,7 +69,11 @@ tests/                         共享模块及历史回归；retrieval/ 为当�
 
 历史模型实现继续保留，避免把“清理旧数据流程”误变成“删除模型对比能力”。
 归档配置继续加载其历史数据定义；不能直接用它们对当前七任务样本训练。
-旧区域制图工具也尚未适配当前七输出契约。
+当前区域入口为 `tools/prepare_region.py` 和 `tools/predict_region.py`，不在 legacy 下。
+`regional/plan.py` 定义计划，`exports.py` 构造共享合成导出，`pipeline.py` 调度与恢复；
+`storage/regional.py` 校验入库，`datasets/regional.py` 读取五槽，`inference/regional.py`
+加载当前 checkpoint 并拼接七任务及总 ET。原有四槽/单景文件保留原位供已有实验追溯，
+正式流程不调用其选片或缓存实现，也不依赖 LegacySchema。
 
 新增业务逻辑放入 `hydrostate/`，`tools/` 只负责参数和调用；
 Shell 负责资源、环境和进程启动，数据检查统一调用 Python 服务。

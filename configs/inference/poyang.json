@@ -1,0 +1,17 @@
+{
+  "name": "poyang_retrieval",
+  "project": "cropland-477906",
+  "crs": "EPSG:32650",
+  "aoi": {
+    "collection": "projects/sat-io/open-datasets/HydroLakes/lake_poly_v10",
+    "id_field": "Hylak_id", "id": 151, "buffer_m": 10000
+  },
+  "start": "2017-04-01", "end": "2025-01-01",
+  "block_size": 960, "core_size": 32, "stride": 16,
+  "min_active_slots": 2, "min_input_fraction": 0.5,
+  "drive": {
+    "max_exports": 2, "download_workers": 2, "file_dimensions": 2048,
+    "max_export_gib": 0.5, "max_pending_gib": 1.0,
+    "drive_reserve_gib": 0.5, "min_free_gib": 20, "poll_seconds": 15
+  }
+}

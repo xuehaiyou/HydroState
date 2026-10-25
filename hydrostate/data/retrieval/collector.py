@@ -23,7 +23,7 @@ from hydrostate.storage import SampleShardWriter
 from .alignment import grid_metadata, sensor_masks
 from .candidates import WaterCandidateSource
 from .catalog import catalog, pml_calendar
-from .composites import QUALITY, normalize, sensor_composite
+from .composites import QUALITY, normalize, radar_orbit, sensor_composite
 from .contract import INPUT_GROUPS, PROFILE, VERSION, RetrievalSchema, intervals, product_end
 from .gee_labels import fetch_cover, fetch_products
 from .ice_candidates import IceCandidateSource
@@ -52,12 +52,7 @@ def input_arrays(ee, sample, cache, norm, config):
     }
     # Choose one relative orbit AND pass for all radar slots. Coverage, then
     # deterministic identity breaks ties; missing radar never rejects good optics.
-    orbit_counts = Counter(
-        (s.get("relativeOrbitNumber_start"), s.get("orbitProperties_pass")) for s in catalogs["s1"]
-    )
-    orbit = (
-        min(orbit_counts, key=lambda key: (-orbit_counts[key], str(key))) if orbit_counts else None
-    )
+    orbit = radar_orbit(catalogs["s1"])
     scenes = {}
     for name, group in INPUT_GROUPS.items():
         sensor = group.sensor
