@@ -1,4 +1,4 @@
-"""Prepare current regional five-slot inference inputs through Google Drive."""
+"""Prepare current regional five-slot inputs through computePixels or Google Drive."""
 
 import sys
 from pathlib import Path

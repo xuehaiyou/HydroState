@@ -151,7 +151,7 @@ def status(root, *, audit=False):
     )
 
 
-def prepare(root, *, token=None, retry_failed=False):
+def prepare(root, *, token=None, retry_failed=False, drain_only=False):
     root = Path(root)
     plan = load_plan(root)
     settings = json.loads((root / "drive.json").read_text())
@@ -177,8 +177,13 @@ def prepare(root, *, token=None, retry_failed=False):
             reserved = {p["id"] for r in pending for p in r["payload"]["products"]}
 
             def produce():
+                if drain_only:
+                    return None
                 try:
-                    for job in jobs(ee, root, plan, settings, reserved):
+                    for job in jobs(
+                        ee, root, plan,
+                        max_bytes=settings["max_export_gib"] * 1024**3, reserved=reserved,
+                    ):
                         while not stop.is_set():
                             try:
                                 inbox.put(job, timeout=0.2)
@@ -210,8 +215,11 @@ def prepare(root, *, token=None, retry_failed=False):
                         remote = transport.status(record["task_id"])
                         phase = remote["state"]
                         if phase in ("UNKNOWN", "UNSUBMITTED"):
-                            # Recover the same request identity after ambiguous submission.
-                            transport.submit(job, record["task_id"])
+                            # A request UUID may have been saved before the actual task ID.
+                            actual = transport.reconcile(jid)
+                            if actual is None:
+                                actual = transport.submit(job, record["task_id"])
+                            state.update(jid, task_id=actual)
                         elif phase in ("FAILED", "CANCELLED"):
                             state.update(jid, status="failed", error=str(remote))
                             raise RuntimeError(f"GEE export {jid}: {remote}")
@@ -300,6 +308,8 @@ def prepare(root, *, token=None, retry_failed=False):
             publish_ready(root, plan, known_ready)
             # Each block was checked at commit. Full rereads are an explicit audit command.
             report = status(root)
+            if drain_only:
+                return dict(report, drained=True)
             if report["ready_dates"] != report["planned_dates"]:
                 raise RuntimeError(f"Incomplete regional inputs: {report}")
             atomic_json(root / "ready.json", report)

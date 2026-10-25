@@ -17,6 +17,9 @@
   "stride": 16,
   "min_active_slots": 2,
   "min_input_fraction": 0.5,
+  "pixels": {
+    "workers": 4, "max_request_mib": 32, "min_free_gib": 2, "max_attempts": 3
+  },
   "drive": {
     "max_exports": 2,
     "download_workers": 2,

@@ -7,7 +7,9 @@ from pathlib import Path
 
 
 def prepare_main():
-    from hydrostate.data.regional.pipeline import prepare, status
+    from hydrostate.data.regional.pipeline import prepare as prepare_drive
+    from hydrostate.data.regional.pipeline import status
+    from hydrostate.data.regional.pixels import prepare as prepare_pixels
     from hydrostate.data.regional.plan import initialize
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -16,6 +18,8 @@ def prepare_main():
     parser.add_argument("--config", type=Path)
     parser.add_argument("--drive-token", type=Path)
     parser.add_argument("--retry-failed", action="store_true")
+    parser.add_argument("--backend", choices=("pixels", "drive"), default="pixels")
+    parser.add_argument("--drain", action="store_true", help="Finish existing Drive exports only")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.command == "plan":
@@ -31,9 +35,20 @@ def prepare_main():
     elif args.command == "prepare":
         if args.config:
             initialize(args.root, json.loads(args.config.read_text()))
-        result = prepare(args.root, token=args.drive_token, retry_failed=args.retry_failed)
+        if args.backend == "pixels":
+            if args.drain or args.retry_failed or args.drive_token:
+                parser.error("--drain/--retry-failed/--drive-token require --backend drive")
+            result = prepare_pixels(args.root)
+        else:
+            result = prepare_drive(
+                args.root, token=args.drive_token, retry_failed=args.retry_failed,
+                drain_only=args.drain,
+            )
     else:
         result = status(args.root, audit=args.command == "audit")
+        progress = args.root / "pixels_progress.json"
+        if progress.exists():
+            result["pixels_progress"] = json.loads(progress.read_text())
     print(json.dumps(result, indent=2))
 
 

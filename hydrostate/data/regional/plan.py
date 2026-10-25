@@ -86,16 +86,19 @@ def product(plan, group, slot, block, orbit=None):
 
 
 def initialize(root, config, *, ee=None):
-    """Bind immutable pixel semantics; Drive runtime limits can change on resume."""
+    """Bind pixel semantics independently of the selected transport/runtime limits."""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     config = dict(config)
     runtime = config.pop("drive")
+    pixels = config.pop("pixels", None)
     if (root / "plan.json").exists():
         existing = load_plan(root)
         if existing["config"] != config:
             raise ValueError("Existing regional configuration differs; choose a new root")
         atomic_json(root / "drive.json", runtime)
+        if pixels is not None:
+            atomic_json(root / "pixels.json", pixels)
         return existing
     required = {
         "name",
@@ -206,5 +209,8 @@ def initialize(root, config, *, ee=None):
         dict(type="Feature", geometry=mapping(geographic), properties=dict(name=config["name"])),
     )
     atomic_json(root / "drive.json", runtime)
+    if pixels is not None:
+        atomic_json(root / "pixels.json", pixels)
     atomic_json(root / "plan.json", plan)
-    return plan
+    # Match the canonical JSON types used by every resumed run and frozen target.
+    return load_plan(root)

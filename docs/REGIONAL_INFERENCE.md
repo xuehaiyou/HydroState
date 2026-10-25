@@ -1,6 +1,7 @@
 # 区域输入准备与当前模型推理
 
-正式入口是 `tools/prepare_region.py` 和 `tools/predict_region.py`，使用 Drive 批量导出。
+正式入口是 `tools/prepare_region.py` 和 `tools/predict_region.py`。输入默认通过
+`computePixels` 直接获取，`--backend drive` 显式选择 Drive 批量导出。
 业务代码保留在 `hydrostate/data/regional/`，不归入 `legacy`。此流程只采集输入，
 不下载产品标签，也不启动或改变训练任务。
 
@@ -13,9 +14,12 @@
 
 GEE 完成逐景 QA、Landsat L1 TOA 转换、同 UTC 日期去重合成、有效日期等权均值，
 以及有效日期数、平均/最早/最晚日期偏移。S1 在线性功率域平均后转回 dB。
-每个空间块、每个发布分辨率组，把最多五个尚未缓存的槽打包成一次 Drive 导出。
-数据与观测支持一起导出，不以零值判断缺测；确认无影像或全部无效可以是成功的空结果，
-网络失败和不完整 GeoTIFF 不能发布为空样本。
+每个空间块、每个发布分辨率组，把尚未缓存的槽按字节预算打包成请求。
+直接像素通道默认每请求不超过 32 MiB：完整 9.6 km 块的 10 m 组单槽获取，
+较粗分辨率组可合并多槽。Drive 通道每任务最多五槽，使用自己的导出容量预算。
+两条通道共用同一个合成表达式、产品身份和入库逻辑。
+数据与观测支持一起返回，不以零值判断缺测；目录查询成功且确认无源景的请求直接在
+本地生成全缺测产品。有源景但 QA 后全部无效仍需实际计算，网络失败不能发布为空样本。
 
 HPC/本地负责元数据规划、任务监控、文件校验、训练一致的归一化和 Zarr 入库。
 S2 的 10/20/60 m、Landsat 的 15/30 m 和 S1 的 10 m 组分别保存；这是产品发布
@@ -27,8 +31,8 @@ S2 的 10/20/60 m、Landsat 的 15/30 m 和 S1 的 10 m 组分别保存；这是
 
 ## 执行
 
-使用项目 Python 3.12 环境，安装现有 `geo`、`gee` 依赖，提供有 GEE 和 Drive 权限的
-用户凭据。默认使用 Earth Engine 持久凭据，也可用 `--drive-token /path/to/token.json`
+使用项目 Python 3.12 环境，安装现有 `geo`、`gee` 依赖，使用 Earth Engine 持久凭据。
+只有 Drive 通道需要额外的 Drive 权限；可用 `--backend drive --drive-token /path/to/token.json`
 指定 Drive 授权。凭据文件不能写入仓库。
 
 ```bash
@@ -36,7 +40,7 @@ export HYDROSTATE_REGION_ROOT=/path/to/inference/poyang_5x8_pilot
 
 python tools/prepare_region.py plan \
   --config configs/inference/poyang_pilot.json --root "$HYDROSTATE_REGION_ROOT"
-python tools/prepare_region.py prepare --root "$HYDROSTATE_REGION_ROOT"
+python tools/prepare_region.py prepare --backend pixels --root "$HYDROSTATE_REGION_ROOT"
 python tools/prepare_region.py status --root "$HYDROSTATE_REGION_ROOT"
 python tools/prepare_region.py audit --root "$HYDROSTATE_REGION_ROOT"
 
@@ -69,18 +73,34 @@ bash scripts/run_region_download_io.sh --root "$HYDROSTATE_REGION_ROOT"
 ```
 
 代码同步仍走 Git；不要覆盖正在运行的冻结发布。采集使用 CPU，模型推理默认单 GPU。
-本次试采不意味着已经启动全域采集。
+运行是否启动、已完成多少日期须查看对应运行回执、进程和日志。
+
+从正在运行的当前五槽 Drive 采集切换时，先停止其本地调度进程，再完成已提交任务：
+
+```bash
+python tools/prepare_region.py prepare --backend drive --drain --root "$HYDROSTATE_REGION_ROOT"
+python tools/prepare_region.py plan --config configs/inference/poyang.json \
+  --root "$HYDROSTATE_REGION_ROOT"
+bash scripts/run_region_download_io.sh --backend pixels --root "$HYDROSTATE_REGION_ROOT"
+```
+
+`--drain` 只处理已经记录的 Drive 任务，不生成新区域请求。直接通道在持有同一准备锁后
+检查 Drive 已清空，未完成时拒绝启动。相同科学配置重新 `plan` 只更新运行设置，
+不改写 `plan.json` 或已有产品，切换无需重新下载成功结果。
 
 ## 文件组织与断点
 
 ```text
 region_root/
   plan.json, aoi.geojson       不可变输入定义、WGS84 AOI、网格、归一化和目标周期
-  drive.json                  可调整的运行并发与容量预算
+  drive.json, pixels.json      各传输通道可调整的运行并发与容量预算
   windows.parquet             一次生成的模型窗口索引
   catalog/                    按传感器及月份缓存的影像元数据
   targets/                    每个日期的窗口轨道选择和所需共享产品清单
   exports.sqlite              Drive 任务身份、文件校验信息与恢复状态
+  pixels_progress.json         直接通道本次运行计数、有效像素量和最近状态
+  pixels_failure.json          最近失败请求及原因（历史证据，不代表当前仍失败）
+  logs/pixels_receipts.jsonl   直接请求入库回执，包含耗时、产品身份和空源标记
   inputs/xx/<identity>.zarr/   一个时间槽×空间块×波段组×轨道的共享缓存
     values, valid, quality
     _SUCCESS.json             校验、归一化和全部数组写入完成后发布
@@ -92,13 +112,18 @@ region_root/
 共享产品采用独立 Zarr，避免多个线程竞争同一个全区域数组的元数据。
 每个模型样本仅保存窗口和日期索引，不复制五槽数据。缓存与旧四槽目录严格分开。
 
-原命令重跑会接回已有远端任务、复用成功产品，已完成日期跳过规划。
-明确失败的远端任务保留错误；排除原因后通过 `--retry-failed` 重试。
-修改 Drive 并发或容量后，重新执行带相同科学配置的 `plan` 更新运行设置；
+直接通道重跑以原子成功标记恢复，只请求缺失产品；不会重写已完成数组。
+Drive 重跑会接回已有远端任务。已完成日期均跳过规划。
+直接请求仅对暂时性服务/连接错误有限重试（默认最多 3 次）；永久错误和无效数组直接失败。
+Drive 明确失败的远端任务保留错误，排除原因后通过 `--backend drive --retry-failed` 重试。
+修改任一通道的并发或容量后，重新执行带相同科学配置的 `plan` 更新运行设置；
 更改 AOI、日期范围、块大小或其他输入定义须使用新根目录。当前尚不支持原地扩展计划日期。
 
-队列默认最多 2 个在途逻辑导出、2 个下载入库工作线程，加 1 个有界规划线程；
-不为每个任务重新创建线程池。规划和下载不阻塞主线程的任务监控。
+直接通道默认 4 个获取/入库线程，加 1 个有界规划线程，使用同一线程池。
+每请求最多 32 MiB、2 CPU、0 GPU；不为每个模型窗口或请求重新建池。
+若单槽超出配置预算，明确报错，使用 Drive 或新建较小空间块的计划，不静默更改数据定义。
+Drive 默认最多 2 个在途逻辑导出、2 个下载入库线程，加 1 个有界规划线程。
+两条通道都检查 scratch 余量，并保留默认全域 20 GiB 预留。
 只有完整入库后才删除本流程记录的 Drive 导出文件及对应 staging 文件，
 不清空用户回收站。容量不足会在 `capacity.json` 指明 Google Drive、HPC scratch
 或在途预算哪一项不足，保留任务状态。
@@ -121,4 +146,6 @@ checkpoint/统计量哈希和模型配置。可用 `xarray.open_zarr(path, mask_
 获得独立验证。当前没有自动关联区域与训练样本的时空重叠标记，地图不能直接用于
 声称独立空间泛化；独立验证需另行核查训练重叠。
 
-验收记录见 [2026-10-25 区域端到端验证](validation/REGIONAL_20261025.md)。
+验收记录见 [2026-10-25 区域端到端验证](validation/REGIONAL_20261025.md)及
+[直接像素与 Drive 对照](validation/REGIONAL_PIXELS_BENCHMARK_20261025.md)。
+当前入口的实现与试采见 [直接通道切换验证](validation/REGIONAL_PIXELS_SWITCH_20261025.md)。

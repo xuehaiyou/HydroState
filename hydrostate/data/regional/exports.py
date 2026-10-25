@@ -1,4 +1,4 @@
-"""Metadata-only planning and shared GEE composite expressions for Drive exports."""
+"""Metadata-only native request planning and shared GEE composite expressions."""
 
 import json
 from datetime import date
@@ -53,7 +53,7 @@ def catalog(ee, root, plan, sensor, start, end):
     ]
 
 
-def jobs(ee, root, plan, settings, reserved=()):
+def jobs(ee, root, plan, *, max_bytes, reserved=()):
     """Yield bounded jobs lazily; each reusable product is scheduled only once."""
     root = Path(root)
     folder = root / "targets"
@@ -102,10 +102,10 @@ def jobs(ee, root, plan, settings, reserved=()):
             grid = block_grid(plan, block, spec.resolution)
             names = [*spec.bands, *QUALITY]
             bytes_per_slot = grid["height"] * grid["width"] * len(names) * 4
-            capacity = min(5, int(settings["max_export_gib"] * 1024**3 // bytes_per_slot))
+            capacity = min(5, int(max_bytes // bytes_per_slot))
             if capacity < 1:
                 raise ValueError(
-                    "Block exceeds export budget; initialize with a smaller block_size"
+                    "One native slot exceeds the request budget; use Drive or a smaller block_size"
                 )
             missing = [p for p in products if p["id"] not in seen and not ready(root, p)]
             tr = grid["transform"]
@@ -155,18 +155,24 @@ def jobs(ee, root, plan, settings, reserved=()):
                 yield job
 
 
+def composite_image(ee, job):
+    """Identical QA, daily weighting and temporal support for both transports."""
+    spec = INPUT_GROUPS[job["group"]]
+    return ee.Image.cat(
+        [
+            sensor_composite(ee, spec.sensor, ids, item["slot"][0], spec.bands).rename(
+                [f"t{index}_{b}" for b in (*spec.bands, *QUALITY)]
+            )
+            for index, (item, ids) in enumerate(zip(job["products"], job["scenes"]))
+        ]
+    )
+
+
 class CompositeDriveTransport(DriveTransport):
     """Reuse verified downloads/cleanup; only the exported expression is different."""
 
     def submit(self, job, task_id):
         ee, spec, grid = self.ee, INPUT_GROUPS[job["group"]], job["grid"]
-        images = []
-        for index, (item, ids) in enumerate(zip(job["products"], job["scenes"])):
-            images.append(
-                sensor_composite(ee, spec.sensor, ids, item["slot"][0], spec.bands).rename(
-                    [f"t{index}_{b}" for b in (*spec.bands, *QUALITY)]
-                )
-            )
         tr = grid["transform"]
         region = ee.Geometry.Rectangle(
             [
@@ -179,7 +185,7 @@ class CompositeDriveTransport(DriveTransport):
             False,
         )
         task = ee.batch.Export.image.toDrive(
-            image=ee.Image.cat(images),
+            image=composite_image(ee, job),
             description=self.prefix(job["id"]),
             folder=self.folder_name,
             fileNamePrefix=self.prefix(job["id"]),

@@ -6,12 +6,12 @@ import time
 LOG = logging.getLogger(__name__)
 
 
-def retry(function, attempts=5):
+def retry(function, attempts=5, *, retry_if=None):
     for attempt in range(attempts):
         try:
             return function()
-        except Exception:
-            if attempt == attempts - 1:
+        except Exception as error:
+            if attempt == attempts - 1 or (retry_if is not None and not retry_if(error)):
                 raise
             LOG.warning("GEE request failed; retry %d/%d", attempt + 1, attempts)
             time.sleep(min(2**attempt, 16))

@@ -18,7 +18,9 @@ from hydrostate.storage.quality_cache import QualityCache
 from hydrostate.storage.scene_cache import SceneCache
 
 
-def compute_pixels(ee, image, names, crs, transform, width, height):
+def compute_pixels(
+    ee, image, names, crs, transform, width, height, *, attempts=5, retry_if=None
+):
     """Return named, finite bands on exactly the requested pixel grid."""
     raw = retry(
         lambda: ee.data.computePixels(
@@ -37,7 +39,9 @@ def compute_pixels(ee, image, names, crs, transform, width, height):
                     ),
                 ),
             )
-        )
+        ),
+        attempts=attempts,
+        retry_if=retry_if,
     )
     if raw.shape != (height, width) or list(raw.dtype.names or ()) != list(names):
         raise ValueError("Unexpected computePixels shape/band order")

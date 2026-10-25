@@ -100,7 +100,7 @@ def test_year_boundary_and_orbit_identity(tmp_path):
     plan = initialize(tmp_path, cfg)
     assert [p["start"] for p in plan["periods"]] == ["2020-12-26", "2021-01-01"]
     assert plan["periods"][0]["end"] == "2021-01-01"
-    assert plan["periods"][0]["slots"][2] == ("2020-12-26", "2021-01-03")
+    assert plan["periods"][0]["slots"][2] == ["2020-12-26", "2021-01-03"]
     props = [
         dict(relativeOrbitNumber_start=25, orbitProperties_pass="ASCENDING"),
         dict(relativeOrbitNumber_start=25, orbitProperties_pass="DESCENDING"),
@@ -310,18 +310,31 @@ def test_adjacent_targets_share_slots_and_keep_s1_orbit(monkeypatch, tmp_path):
         ]
 
     monkeypatch.setattr(exports, "catalog", catalog)
-    planned = list(exports.jobs(None, tmp_path, plan, cfg["drive"]))
+    planned = list(exports.jobs(
+        None, tmp_path, plan, max_bytes=cfg["drive"]["max_export_gib"] * 1024**3
+    ))
     products = [p for j in planned for p in j["products"]]
     assert len(products) == 6 * len(INPUT_GROUPS)
     assert len({p["id"] for p in products}) == len(products)
     assert all(p["orbit"] == [25, "ASCENDING"] for p in products if p["group"] == "s1_10m")
+    budget = 700_000
+    split = list(exports.jobs(None, tmp_path, plan, max_bytes=budget))
+    assert all(j["raw_bytes"] <= budget for j in split)
+    assert {p["id"] for j in split for p in j["products"]} == {p["id"] for p in products}
+    with pytest.raises(ValueError, match="One native slot exceeds"):
+        list(exports.jobs(None, tmp_path, plan, max_bytes=1))
 
 
-def test_queue_recovers_submitted_task_without_duplicate(monkeypatch, tmp_path):
+@pytest.mark.parametrize("drain", [False, True])
+@pytest.mark.parametrize("unknown_id", [False, True])
+def test_queue_recovers_submitted_task_without_duplicate(monkeypatch, tmp_path, drain, unknown_id):
     from hydrostate.data.gee.state import ExportState
     from hydrostate.data.regional import pipeline
 
-    plan = initialize(tmp_path, config())
+    region_config = config()
+    if drain:
+        region_config["end"] = "2020-07-20"
+    plan = initialize(tmp_path, region_config)
     cfg = config()["drive"]
     cfg["poll_seconds"] = 0.001
     atomic_json(tmp_path / "drive.json", cfg)
@@ -346,8 +359,14 @@ def test_queue_recovers_submitted_task_without_duplicate(monkeypatch, tmp_path):
             pass
 
         def status(self, task):
-            assert task == "original_task"
+            if unknown_id and task == "original_task":
+                return dict(state="UNKNOWN")
+            assert task == ("resolved_task" if unknown_id else "original_task")
             return dict(state="COMPLETED")
+
+        def reconcile(self, job):
+            assert unknown_id and job == "existing"
+            return "resolved_task"
 
         def inventory(self, job):
             return [dict(id="file", size=100)]
@@ -366,9 +385,15 @@ def test_queue_recovers_submitted_task_without_duplicate(monkeypatch, tmp_path):
 
     monkeypatch.setattr(pipeline, "initialize", lambda *a: None)
     monkeypatch.setattr(pipeline, "CompositeDriveTransport", Transport)
-    monkeypatch.setattr(pipeline, "jobs", lambda *a: iter(()))
+    def jobs(*a, **kw):
+        assert not drain, "Draining must not plan new exports"
+        return iter(())
+
+    monkeypatch.setattr(pipeline, "jobs", jobs)
     monkeypatch.setattr(pipeline, "receive", receive)
-    assert pipeline.prepare(tmp_path)["ready_dates"] == 1
+    report = pipeline.prepare(tmp_path, drain_only=drain)
+    assert report["ready_dates"] == 1
+    assert report["planned_dates"] == (2 if drain else 1)
     assert calls == ["existing"]
     state = ExportState(tmp_path / "exports.sqlite")
     assert state.get("existing")["status"] == "cleaned"
