@@ -85,7 +85,7 @@ class MTLoRAExitBlock(nn.Module):
 
 @MODELS.register_module()
 class MTLoRAOlmoEarthEncoder(MultiLevelTemporalOlmoEarthEncoder):
-    """Shared LoRA in all blocks; task-specific exits at configurable depths."""
+    """Depth exits with LoRA adaptation or a full-backbone training control."""
 
     def __init__(
         self,
@@ -96,37 +96,55 @@ class MTLoRAOlmoEarthEncoder(MultiLevelTemporalOlmoEarthEncoder):
         train_patch_embedding=True,
         train_layer_norm=True,
         gradient_checkpointing=False,
+        finetuning="lora",
         **kwargs,
     ):
+        if finetuning not in ("lora", "full"):
+            raise ValueError("finetuning must be 'lora' or 'full'")
+        if finetuning == "full" and (shared_rank != 0 or private_rank != 0):
+            raise ValueError("Full fine-tuning requires shared_rank=private_rank=0")
         super().__init__(gradient_checkpointing=False, **kwargs)
         self.tasks = tuple(resolve_tasks(tasks))
+        self.finetuning = finetuning
         core = self.backbone.model
-        core.requires_grad_(False)
-        if train_patch_embedding:
-            # The pretrained encoder also contains embeddings for modalities
-            # this retrieval pipeline never supplies. Keep those frozen.
-            for name in MODALITIES:
-                core.patch_embeddings.per_modality_embeddings[name].requires_grad_(True)
-        if train_layer_norm:
-            for module in core.modules():
-                if isinstance(module, nn.LayerNorm):
-                    module.requires_grad_(True)
+        if finetuning == "lora":
+            core.requires_grad_(False)
+            if train_patch_embedding:
+                for name in MODALITIES:
+                    core.patch_embeddings.per_modality_embeddings[name].requires_grad_(True)
+            if train_layer_norm:
+                for module in core.modules():
+                    if isinstance(module, nn.LayerNorm):
+                        module.requires_grad_(True)
+        else:
+            # Preserve upstream trainability, including fixed encodings. The
+            # unused modalities and pretraining projector have no retrieval loss.
+            for name, embedding in core.patch_embeddings.per_modality_embeddings.items():
+                if name not in MODALITIES or not train_patch_embedding:
+                    embedding.requires_grad_(False)
+            if not train_layer_norm:
+                for module in core.modules():
+                    if isinstance(module, nn.LayerNorm):
+                        module.requires_grad_(False)
         # Never unfreeze the unused pretraining projection's normalization layers.
         core.project_and_aggregate.requires_grad_(False)
         for index, block in enumerate(core.blocks):
-            for name in ("q", "k", "v"):
-                setattr(
-                    block.attn,
-                    name,
-                    MTLoRALinear(getattr(block.attn, name), shared_rank, scale=lora_scale),
-                )
-            if index in self.out_indices:
-                block = MTLoRAExitBlock(block, self.tasks, shared_rank, private_rank, lora_scale)
-                core.blocks[index] = block
-            else:
-                block.attn.proj = MTLoRALinear(block.attn.proj, shared_rank, scale=lora_scale)
-                block.mlp.fc1 = MTLoRALinear(block.mlp.fc1, shared_rank, scale=lora_scale)
-                block.mlp.fc2 = MTLoRALinear(block.mlp.fc2, shared_rank, scale=lora_scale)
+            if finetuning == "lora":
+                for name in ("q", "k", "v"):
+                    setattr(
+                        block.attn,
+                        name,
+                        MTLoRALinear(getattr(block.attn, name), shared_rank, scale=lora_scale),
+                    )
+                if index in self.out_indices:
+                    block = MTLoRAExitBlock(
+                        block, self.tasks, shared_rank, private_rank, lora_scale
+                    )
+                    core.blocks[index] = block
+                else:
+                    block.attn.proj = MTLoRALinear(block.attn.proj, shared_rank, scale=lora_scale)
+                    block.mlp.fc1 = MTLoRALinear(block.mlp.fc1, shared_rank, scale=lora_scale)
+                    block.mlp.fc2 = MTLoRALinear(block.mlp.fc2, shared_rank, scale=lora_scale)
             if gradient_checkpointing:
                 block.forward = partial(checkpoint, block.forward, use_reentrant=False)
         # Backbone stochastic masking/dropout stay deterministic during adaptation.
@@ -143,6 +161,9 @@ class MTLoRAOlmoEarthEncoder(MultiLevelTemporalOlmoEarthEncoder):
         return self
 
     def _extract_levels(self, sample, out_indices):
+        if self.finetuning == "full":
+            levels = super()._extract_levels(sample, out_indices)
+            return {task: levels for task in self.tasks}
         return multilevel_features(
             self.backbone.model,
             sample,

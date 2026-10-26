@@ -6,6 +6,7 @@
 | `hydrostate_retrieval.py` | Shared training config; imports the canonical data contract |
 | `hydrostate_mtlora.py` | Shared TA-LoRA plus task-specific exits |
 | `hydrostate_mtlora_shared.py` | Shared-LoRA control, `private_rank=0` |
+| `hydrostate_full.py` | Current seven-output full fine-tuning; historical multilevel LLRD recipe |
 | `hydrostate_mtlora_frozen_embed.py` | Frozen patch-embedding ablation |
 | `_base_/runtime.py` | Common MMEngine runtime |
 | `experiments/legacy/` | Historical architecture, data and host presets |

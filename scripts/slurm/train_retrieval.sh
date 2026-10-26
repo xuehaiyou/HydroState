@@ -1,6 +1,6 @@
 #!/bin/bash
 # Submit only after collection audit and training-only statistics have completed.
-# Pass mtlora or lora; keep both runs on the same data/statistics/source release.
+# Pass mtlora, lora or full; keep the data/statistics fixed across controls.
 #SBATCH --job-name=hs_mtlora
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -18,8 +18,10 @@ set -euo pipefail
 case "${1:-}" in
     mtlora) export HYDROSTATE_CONFIG=configs/hydrostate_mtlora.py ;;
     lora) export HYDROSTATE_CONFIG=configs/hydrostate_mtlora_shared.py ;;
-    *) echo 'Expected architecture: mtlora or lora' >&2; exit 2 ;;
+    full) export HYDROSTATE_CONFIG=configs/hydrostate_full.py ;;
+    *) echo 'Expected architecture: mtlora, lora or full' >&2; exit 2 ;;
 esac
+shift
 : "${HYDROSTATE_CODE_ROOT:?Set an immutable source release}"
 : "${HYDROSTATE_CODE_COMMIT:?Set the release commit}"
 : "${HYDROSTATE_SOURCE_HASHES:?Set release source checksums}"
@@ -52,4 +54,4 @@ printf '%s\n' "$HYDROSTATE_CODE_COMMIT" > "$HYDROSTATE_WORK_DIR/provenance/code_
 cp "$HYDROSTATE_DATA_ROOT/_COLLECTION_SUCCESS.json" "$HYDROSTATE_TARGET_STATS" \
     "$HYDROSTATE_WORK_DIR/provenance/"
 exec bash scripts/train.sh \
-    train_dataloader.num_workers=4 val_dataloader.num_workers=4 test_dataloader.num_workers=4
+    train_dataloader.num_workers=4 val_dataloader.num_workers=4 test_dataloader.num_workers=4 "$@"

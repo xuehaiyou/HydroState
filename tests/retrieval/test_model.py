@@ -56,11 +56,13 @@ def batch():
 
 
 @pytest.mark.parametrize(
-    "private_rank,checkpoint,extended",
-    [(0, False, False), (2, False, False), (0, True, False), (2, True, False), (2, True, True)],
+    "private_rank,checkpoint,extended,finetuning",
+    [(0, False, False, "lora"), (2, False, False, "lora"),
+     (0, True, False, "lora"), (2, True, False, "lora"), (2, True, True, "lora"),
+     (0, False, False, "full"), (0, True, False, "full")],
 )
 def test_current_model_forward_backward_and_prediction(
-    monkeypatch, tmp_path, private_rank, checkpoint, extended
+    monkeypatch, tmp_path, private_rank, checkpoint, extended, finetuning
 ):
     from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.nn.flexi_vit import EncoderConfig
     from rslearn.models.olmoearth_pretrain import model as wrapper
@@ -105,8 +107,9 @@ def test_current_model_forward_backward_and_prediction(
             model_path=str(tmp_path),
             embedding_channels=32,
             out_indices=[1, 3, 5],
-            shared_rank=2,
+            shared_rank=0 if finetuning == "full" else 2,
             private_rank=private_rank,
+            finetuning=finetuning,
             gradient_checkpointing=checkpoint,
         )
         cfg.model.decoder.update(in_channels=32, channels=8)

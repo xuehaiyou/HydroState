@@ -14,6 +14,7 @@ from test_shared_private_model import samples
 from hydrostate.cli import configure_data_contract
 from hydrostate.models.mtlora import AlignedLandCoupling, MTLoRALinear
 from hydrostate.models.multilevel_temporal_model import MultiLevelTemporalOlmoEarthEncoder
+from hydrostate.models.shared_private_lora import LowRankUpdate
 from hydrostate.registry import MODELS
 from hydrostate.tasks import LEGACY_TASKS, task_config
 
@@ -226,3 +227,78 @@ def test_config_selects_current_five_slot_product_contract():
         Config.fromfile("configs/experiments/legacy/hydrostate_multilevel.py").model.type
         == "MultiLevelHydroStateModel"
     )
+
+
+@pytest.mark.parametrize("checkpoint", [False, True])
+def test_full_finetuning_preserves_features_and_updates_backbone(tmp_path, checkpoint):
+    cfg = config(tmp_path, checkpoint)
+    cfg.model.encoder.update(private_rank=0)
+    shared = MODELS.build(cfg.model).eval()
+    cfg.model.encoder.update(finetuning="full", shared_rank=0, private_rank=0)
+    full = MODELS.build(cfg.model).train()
+    core = full.encoder.backbone.model
+    assert not full.encoder.backbone.training
+    assert not any(isinstance(m, (MTLoRALinear, LowRankUpdate)) for m in full.modules())
+    assert not any(p.requires_grad for p in core.project_and_aggregate.parameters())
+    assert core.blocks[0].attn.q.weight.requires_grad
+    assert core.blocks[-1].mlp.fc2.weight.requires_grad
+    x = raw_inputs(full.tasks)
+    with torch.no_grad():
+        reference, actual = shared.encoder(x), full.encoder(x)
+    for task in full.tasks:
+        for a, b in zip(reference[task], actual[task]):
+            for key in ("features", "valid", "time"):
+                torch.testing.assert_close(a[key], b[key])
+
+    options = dict(Config.fromfile("configs/hydrostate_full.py").optim_wrapper)
+    options.update(type="OptimWrapper", accumulative_counts=1)
+    options.pop("dtype")
+    options["paramwise_cfg"] = dict(options["paramwise_cfg"], num_layers=6)
+    optimizer = build_optim_wrapper(full, options)
+    rates = {id(p): group["lr"] for group in optimizer.optimizer.param_groups
+             for p in group["params"]}
+    assert set(rates) == {id(p) for p in full.parameters() if p.requires_grad}
+    assert rates[id(core.blocks[0].attn.q.weight)] == pytest.approx(1e-4 * .65**6)
+    assert rates[id(core.blocks[-1].mlp.fc2.weight)] == pytest.approx(6.5e-5)
+    assert rates[id(full.decoders["water"].compress.weight)] == 1e-4
+    before = core.blocks[-1].mlp.fc2.weight.detach().clone()
+    losses = full(x, samples(), mode="loss")
+    total = sum(value for key, value in losses.items() if key.startswith("loss_"))
+    optimizer.backward(total)
+    assert core.blocks[0].attn.q.weight.grad.abs().sum() > 0
+    assert all(torch.isfinite(p.grad).all() for p in full.parameters() if p.grad is not None)
+    optimizer.step()
+    assert not torch.equal(before, core.blocks[-1].mlp.fc2.weight)
+    restored = MODELS.build(cfg.model)
+    restored.load_state_dict(full.state_dict(), strict=True)
+
+
+def test_full_configuration_reuses_current_contract_and_multilevel_optimizer():
+    full = Config.fromfile("configs/hydrostate_full.py")
+    shared = Config.fromfile("configs/hydrostate_mtlora_shared.py")
+    legacy = Config.fromfile(
+        "configs/experiments/legacy/hydrostate_ecosystem_multilevel_temporal_hpc.py"
+    )
+    for cfg in (full, shared):
+        configure_data_contract(cfg)
+    for key in ("tasks", "train_dataloader", "val_dataloader", "test_dataloader",
+                "val_evaluator", "test_evaluator", "train_cfg", "randomness"):
+        assert full[key] == shared[key]
+    for key in full.model:
+        if key != "encoder":
+            assert full.model[key] == shared.model[key]
+    assert full.model.encoder.shared_rank == full.model.encoder.private_rank == 0
+    assert full.model.encoder.finetuning == "full"
+    assert full.optim_wrapper.paramwise_cfg == legacy.optim_wrapper.paramwise_cfg
+    for key in ("lr", "weight_decay"):
+        assert full.optim_wrapper.optimizer[key] == legacy.optim_wrapper.optimizer[key]
+    assert full.optim_wrapper.clip_grad == legacy.optim_wrapper.clip_grad
+    assert full.optim_wrapper.accumulative_counts == legacy.optim_wrapper.accumulative_counts == 8
+    assert full.param_scheduler == legacy.param_scheduler
+
+
+def test_full_mode_rejects_low_rank_adapters_before_loading_pretrained(tmp_path):
+    cfg = config(tmp_path)
+    cfg.model.encoder.finetuning = "full"
+    with pytest.raises(ValueError, match="shared_rank=private_rank=0"):
+        MODELS.build(cfg.model)

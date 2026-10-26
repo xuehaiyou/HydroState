@@ -150,6 +150,7 @@ SM 同时检查 SMAP 在 GEE 中发布的网格（产品标称 9 km）和以该�
 | `validation.py` / `audit.py` / `datasets/retrieval_dataset.py` | 数组检查、发布审计与训练读取 |
 | `models/composite_quality.py` | 观测次数/时间摘要输入模型 |
 | `configs/hydrostate_mtlora.py` / `hydrostate_mtlora_shared.py` | MTLoRA / shared-LoRA 对照 |
+| `configs/hydrostate_full.py` | 相同七输出结构的全量微调，沿用历史多层时序优化器配方 |
 
 ```bash
 # 预览不会连接 GEE 或创建数据目录。

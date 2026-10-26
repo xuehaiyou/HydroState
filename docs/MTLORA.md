@@ -1,8 +1,9 @@
-# 当前 MTLoRA / shared-LoRA 模型
+# 当前 MTLoRA / shared-LoRA 模型及全量微调对照
 
 当前数据与监督以 [流程规范](RETRIEVAL_PIPELINE.md) 为准。
 配置选择：`configs/hydrostate_mtlora.py` 与 `configs/hydrostate_mtlora_shared.py`；
 两者继承 `hydrostate_retrieval.py`，共用当前七任务、五时间槽和训练统计。
+`configs/hydrostate_full.py` 提供相同任务结构的全量微调对照。
 
 ## 编码器与分支
 
@@ -42,6 +43,32 @@ shared-LoRA 对照将 `private_rank=0`，保留相同的任务查询、融合、
 
 Backbone 保持 evaluation mode 禁用随机 dropout / band dropping，所选参数仍参与梯度计算。
 启用非重入梯度检查点。`hydrostate_mtlora_frozen_embed.py` 仅用于冻结 patch embedding 消融。
+
+## 全量微调配置
+
+`hydrostate_full.py` 设置 `encoder.finetuning="full"`、两个 rank 均为 0，
+不安装 LoRA 模块；第 4/8/12 层共用主干特征，各任务仍使用当前独立查询、
+三层融合解码器、质量摘要、输出头和七输出监督。全部任务共用一次主干遍历。
+
+主干保留上游原有参数可训练性，更新注意力、MLP、LayerNorm、参与输入的
+patch embedding，以及原本可训练的位置/时间编码和 register 参数。
+原本固定的编码、未用模态 embedding 和预训练 projector 保持冻结。
+与 LoRA 对照一样，骨干保持 evaluation mode，所选参数仍正常反向传播。
+
+优化器参考历史最新多层时序配置
+`configs/experiments/legacy/hydrostate_ecosystem_multilevel_temporal_hpc.py`：
+
+| 设置 | 全量微调 | 当前 LoRA 配置 |
+|---|---|---|
+| AdamW 基础学习率 | 1e-4 | 1e-4 |
+| 分层学习率 | official 配方，衰减率 0.65、12 层 | 无分层衰减 |
+| 权重衰减 | 0.05；损失方差参数不衰减 | 0.01 |
+| 梯度裁剪 | max norm=1.0 | max norm=1.0 |
+| batch / 累积 / epochs | 2 / 8 / 50 | 2 / 8 / 50 |
+| 调度 | 1000 microsteps 预热，相对余弦下限 0.01 | 相同 |
+
+因此它是沿用历史优化器配方的全量基线，不是仅切换参数冻结方式的单因素消融。
+比较时固定数据清单、划分、统计量、监督定义和有效 batch，并注明优化器差异。
 
 输入配置从契约导入 `landsat_l1_toa_native_mean_v2`。有效日期均值与 QA 摘要的定义见流程规范。
 

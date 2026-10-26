@@ -1,5 +1,6 @@
 """Exercise the actual shell launchers with simulated CUDA and training commands."""
 
+import hashlib
 import json
 import os
 import shlex
@@ -62,12 +63,20 @@ def launch(tmp_path):
     manifest, statistics = tmp_path / "samples.parquet", tmp_path / "target_stats.json"
     manifest.write_text("preflight fixture")
     statistics.write_text("preflight fixture")
+    (tmp_path / "_COLLECTION_SUCCESS.json").write_text("preflight fixture")
+    hashes = tmp_path / "source.sha256"
+    hashes.write_text(
+        hashlib.sha256((PROJECT_ROOT / "scripts/train.sh").read_bytes()).hexdigest()
+        + "  scripts/train.sh\n"
+    )
     record = tmp_path / "launch.json"
     # Do not inherit a login shell's experiment settings or explicit GPU count.
     env = {key: value for key, value in os.environ.items() if not key.startswith("HYDROSTATE_")}
     env.update(
         HYDROSTATE_CONDA_BASE=str(conda_base),
         HYDROSTATE_CODE_ROOT=str(PROJECT_ROOT),
+        HYDROSTATE_CODE_COMMIT="0" * 40,
+        HYDROSTATE_SOURCE_HASHES=str(hashes),
         HYDROSTATE_DATA_ROOT=str(tmp_path),
         HYDROSTATE_MODEL_PATH=str(model_path),
         HYDROSTATE_MANIFEST=str(manifest),
@@ -76,7 +85,8 @@ def launch(tmp_path):
         TEST_LAUNCH_RECORD=str(record),
     )
 
-    def run(count, script="12_train_l40s.sh", requested=None, bf16=True, precision="bfloat16"):
+    def run(count, script="12_train_l40s.sh", requested=None, bf16=True, precision="bfloat16",
+            architecture=None):
         environment = dict(env, TEST_VISIBLE_GPUS=str(count), TEST_BF16=str(int(bf16)))
         environment["HYDROSTATE_PRECISION"] = precision
         if requested is not None:
@@ -85,6 +95,7 @@ def launch(tmp_path):
             [
                 "bash", str(PROJECT_ROOT / script if script.startswith("scripts/")
                             else PROJECT_ROOT / "scripts/legacy/slurm" / script),
+                *([architecture] if architecture is not None else []),
                 "resume=True", "work_dir=/tmp/experiment with spaces",
             ],
             env=environment,
@@ -117,7 +128,9 @@ def test_launcher_uses_visible_gpu_count_and_preserves_arguments(launch, script,
         "optim_wrapper.dtype=bfloat16", "resume=True", "work_dir=/tmp/experiment with spaces"
     ]
     assert args[args.index("tools/train.py") + 1] == (
-        "configs/experiments/legacy/hydrostate_l40s.py" if script.startswith("12_") else "configs/experiments/legacy/hydrostate_hpc.py"
+        "configs/experiments/legacy/hydrostate_l40s.py"
+        if script.startswith("12_")
+        else "configs/experiments/legacy/hydrostate_hpc.py"
     )
 
 
@@ -162,3 +175,16 @@ def test_current_launcher_refuses_multiple_visible_gpus(launch):
     result, invocation = launch(2, script="scripts/train.sh")
     assert result.returncode != 0 and invocation is None
     assert "Visible 2 GPUs, explicitly requested 1" in result.stderr
+
+
+@pytest.mark.parametrize("architecture,config", [
+    ("mtlora", "hydrostate_mtlora.py"), ("lora", "hydrostate_mtlora_shared.py"),
+    ("full", "hydrostate_full.py"),
+])
+def test_slurm_architecture_and_resume_overrides_reach_training(launch, architecture, config):
+    result, invocation = launch(
+        1, script="scripts/slurm/train_retrieval.sh", architecture=architecture
+    )
+    assert result.returncode == 0, result.stderr
+    assert invocation["args"][1] == f"configs/{config}"
+    assert invocation["args"][-2:] == ["resume=True", "work_dir=/tmp/experiment with spaces"]

@@ -103,11 +103,14 @@ python tools/data/prepare_training.py prepare   --data-root "$HYDROSTATE_DATA_RO
 ```bash
 CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/hydrostate_mtlora.py
 CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/hydrostate_mtlora_shared.py
+CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/hydrostate_full.py
 CUDA_VISIBLE_DEVICES=0 python tools/test.py configs/hydrostate_mtlora.py CHECKPOINT.pth
 ```
 
-两个训练命令分别运行，并使用不同 `HYDROSTATE_WORK_DIR`。
+三个训练命令分别运行，并使用不同 `HYDROSTATE_WORK_DIR`。
 每个任务只用一张 GPU；当前默认 microbatch=2、累积=8，尚未宣称吞吐最优。
+全量微调复用相同完成数据与训练统计，使用历史多层时序模型的分层学习率配方；
+参数差异见 [模型说明](MTLORA.md#全量微调配置)。
 `tools/predict.py` 使用测试循环，不是当前七输出的区域地图导出器。
 
 ## 4. HPC 资源包装
@@ -115,13 +118,16 @@ CUDA_VISIBLE_DEVICES=0 python tools/test.py configs/hydrostate_mtlora.py CHECKPO
 当前 Slurm 文件只有：
 
 - `scripts/slurm/prepare_retrieval.sh`：6 CPU，执行同一个 Python 准备入口。
-- `scripts/slurm/train_retrieval.sh mtlora|lora`：1 GPU、6 CPU，验证数据后调用 `scripts/train.sh`。
+- `scripts/slurm/train_retrieval.sh mtlora|lora|full`：1 GPU、6 CPU，验证数据后调用 `scripts/train.sh`。
+  架构后的参数作为配置覆盖传入，例如 `full resume=True`；续训使用原工作目录。
 
 冻结发布设置：`HYDROSTATE_CODE_ROOT`、`HYDROSTATE_CODE_COMMIT`、
 `HYDROSTATE_SOURCE_HASHES`；数据与实验设置：`HYDROSTATE_DATA_ROOT`、
 `HYDROSTATE_TARGET_STATS`、`HYDROSTATE_MODEL_PATH`、`HYDROSTATE_RUN_ROOT`、
 `HYDROSTATE_WORK_DIR`。Conda 路径可通过 `HYDROSTATE_CONDA_BASE` 和
 `HYDROSTATE_CONDA_ENV` 指定。分区与数据路径按所在集群选择。
+脚本默认时限为 96 小时；较长实验提交时可用 `sbatch --time=7-00:00:00` 覆盖，
+先核实当前 partition/QoS 允许的上限。
 
 `tools/watch_mtlora_collection.py` 是显式启动的调度器，等待完成标记后提交准备和成对训练，
 保留提交意图以防重复。采样入口不会自动启动它。
