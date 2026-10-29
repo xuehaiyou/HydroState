@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -54,36 +55,60 @@ def select_batch(results):
     usable = [r for r in results if r["state"] == "ok" and r["memory_fraction"] <= 0.85]
     if not usable:
         raise ValueError("No tested batch retains 15% GPU memory headroom")
-    fastest = max(r["windows_per_second"] for r in usable)
-    return min(r["batch_size"] for r in usable if r["windows_per_second"] >= fastest * 0.95)
+    return max(r["batch_size"] for r in usable)
+
+
+def dense_record(record):
+    """Synthetic all-sensor/all-slot support, used only to bound GPU memory."""
+    from hydrostate.data.retrieval.contract import INPUT_GROUPS, SENSORS
+
+    record = deepcopy(record)
+    inputs = record["inputs"]
+    inputs["sensor_valid"].fill_(True)
+    midpoint = inputs["slot_bounds"].double().mean(-1).long()
+    inputs["observation_time"] = midpoint[:, None].expand(-1, len(SENSORS)).clone()
+    for name in (*SENSORS, *INPUT_GROUPS):
+        inputs[name + "_valid"].fill_(True)
+    return record
 
 
 def benchmark(model, records, device, candidates):
     if not str(device).startswith("cuda") or not candidates or min(candidates) < 1:
         raise ValueError("Batch tuning requires CUDA and positive candidates")
-    results = []
-    for size in sorted(set(candidates)):
-        batch = [records[i % len(records)] for i in range(size)]
+    results, pending = [], sorted(set(candidates))
+    dense = dense_record(records[0])
+    while pending:
+        size = pending.pop(0)
+        batches = [records[i:i+size] for i in range(0, len(records), size)]
         gc.collect()
         torch.cuda.empty_cache()
         free, total = torch.cuda.mem_get_info(device)
         external = max(0, total - free - torch.cuda.memory_reserved(device))
         torch.cuda.reset_peak_memory_stats(device)
         try:
-            outputs = predict_records(model, batch, device)
+            # Real pools often miss an entire sensor. Their memory usage does
+            # not bound later windows with all 15 observations present.
+            outputs = predict_records(model, [dense] * size, device)
             for output in outputs:
                 check_fields({t: output[t].numpy() for t in model.tasks})
+            del outputs
+            stress_peak = torch.cuda.max_memory_reserved(device)
+            torch.cuda.empty_cache()
+            predict_records(model, batches[0], device)
             torch.cuda.synchronize(device)
             started = time.monotonic()
-            for _ in range(3):
-                predict_records(model, batch, device)
+            for _ in range(2):
+                for batch in batches:
+                    predict_records(model, batch, device)
             torch.cuda.synchronize(device)
             seconds = time.monotonic() - started
-            peak = torch.cuda.max_memory_reserved(device)
+            peak = max(stress_peak, torch.cuda.max_memory_reserved(device))
             result = dict(
                 batch_size=size,
                 state="ok",
-                windows_per_second=3 * size / seconds,
+                windows_per_second=2 * len(records) / seconds,
+                evaluated_windows=2 * len(records),
+                stress_batch_size=size,
                 peak_reserved_bytes=peak,
                 memory_fraction=(peak + external) / total,
             )
@@ -91,14 +116,26 @@ def benchmark(model, records, device, candidates):
             result = dict(batch_size=size, state="oom")
         results.append(result)
         LOG.info("Batch benchmark: %s", result)
-        if result["state"] == "oom":
-            break
+        unsafe = result["state"] == "oom" or result["memory_fraction"] > 0.85
+        if unsafe:
+            lower = max((r["batch_size"] for r in results
+                         if r["state"] == "ok" and r["memory_fraction"] <= 0.85), default=0)
+            pending = [(lower + size) // 2] if size - lower > 1 else []
+        elif not pending:
+            upper = min((r["batch_size"] for r in results
+                         if r["state"] == "oom" or r["memory_fraction"] > 0.85), default=None)
+            if upper is not None and upper - size > 1:
+                pending = [(size + upper) // 2]
+            elif upper is None and size < 128:
+                pending = [min(128, size * 2)]
     gc.collect()
     torch.cuda.empty_cache()
     return dict(
         selected_batch=select_batch(results),
         candidates=results,
-        scope="Cached inputs, preprocessing, model and CPU transfer; excludes disk/mosaic",
+        scope="Same real input pool for throughput; synthetic dense support for memory",
+        memory_headroom=0.15,
+        search_cap=128,
         gpu=torch.cuda.get_device_name(device),
         torch_version=torch.__version__,
     )

@@ -70,15 +70,21 @@ class AuxiliaryInputFusion(nn.Module):
             for name, spec in inputs.items()
         })
 
-    def forward(self, features, inputs):
+    def forward(self, features, inputs, *, cache=None):
+        """Reuse deterministic auxiliary encodings within one model forward only."""
+        cache = {} if cache is None else cache
         multiple = isinstance(features, (list, tuple))
         levels = features if multiple else [features]
         outputs = []
         for feature in levels:
             if feature.ndim != 4 or feature.shape[1] != self.feature_channels:
                 raise ValueError("Auxiliary fusion feature channels disagree with encoder")
+            size = tuple(feature.shape[-2:])
+            if size not in cache:
+                cache[size] = tuple(branch(inputs[name], inputs[f"{name}_valid"], size)
+                                    for name, branch in self.branches.items())
             output = feature
-            for name, branch in self.branches.items():
-                output = output + branch(inputs[name], inputs[f"{name}_valid"], feature.shape[-2:])
+            for encoded in cache[size]:
+                output = output + encoded
             outputs.append(output)
         return tuple(outputs) if multiple else outputs[0]

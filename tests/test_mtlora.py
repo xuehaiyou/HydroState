@@ -12,7 +12,7 @@ from test_multilevel_temporal_model import moments, raw_inputs
 from test_shared_private_model import samples
 
 from hydrostate.cli import configure_data_contract
-from hydrostate.models.mtlora import AlignedLandCoupling, MTLoRALinear
+from hydrostate.models.mtlora import AlignedLandCoupling, MTLoRAExitBlock, MTLoRALinear
 from hydrostate.models.multilevel_temporal_model import MultiLevelTemporalOlmoEarthEncoder
 from hydrostate.models.shared_private_lora import LowRankUpdate
 from hydrostate.registry import MODELS
@@ -78,6 +78,46 @@ def config(tmp_path, checkpoint=False):
     cfg.model.land_time_policy = "aligned_or_window"
     cfg.model.target_statistics = moments(task_config(LEGACY_TASKS))
     return cfg
+
+
+@pytest.mark.parametrize("private_rank", [0, 2])
+def test_shared_feature_reuse_matches_independent_computation_and_gradients(tmp_path, private_rank):
+    cfg = config(tmp_path)
+    cfg.model.encoder.private_rank = private_rank
+    cfg.model.input_fusion = dict(type="AuxiliaryInputFusion", feature_channels=32, inputs=dict(
+        quality=dict(channels=2, mean=[0, 0], std=[1, 1], temporal="mean")))
+    model = MODELS.build(cfg.model).train()
+    reference = copy.deepcopy(model)
+    # Equal-valued, distinct branch tensors reproduce the original per-task
+    # restoration, preventing identity-based reuse without changing the function.
+    for block in reference.encoder.backbone.model.blocks:
+        if isinstance(block, MTLoRAExitBlock):
+            original = block.forward
+            def separate(*args, _forward=original, **kwargs):
+                shared, *branches = _forward(*args, **kwargs)
+                return (shared, *(value.clone() for value in branches))
+            block.forward = separate
+    original_fusion = reference.input_fusion.forward
+    def uncached(features, inputs, **kwargs):
+        return original_fusion(features, inputs)
+    reference.input_fusion.forward = uncached
+    inputs = raw_inputs(model.tasks)
+    inputs["quality"] = torch.randn(2, 2, 2, 12, 12)
+    inputs["quality_valid"] = torch.rand_like(inputs["quality"]) > 0.3
+    optimized, expected = model(inputs), reference(inputs)
+    for task in model.tasks:
+        torch.testing.assert_close(optimized[task], expected[task], atol=1e-6, rtol=1e-5)
+    sum(v.square().mean() for v in optimized.values()).backward()
+    sum(v.square().mean() for v in expected.values()).backward()
+    for (name, left), (_, right) in zip(model.named_parameters(), reference.named_parameters()):
+        if left.grad is None:
+            assert right.grad is None, name
+        else:
+            torch.testing.assert_close(left.grad, right.grad, atol=2e-6, rtol=2e-5, msg=name)
+    # Cached encodings must not survive into the next forward with changed input.
+    inputs["quality"] += 2
+    for task, value in model(inputs).items():
+        torch.testing.assert_close(value, reference(inputs)[task], atol=1e-6, rtol=1e-5)
 
 
 @pytest.mark.parametrize("checkpoint", [False, True])

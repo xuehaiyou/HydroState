@@ -60,11 +60,11 @@ def test_physical_audit_and_display_mask_are_distinct():
         check_fields(fields)
 
 
-def test_batch_selection_retains_headroom_and_avoids_negligible_gain():
+def test_batch_selection_uses_largest_tested_size_with_headroom():
     results = [
         dict(batch_size=b, state="ok", windows_per_second=s, memory_fraction=m)
         for b, s, m in ((2, 10, 0.3), (4, 20, 0.5), (8, 20.5, 0.7), (16, 25, 0.9))
     ]
-    assert select_batch(results) == 4
+    assert select_batch(results) == 8
     with pytest.raises(ValueError, match="headroom"):
         select_batch([dict(batch_size=2, state="oom")])

@@ -336,7 +336,8 @@ def predict(
             if shutil.disk_usage(path.parent).free < reserve + required:
                 raise OSError("Insufficient scratch space for this date's mosaic and output")
             loader = DataLoader(
-                dataset, batch_size=batch_size, num_workers=workers, collate_fn=list
+                dataset, batch_size=batch_size, num_workers=workers, collate_fn=list,
+                sampler=dataset.spatial_indices(),
             )
             mosaic = RegionalMosaic(
                 path.parent / (path.stem + "_working"),

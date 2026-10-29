@@ -20,7 +20,12 @@ class CompositeQualityFusion(nn.Module):
         )
         nn.init.zeros_(self.layers[-1].weight)
 
-    def forward(self, features, inputs):
+    def forward(self, features, inputs, *, cache=None):
+        # All depth/task exits query the same input support. Keep its encoding
+        # only in the caller's current-forward cache, including its gradient.
+        size = tuple(features.shape[-2:])
+        if cache is not None and size in cache:
+            return features + cache[size]
         parts = []
         for name in INPUT_GROUPS:
             quality = inputs[f"{name}_quality"].float()
@@ -31,4 +36,7 @@ class CompositeQualityFusion(nn.Module):
             parts.append((quality / 8).masked_fill(~valid, 0).flatten(1, 2))
             parts.append(valid.float().flatten(1, 2))
         quality = torch.cat(parts, dim=1)
-        return features + self.layers(F.adaptive_avg_pool2d(quality, features.shape[-2:]))
+        encoded = self.layers(F.adaptive_avg_pool2d(quality, size))
+        if cache is not None:
+            cache[size] = encoded
+        return features + encoded

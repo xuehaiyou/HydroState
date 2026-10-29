@@ -117,10 +117,10 @@ def batch_probe(model, records, device, sizes, repeats):
     return results
 
 
-def pipeline_probe(dataset, start, count, model, device, workers, mosaic):
+def pipeline_probe(dataset, start, count, model, device, workers, mosaic, batch_size=2):
     """Measure exposed loader wait separately from inference and overlap accumulation."""
     subset = Subset(dataset, range(start, start + count))
-    loader = DataLoader(subset, batch_size=2, num_workers=workers, collate_fn=list)
+    loader = DataLoader(subset, batch_size=batch_size, num_workers=workers, collate_fn=list)
     clock = last = time.perf_counter()
     sums = dict(loader_wait_seconds=0.0, predict_seconds=0.0, mosaic_seconds=0.0)
     accepted = 0
@@ -144,11 +144,11 @@ def pipeline_probe(dataset, start, count, model, device, workers, mosaic):
             sums[key] += value
         accepted += len(usable)
         last = finished
-    steady = batches[4:]
+    steady = batches[4:] or batches
     steady_seconds = sum(sum(b[k] for k in sums) for b in steady)
     return dict(
         workers=workers,
-        batch=2,
+        batch=batch_size,
         windows=count,
         accepted=accepted,
         seconds=time.perf_counter() - clock,
@@ -258,11 +258,22 @@ def run(args):
             report["reader"][date] = measured
             report["state"] = "batch_probe"
             save()
+            if args.reference_release:
+                from hydrostate.inference.regional_comparison import compare_release
+
+                report.setdefault("comparison", {})[date] = compare_release(
+                    args, date, records, model, output)
+                save()
             report["batches"][date] = batch_probe(
                 model, records, args.device, args.batches, args.repeats
             )
             save()
         date = args.dates[-1]
+        if args.tune:
+            from hydrostate.inference.regional_runtime import benchmark
+
+            report["tuning"] = benchmark(model, retained[date], args.device, args.batches)
+            save()
         report["profile"] = profile_model(model, retained[date], args.device, output)
         save()
         dataset = datasets[date]
@@ -279,7 +290,8 @@ def run(args):
                 # Fresh worker/group caches; operating-system cache is uncontrolled.
                 fresh = RegionalDataset(args.root, date, model.tasks)
                 measurement = pipeline_probe(
-                    fresh, args.start_index, args.windows, model, args.device, workers, mosaic
+                    fresh, args.start_index, args.windows, model, args.device, workers, mosaic,
+                    report.get("tuning", {}).get("selected_batch", 2),
                 )
                 report["pipeline"].append(measurement)
                 LOG.info("Pipeline: %s", {k: v for k, v in measurement.items() if k != "batches"})

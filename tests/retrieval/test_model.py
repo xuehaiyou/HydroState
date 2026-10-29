@@ -55,6 +55,27 @@ def batch():
     return dict(inputs=inputs, data_samples=labels)
 
 
+def test_quality_encoding_reuse_preserves_nonzero_outputs_and_gradients():
+    from copy import deepcopy
+
+    from hydrostate.models.composite_quality import CompositeQualityFusion
+
+    fusion = CompositeQualityFusion(feature_channels=8, hidden_channels=4)
+    torch.nn.init.normal_(fusion.layers[-1].weight, std=0.1)
+    reference = deepcopy(fusion)
+    inputs = batch()["inputs"]
+    features = [torch.rand(2, 8, 3, 3), torch.rand(2, 8, 3, 3), torch.rand(2, 8, 2, 2)]
+    cache = {}
+    actual = [fusion(f, inputs, cache=cache) for f in features]
+    expected = [reference(f, inputs) for f in features]
+    for a, b in zip(actual, expected):
+        torch.testing.assert_close(a, b, atol=0, rtol=0)
+    sum(a.square().sum() for a in actual).backward()
+    sum(b.square().sum() for b in expected).backward()
+    for a, b in zip(fusion.parameters(), reference.parameters()):
+        torch.testing.assert_close(a.grad, b.grad)
+
+
 @pytest.mark.parametrize(
     "private_rank,checkpoint,extended,finetuning",
     [(0, False, False, "lora"), (2, False, False, "lora"),

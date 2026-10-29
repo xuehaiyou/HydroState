@@ -79,6 +79,14 @@ def test_native_cross_block_reader_and_missing_sensor_support(tmp_path):
     assert sample["inputs"]["s2"].shape == (5, 12, 120, 120)
     assert set(sample["inputs"]["target_time"]) == set(TASKS)
     assert not sample["data_samples"]
+    uncached = RegionalDataset(tmp_path, plan["periods"][0]["start"], cache_mib=0)
+    for i in ds.spatial_indices():
+        original, expected_accepted = uncached.native_inputs(i)
+        cached, actual_accepted = ds.native_inputs(i)
+        assert actual_accepted == expected_accepted
+        for key in original:
+            np.testing.assert_array_equal(cached[key], original[key])
+    assert sorted(ds.spatial_indices()) == list(range(len(ds)))
     assert status(tmp_path, audit=True)["ready_dates"] == 1
     # A transport failure must never become valid empty observations.
     (product_path(tmp_path, products[0]) / "_SUCCESS.json").unlink()
@@ -159,7 +167,8 @@ def test_capacity_reports_specific_resource():
     ]
 
 
-def test_current_model_checkpoint_to_regional_product(monkeypatch, tmp_path):
+@pytest.mark.parametrize("private_rank", [0, 1])
+def test_current_model_checkpoint_to_regional_product(monkeypatch, tmp_path, private_rank):
     from mmengine.config import Config
     from mmengine.registry import init_default_scope
     from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.nn.flexi_vit import EncoderConfig
@@ -206,7 +215,7 @@ def test_current_model_checkpoint_to_regional_product(monkeypatch, tmp_path):
         embedding_channels=16,
         out_indices=[0, 1, 2],
         shared_rank=2,
-        private_rank=1,
+        private_rank=private_rank,
         gradient_checkpointing=False,
     )
     cfg.model.decoder.update(in_channels=16, channels=8)

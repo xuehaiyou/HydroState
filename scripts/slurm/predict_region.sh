@@ -2,13 +2,12 @@
 #SBATCH --job-name=hydro-poyang-shared
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=6
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=3
+#SBATCH --mem=32G
 #SBATCH --partition=c_foss_gpu
 #SBATCH --account=geog_geors
 #SBATCH --qos=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --time=7-00:00:00
 #SBATCH --mail-type=NONE
 set -euo pipefail
 
@@ -21,7 +20,10 @@ set -euo pipefail
 : "${HYDROSTATE_MODEL_PATH:?Set the pretrained backbone directory}"
 : "${HYDROSTATE_TARGET_STATS:?Set the frozen training statistics}"
 : "${HYDROSTATE_RUN_DIR:?Set a unique inference run directory}"
-if [[ "${SLURM_JOB_PARTITION:-}" != c_foss_gpu || "${SLURM_CPUS_PER_TASK:-6}" -gt 6 ]]; then
+: "${HYDROSTATE_BATCH_SIZE:?Set the batch validated in a debug allocation}"
+: "${HYDROSTATE_WORKERS:?Set the measured reader worker count}"
+: "${HYDROSTATE_ESTIMATED_SECONDS:?Set measured work estimate, excluding six-hour margin}"
+if [[ "${SLURM_JOB_PARTITION:-}" != c_foss_gpu || "${SLURM_CPUS_PER_TASK:-3}" -gt 6 ]]; then
     echo 'FossFS inference requires c_foss_gpu and at most 6 CPU cores per GPU.' >&2
     exit 2
 fi
@@ -43,4 +45,4 @@ exec python tools/predict_region.py \
     --pretrained "$HYDROSTATE_MODEL_PATH" \
     --statistics "$HYDROSTATE_TARGET_STATS" \
     --run-dir "$HYDROSTATE_RUN_DIR" \
-    --device cuda --workers 4 --batch-candidates 2 4 8 16 "$@"
+    --device cuda --workers "$HYDROSTATE_WORKERS" --batch-size "$HYDROSTATE_BATCH_SIZE" "$@"

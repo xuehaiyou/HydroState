@@ -81,14 +81,14 @@ bash scripts/run_region_download_io.sh --root "$HYDROSTATE_REGION_ROOT"
 代码同步仍走 Git；不要覆盖正在运行的冻结发布。采集使用 CPU，模型推理默认单 GPU。
 运行是否启动、已完成多少日期须查看对应运行回执、进程和日志。
 
-HPC 当前鄱阳湖全量输入的存储根目录为：
+HPC 当前 region2 鄱阳湖全量输入的存储根目录为：
 
 ```bash
-export HYDROSTATE_REGION_ROOT=/fossfs/xiaozhen/HydroState/inference/poyang_retrieval_5x8_201704_202412_f9fce12
+export HYDROSTATE_REGION_ROOT=/fossfs/xiaozhen/HydroState/inference/poyang_region2_5x8_201704_202412_20261030
 ```
 
 采集和模型推理都直接传入这个 `--root`；旧 `/scr/u/xiaoz/HydroState/inference`
-不保留路径别名。目录名末尾的提交号记录最初建库来源，当前执行代码以
+不保留路径别名。旧区域目录保留作为历史数据，当前执行代码以
 `submission.json` 的 commit 和冻结源码路径为准。
 迁移校验及续跑记录见 [FossFS 迁移验收](validation/REGIONAL_FOSSFS_MIGRATION_20261025.md)。
 
@@ -150,8 +150,9 @@ Drive 默认最多 2 个在途逻辑导出、2 个下载入库线程，加 1 个
 
 ### 单卡 HPC 推理
 
-FossFS 输入必须提交到 `c_foss_gpu`。`scripts/slurm/predict_region.sh` 固定单 GPU、
-6 CPU、64 GiB 内存和最长 7 天；先在登录节点确认当前 account/QoS 限制。
+FossFS 输入必须提交到 `c_foss_gpu`。`scripts/slurm/predict_region.sh` 默认单 GPU、
+3 CPU、32 GiB 内存；按 debug 实测调整读取进程和 CPU，单卡最多 6 CPU。
+提交时显式给出预计工作时间加 6 小时的 `--time`，超出队列上限则按日期分批。
 代码经 Git 同步后冻结发布，设置以下运行环境，再提交一次并立即记录 job ID：
 
 ```bash
@@ -163,17 +164,22 @@ export HYDROSTATE_CHECKPOINT=/path/to/training/best_checkpoint.pth
 export HYDROSTATE_MODEL_PATH=/path/to/OlmoEarth-v1_2-Base
 export HYDROSTATE_TARGET_STATS=/path/to/training/provenance/target_stats.json
 export HYDROSTATE_RUN_DIR="$HYDROSTATE_REGION_ROOT/runs/<unique-run-name>"
+export HYDROSTATE_BATCH_SIZE=<debug实测的最大稳定batch>
+export HYDROSTATE_WORKERS=<debug实测的读取进程数>
+export HYDROSTATE_ESTIMATED_SECONDS=<本批日期预计秒数>
 mkdir -p "$HYDROSTATE_RUN_DIR"
-sbatch --parsable --output="$HYDROSTATE_RUN_DIR/slurm-%j.out" \
+sbatch --parsable --time=<预计用时加6小时> --output="$HYDROSTATE_RUN_DIR/slurm-%j.out" \
   --error="$HYDROSTATE_RUN_DIR/slurm-%j.err" \
   "$HYDROSTATE_CODE_ROOT/scripts/slurm/predict_region.sh" \
   --pilot-dates 2017-04-07 2020-07-11 2022-11-01
 ```
 
-启动检查包括全部目标日期的清单身份、三个代表日期各八个分散窗口的实际读取、
-checkpoint 严格加载，以及真实 GPU 上 batch 2/4/8/16 的前向测试。
-选取保留至少 15% 显存余量、达到实测最高吞吐 95% 的最小 batch。
-该测试复用已读取输入，包含预处理和传回 CPU 的耗时，**不包含磁盘读取和拼接**；
+启动检查包括所选目标日期的清单身份和 checkpoint 严格加载。
+batch 测试在独立 debug 分配中完成；`--tune` 用相同真实窗口池测吞吐，并用所有
+传感器、所有时间槽有效的合成支持测试显存上界，不能只凭缺失传感器的窗口估计容量。
+选取保留至少 15% 显存余量的最大稳定 batch，自动细化安全与不安全尺寸的边界。
+合成支持仅用于资源测试，不发布为反演产品。模型测试复用已读取输入，包含预处理
+和传回 CPU 的耗时，**不包含磁盘读取和拼接**；
 正式运行的每分钟 `windows_per_second` 才是流水线吞吐，首个完整日期后再估算总工期。
 这不是遍历全部输入数组的审计；未抽中的产品在正式读取时检查成功标记并读取。
 
@@ -182,7 +188,7 @@ checkpoint 严格加载，以及真实 GPU 上 batch 2/4/8/16 的前向测试。
 默认只在预览中隐藏（`--display-surface-min`），原始条件率和总 ET 不受显示门槛影响。
 
 `runs/<name>/inference.json` 保存模型、输入、commit、状态和最终产品路径，
-`startup.json` 保存读取及显存/吞吐测试。`products/<identity>_progress.json` 每分钟更新；
+独立 debug 目录保存显存/吞吐测试。`products/<identity>_progress.json` 每分钟更新；
 `products/<identity>_<date>.json` 记录单日期耗时、有效面积、物理范围和覆盖闭合误差。
 只有全部数组写入且检查通过后才发布该日期的 `date_complete`，BF16 覆盖闭合允许
 0.01 的数值误差并记录实际误差。预览位于 `products/<identity>_previews/`。
@@ -203,6 +209,9 @@ checkpoint/统计量哈希和模型配置。可用 `xarray.open_zarr(path, mask_
 某表面比例严格为零时其分支率不定义，对总量贡献为零；这不涉及产品缺失标签补零。
 
 融合累加采用磁盘映射，按块写出，避免一次把多年全域输出装入内存。
+读取器每个进程最多保留 512 MiB 解压块，复用数组元数据；窗口按空间块邻近顺序访问，
+原始窗口身份及输出坐标不变。共享 LoRA 在一个前向内复用相同的恢复特征和质量编码，
+任务专属查询、解码器、覆盖/SM 掩膜及条件 ET 面积融合保持原定义。
 空间重叠平滑与覆盖闭合是实现检查，不是精度证据；小比例表面的条件 ET 也没有因此
 获得独立验证。当前没有自动关联区域与训练样本的时空重叠标记，地图不能直接用于
 声称独立空间泛化；独立验证需另行核查训练重叠。
@@ -227,6 +236,10 @@ python tools/benchmarks/region_inference.py \
   --dates 2017-04-07 2020-07-11 --start-index 27000 --windows 32 \
   --batches 2 4 8 16 20 24 --workers 0 2 4
 ```
+
+加 `--reference-release /path/to/frozen/old/release`，在同一分配中用旧版代码严格加载
+相同权重，检查代表窗口全部输入数组、全部输出及掩膜，并比较同 batch 吞吐。
+加 `--tune` 搜索最大稳定 batch；测试输出应放在新的独立目录，正式任务直接使用结果。
 
 报告区分原生数组读取、对齐、输入预处理/设备传输、模型预测、回传 CPU 和重叠融合。
 缓存 batch 测试与包含读取的流水线测试分别报告吞吐；流水线另记录暴露在 GPU 计算之外的

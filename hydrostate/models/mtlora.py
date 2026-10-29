@@ -271,6 +271,7 @@ class MTLoRAHydroStateModel(TemporalHydroStateModel):
                 )
         levels = self.encoder(inputs)
         outputs = {}
+        auxiliary_cache = {}
         for task in self.tasks:
             query_name = next(group[0] for group in self.query_groups if task in group)
             features = tuple(
@@ -278,7 +279,8 @@ class MTLoRAHydroStateModel(TemporalHydroStateModel):
                 for level in levels[task]
             )
             if self.input_fusion is not None:
-                features = tuple(self.input_fusion(value, inputs) for value in features)
+                features = tuple(self.input_fusion(value, inputs, cache=auxiliary_cache)
+                                 for value in features)
             decoded = self.decoders[task](features)
             if any(size % self.output_scale for size in decoded.shape[-2:]):
                 raise ValueError("Decoded spatial dimensions must divide by output_scale")

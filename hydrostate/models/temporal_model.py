@@ -74,9 +74,17 @@ class TemporalOlmoEarthEncoder(OlmoEarthEncoder):
             sample = sample._replace(**{modality + "_mask": mask})
 
         levels = self._extract_levels(sample, out_indices)
+        restored = {}
         def restore(values):
-            return tuple(self._restore_observations(tokens, masks, present, gather, inputs, device)
-                         for tokens, masks in values)
+            result = []
+            for level in values:
+                key = id(level)
+                if key not in restored:
+                    tokens, masks = level
+                    restored[key] = self._restore_observations(
+                        tokens, masks, present, gather, inputs, device)
+                result.append(restored[key])
+            return tuple(result)
         return ({task: restore(values) for task, values in levels.items()}
                 if isinstance(levels, dict) else restore(levels))
 

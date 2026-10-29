@@ -80,12 +80,18 @@ def multilevel_features(core, sample, patch_size, out_indices, input_res=10,
         if index not in out_indices:
             continue
         selected = [(None, tokens)] if branch_tasks is None else zip(branch_tasks, branches)
+        # Shared-LoRA exits reference the same tensor. Restore it once per depth;
+        # private exits retain separate tensors and gradients.
+        restored_features = {}
         for task, value in selected:
-            spatial = core.pop_register_tokens(value)[0] if core.has_register_tokens else value
-            restored, _ = core.add_removed_tokens(core.norm(spatial), indices, valid)
-            modality_tokens = core.split_and_expand_per_modality(restored, shapes)
-            feature = ((modality_tokens, masks) if retain_tokens else
-                       pool_modalities(modality_tokens, masks).to(tokens.dtype))
+            key = id(value)
+            if key not in restored_features:
+                spatial = core.pop_register_tokens(value)[0] if core.has_register_tokens else value
+                restored, _ = core.add_removed_tokens(core.norm(spatial), indices, valid)
+                modality_tokens = core.split_and_expand_per_modality(restored, shapes)
+                restored_features[key] = ((modality_tokens, masks) if retain_tokens else
+                                          pool_modalities(modality_tokens, masks).to(tokens.dtype))
+            feature = restored_features[key]
             (features if task is None else features[task]).append(feature)
     return (tuple(features) if branch_tasks is None else
             {task: tuple(values) for task, values in features.items()})

@@ -12,12 +12,14 @@ from hydrostate.data.regional.plan import blocks_for_window, epoch, load_plan, p
 from hydrostate.data.retrieval.alignment import align_inputs, sensor_masks
 from hydrostate.data.retrieval.contract import INPUT_GROUPS, SENSORS, TASKS, RetrievalSchema
 from hydrostate.datasets.retrieval_dataset import as_tensors
-from hydrostate.storage.reader import ShardCache
 from hydrostate.storage.regional import product_path, ready
+from hydrostate.storage.spatial_cache import SpatialChunkCache
 
 
 class RegionalDataset(Dataset):
-    def __init__(self, root, target, tasks=TASKS):
+    def __init__(self, root, target, tasks=TASKS, *, cache_mib=512):
+        if cache_mib < 0:
+            raise ValueError("Regional reader cache budget must be nonnegative")
         self.root, self.plan = Path(root), load_plan(root)
         path = self.root / "manifests" / (target + ".json")
         record = json.loads(path.read_text())
@@ -29,14 +31,23 @@ class RegionalDataset(Dataset):
         )
         self.tasks, self.schema = tuple(tasks), RetrievalSchema()
         self.cache = None
+        self.cache_bytes = int(cache_mib * 1024**2)
         self.checked = set()
 
     def __len__(self):
         return len(self.rows)
 
+    def spatial_indices(self):
+        """Visit nearby windows together without changing their original identities."""
+        size = self.plan["block_size"]
+        return sorted(range(len(self.rows)), key=lambda i: (
+            self.rows[i]["row"] // size, self.rows[i]["col"] // size,
+            self.rows[i]["row"], self.rows[i]["col"],
+        ))
+
     def native_inputs(self, index):
         if self.cache is None:
-            self.cache = ShardCache(max_open=128)
+            self.cache = SpatialChunkCache(max_bytes=self.cache_bytes)
         row = self.rows[index]
         orbit = json.loads(row["orbit"])
         arrays = {k: np.zeros(s.tail_shape, s.dtype) for k, s in self.schema.inputs.items()}
@@ -54,7 +65,7 @@ class RegionalDataset(Dataset):
                         if not ready(self.root, item):
                             raise FileNotFoundError(f"Missing regional product: {item['id']}")
                         self.checked.add(item["id"])
-                    group = self.cache.get(str(product_path(self.root, item)))
+                    path = product_path(self.root, item)
                     by, bx = block[0] * size, block[1] * size
                     y0, x0 = max(row["row"], by), max(row["col"], bx)
                     y1 = min(row["row"] + 120, by + size)
@@ -72,9 +83,8 @@ class RegionalDataset(Dataset):
                         ("valid", "_valid"),
                         ("quality", "_quality"),
                     ):
-                        arrays[name + suffix][(slot, slice(None), *dst)] = group[field][
-                            (slice(None), *src)
-                        ]
+                        arrays[name + suffix][(slot, slice(None), *dst)] = self.cache.read(
+                            path, field, *src)
         masks = sensor_masks(arrays)
         for column, sensor in enumerate(SENSORS):
             available = masks[sensor].any(axis=(1, 2, 3))
