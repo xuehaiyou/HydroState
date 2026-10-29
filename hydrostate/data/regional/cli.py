@@ -19,6 +19,8 @@ def prepare_main():
     parser.add_argument("--drive-token", type=Path)
     parser.add_argument("--retry-failed", action="store_true")
     parser.add_argument("--backend", choices=("pixels", "drive"), default="pixels")
+    parser.add_argument("--reuse-root", type=Path, action="append",
+                        help="Reuse aligned native products from another region (pixels backend)")
     parser.add_argument("--drain", action="store_true", help="Finish existing Drive exports only")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -38,8 +40,10 @@ def prepare_main():
         if args.backend == "pixels":
             if args.drain or args.retry_failed or args.drive_token:
                 parser.error("--drain/--retry-failed/--drive-token require --backend drive")
-            result = prepare_pixels(args.root)
+            result = prepare_pixels(args.root, reuse_roots=args.reuse_root)
         else:
+            if args.reuse_root:
+                parser.error("--reuse-root requires --backend pixels")
             result = prepare_drive(
                 args.root,
                 token=args.drive_token,

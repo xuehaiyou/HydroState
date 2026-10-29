@@ -29,14 +29,11 @@ def ready(root, item):
     return True
 
 
-def commit(root, plan, item, raw):
-    """Normalize exactly once, as in training; invalid zeros remain masked."""
-    if ready(root, item):
-        return
-    spec = INPUT_GROUPS[item["group"]]
-    grid = block_grid(plan, item["block"], spec.resolution)
-    expected = (len(spec.bands) + len(QUALITY), grid["height"], grid["width"])
-    if raw.shape != expected or not np.isfinite(raw).all():
+def normalize_raw(plan, name, raw):
+    """Normalize a full block or aligned subrectangle exactly once."""
+    spec = INPUT_GROUPS[name]
+    if (raw.ndim != 3 or raw.shape[0] != len(spec.bands) + len(QUALITY)
+            or not np.isfinite(raw).all()):
         raise ValueError("Invalid exported array shape or nonfinite values")
     quality = raw[len(spec.bands) :]
     days = quality[0]
@@ -49,6 +46,29 @@ def commit(root, plan, item, raw):
         or np.any(quality[1, valid] > quality[3, valid])
     ):
         raise ValueError("Invalid date counts or temporal support in regional composite")
+    return dict(
+        values=normalize(
+            spec.sensor, raw[: len(spec.bands)], valid, plan["normalization"], spec.bands
+        ),
+        valid=valid[None].astype("u1"),
+        quality=np.where(valid[None], quality, 0).astype("f2"),
+    )
+
+
+def commit_arrays(root, plan, item, arrays, *, reuse=None):
+    """Publish complete normalized arrays, including verified reused pixel rectangles."""
+    if ready(root, item):
+        return
+    spec = INPUT_GROUPS[item["group"]]
+    grid = block_grid(plan, item["block"], spec.resolution)
+    channels = dict(values=len(spec.bands), valid=1, quality=len(QUALITY))
+    if set(arrays) != set(channels) or any(
+        arrays[k].shape != (c, grid["height"], grid["width"])
+        or not np.isfinite(arrays[k]).all() for k, c in channels.items()
+    ):
+        raise ValueError("Invalid normalized regional arrays")
+    if not np.isin(arrays["valid"], [0, 1]).all():
+        raise ValueError("Regional validity must be binary")
     path = product_path(root, item)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(".zarr.part")
@@ -56,13 +76,6 @@ def commit(root, plan, item, raw):
         shutil.rmtree(temp)  # Only this product's uncommitted staging store.
     group = zarr.open_group(str(temp), mode="w")
     compressor = Blosc(cname="zstd", clevel=3, shuffle=Blosc.BITSHUFFLE)
-    arrays = dict(
-        values=normalize(
-            spec.sensor, raw[: len(spec.bands)], valid, plan["normalization"], spec.bands
-        ),
-        valid=valid[None].astype("u1"),
-        quality=np.where(valid[None], quality, 0).astype("f2"),
-    )
     for name, value in arrays.items():
         group.create_dataset(
             name,
@@ -71,8 +84,16 @@ def commit(root, plan, item, raw):
             compressor=compressor,
         )
     group.attrs.update(identity=item, grid=grid, input_contract=plan["input_contract"])
+    if reuse:
+        atomic_json(temp / "_REUSE.json", reuse)
     atomic_json(temp / "_SUCCESS.json", item)
     os.replace(temp, path)
+
+
+def commit(root, plan, item, raw):
+    """Normalize exactly once, as in training; invalid zeros remain masked."""
+    if not ready(root, item):
+        commit_arrays(root, plan, item, normalize_raw(plan, item["group"], raw))
 
 
 def ingest(root, plan, job, paths):

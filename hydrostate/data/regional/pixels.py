@@ -21,7 +21,7 @@ from hydrostate.data.regional.pipeline import publish_ready, status
 from hydrostate.data.regional.plan import load_plan
 from hydrostate.data.retrieval.composites import QUALITY
 from hydrostate.data.retrieval.contract import INPUT_GROUPS
-from hydrostate.storage.regional import commit
+from hydrostate.storage.regional import commit, commit_arrays
 
 LOG = logging.getLogger(__name__)
 
@@ -74,11 +74,13 @@ def check_drive_drained(root):
         )
 
 
-def receive(ee, root, plan, job, settings):
+def receive(ee, root, plan, job, settings, reuse=None):
     grid, spec = job["grid"], INPUT_GROUPS[job["group"]]
     h, w = grid["height"], grid["width"]
     if max(h, w) > 32768 or job["raw_bytes"] > settings["max_request_mib"] * 1024**2:
         raise ValueError("Pixel request exceeds grid or byte budget")
+    if reuse is not None:
+        return receive_reused(ee, root, plan, job, settings, reuse)
     started = time.monotonic()
     empty = not any(job["scenes"])
     if empty:
@@ -101,18 +103,67 @@ def receive(ee, root, plan, job, settings):
         request_id=job["id"], group=job["group"],
         products=[p["id"] for p in job["products"]],
         empty_source=empty, response_bytes=0 if empty else job["raw_bytes"],
+        network_requests=int(not empty), reused_pixels=0, reused_products=0,
         valid_pixels=valid_pixels, fetch_seconds=fetched - started,
         ingest_seconds=time.monotonic() - fetched,
     )
 
 
-def prepare(root):
+def receive_reused(ee, root, plan, job, settings, reuse):
+    """Reuse complete native blocks; batch-download blocks that lack complete coverage."""
+    started = time.monotonic()
+    grid, spec = job["grid"], INPUT_GROUPS[job["group"]]
+    missing, reused_pixels, valid_pixels, reused_products = [], 0, 0, 0
+    for i, item in enumerate(job["products"]):
+        existing = reuse.read(item)
+        if existing is None:
+            missing.append(i)
+            continue
+        arrays, sources = existing
+        pixels = grid["height"] * grid["width"]
+        commit_arrays(root, plan, item, arrays, reuse=dict(pixels=pixels, sources=sources))
+        reused_products += 1
+        reused_pixels += pixels
+        valid_pixels += int(arrays["valid"].sum())
+    downloaded = dict(network_requests=0, response_bytes=0, valid_pixels=0)
+    if missing:
+        names = [*spec.bands, *QUALITY]
+        selected = dict(job, products=[job["products"][i] for i in missing],
+                        scenes=[job["scenes"][i] for i in missing],
+                        bands=[f"t{i}_{b}" for i in range(len(missing)) for b in names],
+                        raw_bytes=len(missing)*len(names)*grid["height"]*grid["width"]*4)
+        downloaded = receive(ee, root, plan, selected, settings)
+    return dict(
+        request_id=job["id"], group=job["group"], products=[p["id"] for p in job["products"]],
+        empty_source=not any(job["scenes"]), network_requests=downloaded["network_requests"],
+        response_bytes=downloaded["response_bytes"], reused_pixels=reused_pixels,
+        reused_products=reused_products, valid_pixels=valid_pixels+downloaded["valid_pixels"],
+        fetch_seconds=time.monotonic()-started, ingest_seconds=0,
+    )
+
+
+def prepare(root, *, reuse_roots=None):
     root = Path(root)
     plan = load_plan(root)
     settings = json.loads((root / "pixels.json").read_text())
     validate_settings(settings)
     with locked(root / "prepare.lock", blocking=False):
         check_drive_drained(root)
+        reuse = None
+        reuse_path = root / "reuse.json"
+        if reuse_roots is not None or reuse_path.exists():
+            from hydrostate.data.regional.reuse import RegionalReuse
+
+            previous = json.loads(reuse_path.read_text()) if reuse_path.exists() else None
+            roots = reuse_roots if reuse_roots is not None else previous["roots"]
+            if any(Path(r).resolve() == root.resolve() for r in roots):
+                raise ValueError("Reuse sources must be different regional roots")
+            reuse = RegionalReuse(plan, roots)
+            identities = [p["identity"] for _, p in reuse.sources]
+            if reuse_roots is None and previous["identities"] != identities:
+                raise ValueError("A recorded reuse source plan changed")
+            atomic_json(reuse_path, dict(roots=[r for r, _ in reuse.sources],
+                                        identities=[p["identity"] for _, p in reuse.sources]))
         ee = initialize(plan["config"]["project"])
         workers = settings["workers"]
         inbox, stop = queue.Queue(maxsize=workers), threading.Event()
@@ -123,6 +174,7 @@ def prepare(root):
             backend="pixels", started_utc=datetime.now(UTC).isoformat(), plan=plan["identity"],
             settings=settings, requests=0, network_requests=0, products=0, empty_source_products=0,
             response_bytes=0, valid_pixels=0,
+            reused_pixels=0, reused_products=0,
         )
         receipts = root / "logs" / "pixels_receipts.jsonl"
         receipts.parent.mkdir(exist_ok=True)
@@ -174,7 +226,7 @@ def prepare(root):
                             min_free_gib=settings["min_free_gib"], reserved_bytes=reserved,
                         ))
                         raise OSError("hpc_scratch: insufficient space for pixel acquisition")
-                    active[pool.submit(receive, ee, root, plan, job, settings)] = job
+                    active[pool.submit(receive, ee, root, plan, job, settings, reuse)] = job
                 if active:
                     completed, _ = wait(active, timeout=1, return_when=FIRST_COMPLETED)
                     for future in completed:
@@ -191,12 +243,14 @@ def prepare(root):
                                 result, completed_utc=datetime.now(UTC).isoformat()
                             )) + "\n")
                         progress["requests"] += 1
-                        progress["network_requests"] += not result["empty_source"]
+                        progress["network_requests"] += result["network_requests"]
                         progress["products"] += len(result["products"])
                         progress["empty_source_products"] += (
                             len(result["products"]) if result["empty_source"] else 0
                         )
-                        for key in ("response_bytes", "valid_pixels"):
+                        for key in (
+                            "response_bytes", "valid_pixels", "reused_pixels", "reused_products"
+                        ):
                             progress[key] += result[key]
                         known_ready.update(result["products"])
                         LOG.info("Pixels committed %s", result)

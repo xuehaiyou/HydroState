@@ -56,6 +56,7 @@ def compare_release(args, date, records, model, output):
         "root", "model_config", "checkpoint", "pretrained", "statistics", "device")}
     atomic_json(folder / "arguments.json", dict(options, date=date))
     env = dict(os.environ, PYTHONPATH=str(args.reference_release))
+    env.pop("HYDROSTATE_CODE_COMMIT", None)  # Do not label old imports with the new release SHA.
     # Execute this stable harness by path, but import model/reader from the
     # reference Git archive. No monkeypatching the model under comparison.
     with (folder / "reference.log").open("w") as log:
