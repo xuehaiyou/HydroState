@@ -117,9 +117,11 @@ def batch_probe(model, records, device, sizes, repeats):
     return results
 
 
-def pipeline_probe(dataset, start, count, model, device, workers, mosaic, batch_size=2):
+def pipeline_probe(dataset, start, count, model, device, workers, mosaic, batch_size=2,
+                   spatial=False):
     """Measure exposed loader wait separately from inference and overlap accumulation."""
-    subset = Subset(dataset, range(start, start + count))
+    indices = dataset.spatial_indices()[start:start+count] if spatial else range(start, start+count)
+    subset = Subset(dataset, indices)
     loader = DataLoader(subset, batch_size=batch_size, num_workers=workers, collate_fn=list)
     clock = last = time.perf_counter()
     sums = dict(loader_wait_seconds=0.0, predict_seconds=0.0, mosaic_seconds=0.0)
@@ -148,6 +150,7 @@ def pipeline_probe(dataset, start, count, model, device, workers, mosaic, batch_
     steady_seconds = sum(sum(b[k] for k in sums) for b in steady)
     return dict(
         workers=workers,
+        spatial_order=spatial,
         batch=batch_size,
         windows=count,
         accepted=accepted,
@@ -264,9 +267,10 @@ def run(args):
                 report.setdefault("comparison", {})[date] = compare_release(
                     args, date, records, model, output)
                 save()
-            report["batches"][date] = batch_probe(
-                model, records, args.device, args.batches, args.repeats
-            )
+            if not args.pipeline_only:
+                report["batches"][date] = batch_probe(
+                    model, records, args.device, args.batches, args.repeats
+                )
             save()
         date = args.dates[-1]
         if args.tune:
@@ -274,7 +278,21 @@ def run(args):
 
             report["tuning"] = benchmark(model, retained[date], args.device, args.batches)
             save()
-        report["profile"] = profile_model(model, retained[date], args.device, output)
+        if args.pipeline_batch:
+            from hydrostate.inference.regional_runtime import dense_record
+
+            dense = dense_record(retained[date][0])
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+            for _ in range(3):
+                predict_records(model, [dense]*args.pipeline_batch, args.device)
+            report["dense_stability"] = dict(
+                batch=args.pipeline_batch, consecutive_forwards=3,
+                peak_reserved_bytes=torch.cuda.max_memory_reserved(),
+                gpu_total_bytes=torch.cuda.get_device_properties(args.device).total_memory,
+            )
+        if not args.pipeline_only:
+            report["profile"] = profile_model(model, retained[date], args.device, output)
         save()
         dataset = datasets[date]
         grid = dataset.plan["grid"]
@@ -289,9 +307,13 @@ def run(args):
             for workers in args.workers:
                 # Fresh worker/group caches; operating-system cache is uncontrolled.
                 fresh = RegionalDataset(args.root, date, model.tasks)
+                count = args.pipeline_windows or args.windows
+                if args.start_index + count > len(fresh):
+                    raise ValueError("Pipeline probe exceeds the available windows")
                 measurement = pipeline_probe(
-                    fresh, args.start_index, args.windows, model, args.device, workers, mosaic,
-                    report.get("tuning", {}).get("selected_batch", 2),
+                    fresh, args.start_index, count, model, args.device, workers, mosaic,
+                    args.pipeline_batch or report.get("tuning", {}).get("selected_batch", 2),
+                    args.pipeline_spatial,
                 )
                 report["pipeline"].append(measurement)
                 LOG.info("Pipeline: %s", {k: v for k, v in measurement.items() if k != "batches"})

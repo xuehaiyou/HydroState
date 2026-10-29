@@ -22,6 +22,11 @@ def main():
                         help="Frozen old release for exact-input reader/model comparison")
     parser.add_argument("--tune", action="store_true",
                         help="Find largest stable batch with all-sensor memory stress")
+    parser.add_argument("--pipeline-only", action="store_true")
+    parser.add_argument("--pipeline-windows", type=int)
+    parser.add_argument("--pipeline-batch", type=int,
+                        help="Verify a chosen dense batch three times, then use it in the pipeline")
+    parser.add_argument("--pipeline-spatial", action="store_true")
     args = parser.parse_args()
     if args.windows < 16 or args.repeats < 1 or min(args.batches) < 1 or min(args.workers) < 0:
         parser.error("Require >=16 windows, positive batches/repeats and nonnegative workers")
