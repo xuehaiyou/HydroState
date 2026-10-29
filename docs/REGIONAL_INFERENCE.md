@@ -59,6 +59,12 @@ MTLoRA 使用 `configs/hydrostate_mtlora.py`，共享 LoRA 使用上面的 share
 `--dates 2020-07-11` 可只推理某个已准备的目标周期。推理只读取本地数据，不需要 GEE。
 
 完整鄱阳湖使用 `configs/inference/poyang.json` 和新的输出根目录。
+当前边界采用用户指定的 GEE 资产
+[`users/xiaozhen6666666/ChinaWater/Poyang_Lake_region2`](https://code.earthengine.google.com/?asset=users/xiaozhen6666666/ChinaWater/Poyang_Lake_region2)，
+已下载为 `configs/inference/regions/poyang_lake_region2.geojson` 并随 Git 固定版本，
+不额外添加缓冲。它约覆盖 115.7833–116.7500°E、28.3667–29.7500°N，
+UTM 50N 平面面积约 14,423 km²。旧 HydroLakes 外扩 10 km 计划仍保留在其原数据根目录；
+更换边界必须新建数据根目录，不能复用旧计划身份或覆盖旧成果。
 更换区域时配置 WGS84 `aoi.bbox`、`aoi.geojson`（Geometry 或 Feature 文件），
 或 GEE FeatureCollection 与唯一 ID；提供覆盖该区域、以米为单位的投影。
 不能直接用一个 UTM 投影处理全球或跨越很大的区域。
@@ -204,3 +210,25 @@ checkpoint/统计量哈希和模型配置。可用 `xarray.open_zarr(path, mask_
 验收记录见 [2026-10-25 区域端到端验证](validation/REGIONAL_20261025.md)及
 [直接像素与 Drive 对照](validation/REGIONAL_PIXELS_BENCHMARK_20261025.md)。
 当前入口的实现与试采见 [直接通道切换验证](validation/REGIONAL_PIXELS_SWITCH_20261025.md)。
+
+## 推理性能诊断
+
+`tools/benchmarks/region_inference.py` 是薄入口，计时代码在
+`hydrostate/inference/regional_benchmark.py`。使用与正式推理相同的 checkpoint、统计量、
+输入和 BF16 设置；诊断只读取输入，并在独立输出目录写报告、算子 trace 和临时融合累加器，
+不发布或修改区域产品。GPU 测试提交 `c_foss_gpu` 的 debug QoS，单卡、适量 CPU，
+按 debug 时间上限缩小测试窗口，不能把正式全量任务当作测试。
+
+```bash
+python tools/benchmarks/region_inference.py \
+  --root "$HYDROSTATE_REGION_ROOT" --model-config "$HYDROSTATE_REGION_MODEL_CONFIG" \
+  --checkpoint "$HYDROSTATE_CHECKPOINT" --pretrained "$HYDROSTATE_MODEL_PATH" \
+  --statistics "$HYDROSTATE_TARGET_STATS" --output /path/to/new-diagnostic-directory \
+  --dates 2017-04-07 2020-07-11 --start-index 27000 --windows 32 \
+  --batches 2 4 8 16 20 24 --workers 0 2 4
+```
+
+报告区分原生数组读取、对齐、输入预处理/设备传输、模型预测、回传 CPU 和重叠融合。
+缓存 batch 测试与包含读取的流水线测试分别报告吞吐；流水线另记录暴露在 GPU 计算之外的
+数据等待时间，并用算子 profiler 定位模型内部耗时。重复读取仅指应用层重复，
+不声称已清空操作系统缓存；短流水线测试也不包含整日期最终压缩写出。
