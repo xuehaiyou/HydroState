@@ -253,6 +253,10 @@ python tools/benchmarks/region_inference.py \
 加 `--reference-release /path/to/frozen/old/release`，在同一分配中用旧版代码严格加载
 相同权重，检查代表窗口全部输入数组、全部输出及掩膜，并比较同 batch 吞吐。
 加 `--tune` 搜索最大稳定 batch；测试输出应放在新的独立目录，正式任务直接使用结果。
+加 `--pipeline-only --pipeline-batch 52 --pipeline-windows 256 --pipeline-spatial`
+可验证已选 batch 的连续 dense 前向，并测量正式空间访问顺序下的完整流水线。
+这里的 52 仅为当前 L40/checkpoint 实测值；其他硬件/模型需重新测量。
+本次结果及范围见 [2026-10-30 提速与复用验收](validation/REGIONAL_INFERENCE_SPEED_20261030.md)。
 
 报告区分原生数组读取、对齐、输入预处理/设备传输、模型预测、回传 CPU 和重叠融合。
 缓存 batch 测试与包含读取的流水线测试分别报告吞吐；流水线另记录暴露在 GPU 计算之外的

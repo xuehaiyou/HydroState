@@ -71,11 +71,14 @@ tests/                         共享模块及历史回归；retrieval/ 为当�
 归档配置继续加载其历史数据定义；不能直接用它们对当前七任务样本训练。
 当前区域入口为 `tools/prepare_region.py` 和 `tools/predict_region.py`，不在 legacy 下。
 `regional/plan.py` 定义计划，`exports.py` 规划共享合成请求；`pixels.py` 调度直接像素获取，
+`reuse.py` 核对跨区域原生图块并复用完整覆盖，避免重复网络下载；
 `pipeline.py` 调度与恢复 Drive 导出；
 `storage/regional.py` 校验入库，`datasets/regional.py` 读取五槽，`inference/regional.py`
 加载当前 checkpoint 并拼接七任务及总 ET。原有四槽/单景文件保留原位供已有实验追溯，
 正式流程不调用其选片或缓存实现，也不依赖 LegacySchema。
 `inference/regional_runtime.py` 负责输入抽查、GPU batch 实测和运行回执；
+`regional_benchmark.py`、`regional_comparison.py` 分别测量流水线和固定旧版本输出对照；
+`storage/spatial_cache.py` 提供有字节上限的原生数组解压块缓存；
 `regional_reports.py` 负责物理范围检查和仅用于显示的 PNG 掩膜。
 `scripts/slurm/predict_region.sh` 是单卡 FossFS 推理入口，不承担数据或拼接逻辑。
 
