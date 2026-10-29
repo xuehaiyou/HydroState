@@ -2,9 +2,11 @@
 
 import json
 import logging
+import os
 import shutil
 import time
 from contextlib import nullcontext
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +21,7 @@ from hydrostate.data.gee.contracts import atomic_json, fingerprint, locked
 from hydrostate.data.regional.plan import epoch, load_plan
 from hydrostate.data.retrieval.contract import PROFILE, TASKS, VERSION
 from hydrostate.datasets.regional import RegionalDataset
+from hydrostate.inference.regional_reports import check_fields, render_preview
 from hydrostate.storage.packs import file_hash
 
 SURFACE = dict(soil_moisture="land", et_water="water", et_ice="snow_ice", et_land="land")
@@ -59,7 +62,29 @@ def load_model(config, checkpoint, pretrained, statistics, device):
         input_profile=PROFILE,
         inference_code_sha256=file_hash(__file__),
     )
+    if os.environ.get("HYDROSTATE_CODE_COMMIT"):
+        provenance["code_commit"] = os.environ["HYDROSTATE_CODE_COMMIT"]
     return model, provenance
+
+
+def predict_records(model, records, device):
+    """One inference batch with bounded, grouped device-to-host transfers."""
+    batch = default_collate(records)
+    data = model.data_preprocessor(dict(inputs=batch["inputs"], data_samples={}), training=False)
+    context = (
+        torch.autocast("cuda", dtype=torch.bfloat16)
+        if str(device).startswith("cuda")
+        else nullcontext()
+    )
+    with torch.inference_mode(), context:
+        outputs = model.predict(data["inputs"])
+    tasks = tuple(model.tasks)
+    values = torch.stack([torch.stack([o[t] for t in tasks]) for o in outputs]).float().cpu()
+    masks = ("prediction_valid", "soil_moisture_prediction_valid")
+    validity = torch.stack([torch.stack([o[t] for t in masks]) for o in outputs]).bool().cpu()
+    return [
+        dict(zip(tasks, values[i]), **dict(zip(masks, validity[i]))) for i in range(len(outputs))
+    ]
 
 
 class RegionalMosaic:
@@ -103,12 +128,14 @@ class RegionalMosaic:
                 raise ValueError(f"Nonfinite {task} on valid prediction support")
             weight = self.kernel * valid
             if task in SURFACE:
-                weight = weight * values[SURFACE[task]][h : h + core, h : h + core]
+                surface = values[SURFACE[task]][h : h + core, h : h + core]
+                weight = np.where(valid, weight * surface, 0)
             self.sums[task][region] += np.where(valid, value, 0) * weight
             self.weights[task][region] += weight
 
     def write(self, group, index, plan, min_land_fraction):
         grid, chunk = plan["grid"], 256
+        summary = dict(inside_pixels=0, coverage_closure_max=0.0, variables={})
         tr = Affine(30, 0, grid["left"], 0, -30, grid["top"])
         for y in range(0, self.shape[0], chunk):
             for x in range(0, self.shape[1], chunk):
@@ -136,13 +163,44 @@ class RegionalMosaic:
                     for t, c in SURFACE.items()
                     if t.startswith("et_")
                 )
-                for task, value in values.items():
+                for value in values.values():
                     value[~inside] = np.nan
+                check_fields(values, tolerance=0.01)
+                coverage = sum(values[t] for t in ("water", "snow_ice", "land"))
+                finite = np.isfinite(coverage)
+                if finite.any():
+                    summary["coverage_closure_max"] = max(
+                        summary["coverage_closure_max"],
+                        float(np.abs(coverage[finite] - 1).max()),
+                    )
+                summary["inside_pixels"] += int(inside.sum())
+                for task, value in values.items():
+                    selected = value[np.isfinite(value)]
+                    stat = summary["variables"].setdefault(
+                        task, dict(valid_pixels=0, sum=0.0, minimum=None, maximum=None)
+                    )
+                    if selected.size:
+                        stat["valid_pixels"] += int(selected.size)
+                        stat["sum"] += float(selected.sum(dtype="f8"))
+                        stat["minimum"] = (
+                            float(selected.min())
+                            if stat["minimum"] is None
+                            else min(stat["minimum"], float(selected.min()))
+                        )
+                        stat["maximum"] = (
+                            float(selected.max())
+                            if stat["maximum"] is None
+                            else max(stat["maximum"], float(selected.max()))
+                        )
                     group[task][(index, *region)] = value
                     group[task + "_valid"][(index, *region)] = np.isfinite(value).astype("u1")
         for arrays in (self.sums, self.weights):
             for value in arrays.values():
                 value.flush()
+        for stat in summary["variables"].values():
+            total = stat.pop("sum")
+            stat["mean"] = total / stat["valid_pixels"] if stat["valid_pixels"] else None
+        return summary
 
     def close(self):
         self.sums.clear()
@@ -150,13 +208,31 @@ class RegionalMosaic:
         shutil.rmtree(self.folder)
 
 
-def predict(root, model, provenance, *, dates=None, batch_size=2, workers=0, device="cuda"):
+def predict(
+    root,
+    model,
+    provenance,
+    *,
+    dates=None,
+    batch_size=2,
+    workers=0,
+    device="cuda",
+    pilot_dates=(),
+    progress_seconds=60,
+    display_surface_min=0.05,
+):
     root, plan = Path(root), load_plan(root)
     if batch_size < 1 or workers < 0 or not set(TASKS) <= set(model.tasks):
         raise ValueError("Invalid batch settings or missing retrieval tasks")
+    if progress_seconds <= 0 or not 0 <= display_surface_min <= 1:
+        raise ValueError("Invalid progress interval or display surface threshold")
     if dates and not set(dates) <= {p["start"] for p in plan["periods"]}:
         raise ValueError("Requested dates must be target start dates in the regional plan")
     periods = [p for p in plan["periods"] if not dates or p["start"] in dates]
+    if not set(pilot_dates) <= {p["start"] for p in periods}:
+        raise ValueError("Pilot dates must belong to the selected target periods")
+    priority = {date: i for i, date in enumerate(pilot_dates)}
+    periods.sort(key=lambda p: priority.get(p["start"], len(priority)))
     for period in periods:
         if not (root / "manifests" / (period["start"] + ".json")).exists():
             raise FileNotFoundError(f"Inputs not ready for {period['start']}")
@@ -225,9 +301,32 @@ def predict(root, model, provenance, *, dates=None, batch_size=2, workers=0, dev
                 units="seconds since 1970-01-01 00:00:00" if name == "time" else "m",
             )
         group["time"].attrs["bounds"] = "time_bounds"
+        progress_path = path.parent / f"{path.stem}_progress.json"
+        run_started = time.monotonic()
+
+        def progress(state, **details):
+            atomic_json(
+                progress_path,
+                dict(
+                    state=state,
+                    product=str(path),
+                    updated_utc=datetime.now(UTC).isoformat(),
+                    completed_dates=int(complete[:].sum()),
+                    planned_dates=shape[0],
+                    selected_dates=len(periods),
+                    batch_size=batch_size,
+                    workers=workers,
+                    elapsed_seconds=time.monotonic() - run_started,
+                    **details,
+                ),
+            )
+
+        progress("running")
         for period in periods:
             index = next(i for i, p in enumerate(plan["periods"]) if p["start"] == period["start"])
             if group["date_complete"][index]:
+                if period["start"] in pilot_dates:
+                    render_preview(path, index, display_surface_min=display_surface_min)
                 continue
             dataset = RegionalDataset(root, period["start"], tasks)
             started = time.monotonic()
@@ -245,31 +344,46 @@ def predict(root, model, provenance, *, dates=None, batch_size=2, workers=0, dev
                 tasks,
                 plan["config"]["core_size"],
             )
-            accepted = 0
+            accepted = processed = 0
+            last_report = started
+            progress("reading", target=period["start"], windows=len(dataset))
             try:
                 with torch.inference_mode():
                     for records in loader:
+                        processed += len(records)
                         records = [r for r in records if r["accepted"]]
-                        if not records:
-                            continue
-                        batch = default_collate(records)
-                        data = model.data_preprocessor(
-                            dict(inputs=batch["inputs"], data_samples={}), training=False
-                        )
-                        context = (
-                            torch.autocast("cuda", dtype=torch.bfloat16)
-                            if str(device).startswith("cuda")
-                            else nullcontext()
-                        )
-                        with context:
-                            outputs = model.predict(data["inputs"])
-                        for record, output in zip(records, outputs):
-                            row = dataset.rows[record["index"]]
-                            mosaic.add(row["row"], row["col"], output)
+                        if records:
+                            outputs = predict_records(model, records, device)
+                            for record, output in zip(records, outputs):
+                                row = dataset.rows[record["index"]]
+                                mosaic.add(row["row"], row["col"], output)
                         accepted += len(records)
+                        if time.monotonic() - last_report >= progress_seconds:
+                            rate = processed / (time.monotonic() - started)
+                            progress(
+                                "predicting",
+                                target=period["start"],
+                                windows=len(dataset),
+                                processed=processed,
+                                accepted=accepted,
+                                windows_per_second=rate,
+                            )
+                            LOG.info(
+                                "%s: %d/%d windows, %d accepted, %.2f windows/s",
+                                period["start"],
+                                processed,
+                                len(dataset),
+                                accepted,
+                                rate,
+                            )
+                            last_report = time.monotonic()
                 coupling = model.water_soil_coupling
-                mosaic.write(group, index, plan, coupling.min_land_fraction if coupling else 0.01)
-                group["date_complete"][index] = 1
+                progress("mosaicking", target=period["start"], accepted=accepted)
+                audit = mosaic.write(
+                    group, index, plan, coupling.min_land_fraction if coupling else 0.01
+                )
+                if not audit["variables"]["water"]["valid_pixels"]:
+                    raise ValueError(f"No valid regional predictions for {period['start']}")
                 atomic_json(
                     path.parent / f"{path.stem}_{period['start']}.json",
                     dict(
@@ -277,10 +391,19 @@ def predict(root, model, provenance, *, dates=None, batch_size=2, workers=0, dev
                         accepted=accepted,
                         target=period,
                         seconds=time.monotonic() - started,
+                        audit=audit,
                     ),
                 )
+                group["date_complete"][index] = 1
+                progress("date_complete", target=period["start"], accepted=accepted)
+                if period["start"] in pilot_dates:
+                    render_preview(path, index, display_surface_min=display_surface_min)
                 LOG.info("Predicted %s: %d/%d windows", period["start"], accepted, len(dataset))
+            except Exception as exc:
+                progress("failed", target=period["start"], error=str(exc))
+                raise
             finally:
                 mosaic.close()
         zarr.consolidate_metadata(str(path))
+        progress("complete" if complete[:].all() else "selected_dates_complete")
     return str(path)

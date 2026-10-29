@@ -41,7 +41,9 @@ def prepare_main():
             result = prepare_pixels(args.root)
         else:
             result = prepare_drive(
-                args.root, token=args.drive_token, retry_failed=args.retry_failed,
+                args.root,
+                token=args.drive_token,
+                retry_failed=args.retry_failed,
                 drain_only=args.drain,
             )
     else:
@@ -53,7 +55,7 @@ def prepare_main():
 
 
 def predict_main():
-    from hydrostate.inference.regional import load_model, predict
+    from hydrostate.inference.regional_runtime import run
 
     parser = argparse.ArgumentParser(description="Predict current seven-task regional inputs")
     parser.add_argument("--root", type=Path, required=True)
@@ -65,18 +67,13 @@ def predict_main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument(
+        "--batch-candidates", type=int, nargs="+", help="Measure CUDA batches first"
+    )
+    parser.add_argument("--pilot-dates", nargs="+", help="Predict and preview these dates first")
+    parser.add_argument("--run-dir", type=Path)
+    parser.add_argument("--progress-seconds", type=float, default=60)
+    parser.add_argument("--display-surface-min", type=float, default=0.05)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    model, provenance = load_model(
-        args.model_config, args.checkpoint, args.pretrained, args.statistics, args.device
-    )
-    result = predict(
-        args.root,
-        model,
-        provenance,
-        dates=args.dates,
-        batch_size=args.batch_size,
-        workers=args.workers,
-        device=args.device,
-    )
-    print(json.dumps(dict(product=result), indent=2))
+    print(json.dumps(run(args), indent=2))

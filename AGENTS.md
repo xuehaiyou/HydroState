@@ -111,6 +111,7 @@
 - WSL、A100、HPC 的代码同步以 Git/GitHub 提交为依据；运行记录绑定实际 commit、配置和数据版本。
   运行中的冻结代码、未提交修改和已发布数据需分别识别，不以覆盖文件的方式制造版本一致。
 - GPU 训练默认单卡；HPC 每 GPU 最多 6 CPU。debug 队列可用于短测试，先核实实际队列限制。
+  FossFS 数据上的 GPU 推理必须使用 `c_foss_gpu`；不能假定其他 GPU 分区可挂载该目录。
   batch size 根据目标 GPU 的吞吐、显存余量与有效 batch 实测选择，不以填满显存为目标。
 - 数据、模型、缓存和运行产物放到对应存储目录，代码仓库保持轻量。
   A100 约定代码在 `/home/zxiao/HydroState`，数据/模型在 `/mnt/storage/xiaozhen/HydroState`；

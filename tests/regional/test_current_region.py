@@ -226,7 +226,10 @@ def test_current_model_checkpoint_to_regional_product(monkeypatch, tmp_path):
         model, provenance = load_model(
             tmp_path / "model.py", checkpoint, tmp_path, tmp_path / "stats.json", "cpu"
         )
-        path = predict(tmp_path / "inputs", model, provenance, device="cpu", batch_size=1)
+        date = plan["periods"][0]["start"]
+        path = predict(
+            tmp_path / "inputs", model, provenance, device="cpu", batch_size=1, pilot_dates=[date]
+        )
         group = zarr.open_group(path, mode="r")
         assert group["date_complete"][:].tolist() == [1]
         valid = group["et_total_valid"][0].astype(bool)
@@ -242,7 +245,18 @@ def test_current_model_checkpoint_to_regional_product(monkeypatch, tmp_path):
             ),
             rtol=1e-6,
         )
+        product = Path(path)
+        assert (product.parent / f"{product.stem}_previews" / f"{date}.png").is_file()
+        audit_path = product.parent / f"{product.stem}_{date}.json"
+        audit = json.loads(audit_path.read_text())
+        assert audit["audit"]["coverage_closure_max"] < 1e-6
+        assert audit["audit"]["variables"]["et_total"]["valid_pixels"] == int(valid.sum())
+        mtime = audit_path.stat().st_mtime_ns
         assert predict(tmp_path / "inputs", model, provenance, device="cpu") == path
+        assert audit_path.stat().st_mtime_ns == mtime
+        progress = json.loads((product.parent / f"{product.stem}_progress.json").read_text())
+        assert progress["state"] == "complete"
+        assert progress["completed_dates"] == 1
     finally:
         torch.set_num_threads(threads)
 
@@ -310,9 +324,9 @@ def test_adjacent_targets_share_slots_and_keep_s1_orbit(monkeypatch, tmp_path):
         ]
 
     monkeypatch.setattr(exports, "catalog", catalog)
-    planned = list(exports.jobs(
-        None, tmp_path, plan, max_bytes=cfg["drive"]["max_export_gib"] * 1024**3
-    ))
+    planned = list(
+        exports.jobs(None, tmp_path, plan, max_bytes=cfg["drive"]["max_export_gib"] * 1024**3)
+    )
     products = [p for j in planned for p in j["products"]]
     assert len(products) == 6 * len(INPUT_GROUPS)
     assert len({p["id"] for p in products}) == len(products)
@@ -385,6 +399,7 @@ def test_queue_recovers_submitted_task_without_duplicate(monkeypatch, tmp_path, 
 
     monkeypatch.setattr(pipeline, "initialize", lambda *a: None)
     monkeypatch.setattr(pipeline, "CompositeDriveTransport", Transport)
+
     def jobs(*a, **kw):
         assert not drain, "Draining must not plan new exports"
         return iter(())

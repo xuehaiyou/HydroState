@@ -142,6 +142,49 @@ Drive 默认最多 2 个在途逻辑导出、2 个下载入库线程，加 1 个
 
 ## 区域输出与验证含义
 
+### 单卡 HPC 推理
+
+FossFS 输入必须提交到 `c_foss_gpu`。`scripts/slurm/predict_region.sh` 固定单 GPU、
+6 CPU、64 GiB 内存和最长 7 天；先在登录节点确认当前 account/QoS 限制。
+代码经 Git 同步后冻结发布，设置以下运行环境，再提交一次并立即记录 job ID：
+
+```bash
+export HYDROSTATE_CODE_ROOT=/path/to/frozen/release
+export HYDROSTATE_CODE_COMMIT='full-git-commit'
+export HYDROSTATE_SOURCE_HASHES=/path/to/source.sha256
+export HYDROSTATE_REGION_MODEL_CONFIG=/path/to/training/expanded_config.py
+export HYDROSTATE_CHECKPOINT=/path/to/training/best_checkpoint.pth
+export HYDROSTATE_MODEL_PATH=/path/to/OlmoEarth-v1_2-Base
+export HYDROSTATE_TARGET_STATS=/path/to/training/provenance/target_stats.json
+export HYDROSTATE_RUN_DIR="$HYDROSTATE_REGION_ROOT/runs/<unique-run-name>"
+mkdir -p "$HYDROSTATE_RUN_DIR"
+sbatch --parsable --output="$HYDROSTATE_RUN_DIR/slurm-%j.out" \
+  --error="$HYDROSTATE_RUN_DIR/slurm-%j.err" \
+  "$HYDROSTATE_CODE_ROOT/scripts/slurm/predict_region.sh" \
+  --pilot-dates 2017-04-07 2020-07-11 2022-11-01
+```
+
+启动检查包括全部目标日期的清单身份、三个代表日期各八个分散窗口的实际读取、
+checkpoint 严格加载，以及真实 GPU 上 batch 2/4/8/16 的前向测试。
+选取保留至少 15% 显存余量、达到实测最高吞吐 95% 的最小 batch。
+该测试复用已读取输入，包含预处理和传回 CPU 的耗时，**不包含磁盘读取和拼接**；
+正式运行的每分钟 `windows_per_second` 才是流水线吞吐，首个完整日期后再估算总工期。
+这不是遍历全部输入数组的审计；未抽中的产品在正式读取时检查成功标记并读取。
+
+`--pilot-dates` 优先完成并画出这些日期，之后继续所有日期；它不等同于 `--dates`
+只选择部分日期。预览包含七个变量及总 ET，英文 PNG。SM/ET 表面比例低于 5%
+默认只在预览中隐藏（`--display-surface-min`），原始条件率和总 ET 不受显示门槛影响。
+
+`runs/<name>/inference.json` 保存模型、输入、commit、状态和最终产品路径，
+`startup.json` 保存读取及显存/吞吐测试。`products/<identity>_progress.json` 每分钟更新；
+`products/<identity>_<date>.json` 记录单日期耗时、有效面积、物理范围和覆盖闭合误差。
+只有全部数组写入且检查通过后才发布该日期的 `date_complete`，BF16 覆盖闭合允许
+0.01 的数值误差并记录实际误差。预览位于 `products/<identity>_previews/`。
+续跑使用相同冻结代码、输入、配置、统计量和 checkpoint，完成日期直接跳过；
+中断日期从头重算。重提之前先核对队列，禁止两个作业同时写同一个产品。
+
+### 产品定义
+
 输出七个变量、派生 `et_total`、各变量有效掩膜、`time_bounds`、`x/y/time` 坐标和
 `date_complete`。只有 `date_complete == 1` 的日期可用。Zarr 带 CRS、30 m 仿射变换、
 checkpoint/统计量哈希和模型配置。可用 `xarray.open_zarr(path, mask_and_scale=False)`

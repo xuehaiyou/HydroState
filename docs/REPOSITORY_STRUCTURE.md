@@ -29,7 +29,7 @@ scripts/
   run_gee_sampling.sh            唯一本地采样包装入口
   run_gee_collection_io.sh       HPC IO 环境检查后调用同一采样入口
   train.sh                      单 GPU 训练运行器
-  slurm/                        当前准备/训练资源声明
+  slurm/                        当前准备/训练/区域推理资源声明
   legacy/                       历史调度和采样命令
 tools/                         薄 CLI；data/ 为当前准备，legacy/ 为历史命令
 docs/                          当前文档；history/ 为历史记录
@@ -75,6 +75,9 @@ tests/                         共享模块及历史回归；retrieval/ 为当�
 `storage/regional.py` 校验入库，`datasets/regional.py` 读取五槽，`inference/regional.py`
 加载当前 checkpoint 并拼接七任务及总 ET。原有四槽/单景文件保留原位供已有实验追溯，
 正式流程不调用其选片或缓存实现，也不依赖 LegacySchema。
+`inference/regional_runtime.py` 负责输入抽查、GPU batch 实测和运行回执；
+`regional_reports.py` 负责物理范围检查和仅用于显示的 PNG 掩膜。
+`scripts/slurm/predict_region.sh` 是单卡 FossFS 推理入口，不承担数据或拼接逻辑。
 
 新增业务逻辑放入 `hydrostate/`，`tools/` 只负责参数和调用；
 Shell 负责资源、环境和进程启动，数据检查统一调用 Python 服务。
