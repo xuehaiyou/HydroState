@@ -82,22 +82,25 @@ def timed_batch(model, records, device):
 def batch_probe(model, records, device, sizes, repeats):
     results = []
     for size in sizes:
-        selected = [records[i % len(records)] for i in range(size)]
+        batches = [records[i : i + size] for i in range(0, len(records), size)]
         gc.collect()
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats(device)
         try:
-            stages = timed_batch(model, selected, device)
+            stages = timed_batch(model, batches[0], device)
             torch.cuda.synchronize(device)
             clock = time.perf_counter()
             for _ in range(repeats):
-                predict_records(model, selected, device)
+                for batch in batches:
+                    predict_records(model, batch, device)
             torch.cuda.synchronize(device)
             seconds = time.perf_counter() - clock
             result = dict(
                 batch=size,
                 state="ok",
-                windows_per_second=size * repeats / seconds,
+                windows_per_second=len(records) * repeats / seconds,
+                evaluated_windows=len(records) * repeats,
+                maximum_batch=min(size, len(records)),
                 seconds=seconds,
                 peak_reserved_bytes=torch.cuda.max_memory_reserved(device),
                 peak_allocated_bytes=torch.cuda.max_memory_allocated(device),
