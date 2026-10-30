@@ -125,7 +125,6 @@ def initialize(root, config, *, ee=None):
         or (40 - core) % 2
         or stride <= 0
         or stride > core
-        or core % stride
         or stride % 2
         or size < 120
         or size % 6

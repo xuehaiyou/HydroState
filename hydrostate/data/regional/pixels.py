@@ -142,9 +142,14 @@ def receive_reused(ee, root, plan, job, settings, reuse):
     )
 
 
-def prepare(root, *, reuse_roots=None):
+def prepare(root, *, reuse_roots=None, dates=None):
     root = Path(root)
     plan = load_plan(root)
+    selected = {p["start"] for p in plan["periods"]}
+    if dates is not None:
+        if not dates or not set(dates) <= selected:
+            raise ValueError("Requested preparation dates must belong to the frozen plan")
+        selected = set(dates)
     settings = json.loads((root / "pixels.json").read_text())
     validate_settings(settings)
     with locked(root / "prepare.lock", blocking=False):
@@ -175,6 +180,7 @@ def prepare(root, *, reuse_roots=None):
             settings=settings, requests=0, network_requests=0, products=0, empty_source_products=0,
             response_bytes=0, valid_pixels=0,
             reused_pixels=0, reused_products=0,
+            selected_dates=sorted(selected),
         )
         receipts = root / "logs" / "pixels_receipts.jsonl"
         receipts.parent.mkdir(exist_ok=True)
@@ -182,7 +188,8 @@ def prepare(root, *, reuse_roots=None):
         def produce():
             try:
                 for job in jobs(
-                    ee, root, plan, max_bytes=settings["max_request_mib"] * 1024**2
+                    ee, root, plan, max_bytes=settings["max_request_mib"] * 1024**2,
+                    dates=selected,
                 ):
                     while not stop.is_set():
                         try:
@@ -260,9 +267,10 @@ def prepare(root, *, reuse_roots=None):
                     last_report = time.monotonic()
             publish_ready(root, plan, known_ready)
             result = status(root)
-            if result["ready_dates"] != result["planned_dates"]:
+            if any(not (root / "manifests" / (day + ".json")).exists() for day in selected):
                 raise RuntimeError(f"Incomplete regional inputs: {result}")
-            atomic_json(root / "ready.json", result)
+            if result["ready_dates"] == result["planned_dates"]:
+                atomic_json(root / "ready.json", result)
             report("complete", ready_dates=result["ready_dates"])
             return result
         except BaseException as error:

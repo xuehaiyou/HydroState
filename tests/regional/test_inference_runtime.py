@@ -44,6 +44,28 @@ def test_offset_overlap_is_cosine_weighted_and_missing_neighbor_cannot_poison(tm
     mosaic.close()
 
 
+def test_two_pixel_overlap_blends_without_gaps(tmp_path):
+    mosaic = RegionalMosaic(tmp_path, (40, 74), ("water",), 36)
+    try:
+        for col, value in ((0, 0.2), (102, 0.8)):
+            output = dict(
+                water=torch.full((1, 40, 40), value),
+                prediction_valid=torch.ones((1, 40, 40), dtype=torch.bool),
+            )
+            # Discarded border must not contaminate retained predictions.
+            output["water"][:, :2] = float("nan")
+            mosaic.add(0, col, output)
+        weights = mosaic.weights["water"][20, 2:72]
+        assert (weights > 0).all()
+        values = mosaic.sums["water"][20, 2:72] / weights
+        np.testing.assert_allclose(values[:34], 0.2)
+        np.testing.assert_allclose(values[36:], 0.8)
+        assert 0.2 < values[34] < values[35] < 0.8
+        assert not mosaic.weights["water"][:2].any()
+    finally:
+        mosaic.close()
+
+
 def test_physical_audit_and_display_mask_are_distinct():
     fields = {
         "water": np.array([0.01, 0.5]),

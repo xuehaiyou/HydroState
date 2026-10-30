@@ -53,7 +53,7 @@ def catalog(ee, root, plan, sensor, start, end):
     ]
 
 
-def jobs(ee, root, plan, *, max_bytes, reserved=()):
+def jobs(ee, root, plan, *, max_bytes, reserved=(), dates=None):
     """Yield bounded jobs lazily; each reusable product is scheduled only once."""
     root = Path(root)
     folder = root / "targets"
@@ -63,6 +63,8 @@ def jobs(ee, root, plan, *, max_bytes, reserved=()):
     footprints = [transform(to_geo, window_box(plan, r["row"], r["col"])) for r in windows]
     seen = set(reserved)
     for period in plan["periods"]:
+        if dates is not None and period["start"] not in dates:
+            continue
         if (root / "manifests" / (period["start"] + ".json")).exists():
             continue
         scenes = {

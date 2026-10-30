@@ -38,7 +38,7 @@ conda activate "${HYDROSTATE_CONDA_ENV:-hydrostate}"
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1 BLOSC_NTHREADS=1 PYTHONUNBUFFERED=1
-exec python tools/predict_region.py \
+exec srun --gpu-bind=single:1 python tools/predict_region.py \
     --root "$HYDROSTATE_REGION_ROOT" \
     --model-config "$HYDROSTATE_REGION_MODEL_CONFIG" \
     --checkpoint "$HYDROSTATE_CHECKPOINT" \

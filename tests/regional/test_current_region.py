@@ -23,6 +23,33 @@ def config():
     return json.loads(Path("configs/inference/poyang_pilot.json").read_text())
 
 
+@pytest.mark.parametrize("extent", [0, 0.03])
+def test_two_pixel_overlap_covers_aoi_and_aligns_native_grids(tmp_path, extent):
+    from rasterio.features import geometry_mask
+
+    cfg = config()
+    cfg.update(core_size=36, stride=34)
+    cfg["aoi"]["bbox"][2] += extent
+    cfg["aoi"]["bbox"][3] += extent
+    plan = initialize(tmp_path, cfg)
+    grid = plan["grid"]
+    shape = (grid["height"] // 3, grid["width"] // 3)
+    counts = np.zeros(shape, dtype="u1")
+    for row in pd.read_parquet(tmp_path / "windows.parquet").to_dict("records"):
+        # Even 10 m offsets align with every native 10/15/20/30/60 m grid.
+        assert row["row"] % 6 == row["col"] % 6 == 0
+        y, x = row["row"] // 3 + 2, row["col"] // 3 + 2
+        assert y + 36 <= shape[0] and x + 36 <= shape[1]
+        counts[y : y + 36, x : x + 36] += 1
+    aoi = geometry_mask(
+        [plan["geometry"]], shape,
+        Affine(30, 0, grid["left"], 0, -30, grid["top"]), invert=True,
+    )
+    assert aoi.any()
+    assert (counts[aoi] > 0).all()
+    assert counts.max() == (4 if extent else 1)
+
+
 def populate(root, *, cross_blocks=False, empty=False):
     cfg = config()
     if cross_blocks:

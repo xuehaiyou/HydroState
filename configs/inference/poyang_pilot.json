@@ -13,8 +13,8 @@
   "start": "2020-07-11",
   "end": "2020-07-12",
   "block_size": 120,
-  "core_size": 32,
-  "stride": 16,
+  "core_size": 36,
+  "stride": 34,
   "min_active_slots": 2,
   "min_input_fraction": 0.5,
   "pixels": {

@@ -130,3 +130,30 @@ def test_request_budget_rejected_before_fetch_or_commit(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="byte budget"):
         pixels.receive(None, tmp_path, plan, job, config()["pixels"])
     assert not (tmp_path / "inputs").exists()
+
+
+def test_selected_dates_preserve_plan_and_do_not_publish_full_readiness(monkeypatch, tmp_path):
+    cfg = config()
+    cfg["end"] = "2020-08-01"
+    plan = initialize(tmp_path, cfg)
+    frozen = (tmp_path / "plan.json").read_bytes()
+    first = plan["periods"][0]
+    assert len(plan["periods"]) > 1
+    monkeypatch.setattr(pixels, "initialize", lambda *a: None)
+
+    def jobs(ee, root, bound_plan, **kwargs):
+        assert kwargs["dates"] == {first["start"]}
+        assert bound_plan == plan
+        (root / "targets").mkdir(exist_ok=True)
+        atomic_json(root / "targets" / (first["start"] + ".json"), dict(
+            plan=plan["identity"], period=first, products=[],
+        ))
+        return iter(())
+
+    monkeypatch.setattr(pixels, "jobs", jobs)
+    result = pixels.prepare(tmp_path, dates=[first["start"]])
+    assert result["ready_dates"] == 1
+    assert not (tmp_path / "ready.json").exists()
+    assert (tmp_path / "plan.json").read_bytes() == frozen
+    with pytest.raises(ValueError, match="dates"):
+        pixels.prepare(tmp_path, dates=["1900-01-01"])
