@@ -2,10 +2,13 @@
 
 import copy
 import json
+from functools import cache
 from pathlib import Path
 
 import pandas as pd
+from affine import Affine
 from pyproj import Transformer
+from rasterio.features import geometry_mask
 from shapely import STRtree
 from shapely.geometry import shape
 from shapely.ops import transform
@@ -26,7 +29,8 @@ def retile(root, source_root, dates, *, core=36, stride=34):
     """Keep the source AOI/grid and recompute each new window's S1 orbit from metadata.
 
     The last row/column is anchored to the source boundary when necessary; only
-    that outermost overlap can exceed the requested overlap. No network calls.
+    that outermost overlap can exceed the requested overlap. Where a new context
+    lacks cached inputs, existing source windows fill coverage gaps. No network calls.
     """
     root, source_root = Path(root), Path(source_root).resolve()
     if root.resolve() == source_root or not dates:
@@ -43,6 +47,7 @@ def retile(root, source_root, dates, *, core=36, stride=34):
     plan["config"].update(core_size=core, stride=stride)
     plan["input_source"] = dict(
         root=str(source_root), identity=source["identity"], mode="direct_arrays",
+        window_policy="regular_then_supported_source_windows_v1",
     )
     plan["identity"] = fingerprint(plan)
     geometry = shape(plan["geometry"])
@@ -58,6 +63,11 @@ def retile(root, source_root, dates, *, core=36, stride=34):
                if geometry.intersects(window_box(plan, y, x).buffer(-(40 - core) * 15))]
     project = Transformer.from_crs(plan["grid"]["crs"], 4326, always_xy=True).transform
     footprints = [transform(project, window_box(plan, r["row"], r["col"])) for r in windows]
+    grid = plan["grid"]
+    aoi = geometry_mask(
+        [plan["geometry"]], (grid["height"] // 3, grid["width"] // 3),
+        Affine(30, 0, grid["left"], 0, -30, grid["top"]), invert=True,
+    )
     root.mkdir(parents=True, exist_ok=True)
     with locked(root / "prepare.lock", blocking=False):
         if (root / "plan.json").exists() and load_plan(root) != plan:
@@ -84,28 +94,51 @@ def retile(root, source_root, dates, *, core=36, stride=34):
             scenes = catalog(None, source_root, source, "s1", period["slots"][0][0],
                              period["slots"][-1][1])
             tree = STRtree([shape(s["geometry"]) for s in scenes])
-            rows, demands, seen = [], {}, set()
+            rows, demands = [], {}
+            remaining = aoi.copy()
+
+            @cache
+            def block_products(block, orbit):
+                return [product(source, name, slot, block,
+                                orbit if spec.sensor == "s1" else None)
+                        for name, spec in INPUT_GROUPS.items() for slot in period["slots"]]
+
+            def region(window):
+                y = window["row"] // 3 + (40 - core) // 2
+                x = window["col"] // 3 + (40 - core) // 2
+                return slice(y, y + core), slice(x, x + core)
+
+            def add(window, orbit):
+                items = [p for block in blocks_for_window(plan, window["row"], window["col"])
+                         for p in block_products(block, orbit)]
+                if any(p["id"] not in available for p in items):
+                    return False
+                rows.append(dict(row=window["row"], col=window["col"], orbit=json.dumps(orbit)))
+                demands.update((p["id"], p) for p in items)
+                remaining[region(window)] = False
+                return True
+
             for window, footprint in zip(windows, footprints):
                 indices = tree.query(footprint, predicate="intersects")
                 orbit = radar_orbit([scenes[int(i)]["properties"] for i in indices])
-                rows.append(dict(window, orbit=json.dumps(orbit)))
-                for block in blocks_for_window(plan, window["row"], window["col"]):
-                    for name, spec in INPUT_GROUPS.items():
-                        chosen = orbit if spec.sensor == "s1" else None
-                        key = (name, block, chosen)
-                        if key in seen:
-                            continue
-                        seen.add(key)
-                        for slot in period["slots"]:
-                            item = product(source, name, slot, block, chosen)
-                            demands[item["id"]] = item
-            missing = demands.keys() - available
-            if missing:
-                raise FileNotFoundError(
-                    f"New windows need {len(missing)} products outside source readiness"
-                )
-            record = dict(plan=plan["identity"], period=period, products=list(demands.values()))
+                add(window, orbit)
+            selected_regular = len(rows)
+            if remaining.any():
+                originals = pd.read_parquet(source_root / "targets" / f"{day}.parquet")
+                for window in originals.to_dict("records"):
+                    if remaining[region(window)].any():
+                        orbit = json.loads(window["orbit"])
+                        add(window, tuple(orbit) if orbit is not None else None)
+            if remaining.any():
+                raise ValueError(f"Prepared source cannot cover {int(remaining.sum())} AOI pixels")
+            record = dict(
+                plan=plan["identity"], period=period, products=list(demands.values()),
+                retile=dict(regular_candidates=len(windows), selected_regular=selected_regular,
+                            source_windows_added=len(rows) - selected_regular, uncovered_pixels=0),
+            )
             pd.DataFrame(rows).to_parquet(root / "targets" / f"{day}.parquet", index=False)
             atomic_json(root / "targets" / f"{day}.json", record)
             atomic_json(root / "manifests" / f"{day}.json", record)
-    return dict(root=str(root), plan=plan["identity"], windows=len(windows), dates=dates)
+    return dict(root=str(root), plan=plan["identity"], windows=len(windows), dates=dates,
+                window_counts={day: len(pd.read_parquet(root / "targets" / f"{day}.parquet"))
+                               for day in dates})

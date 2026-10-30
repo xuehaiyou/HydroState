@@ -121,7 +121,10 @@ def test_native_cross_block_reader_and_missing_sensor_support(tmp_path):
         status(tmp_path, audit=True)
 
 
-def test_offline_retiling_reads_old_arrays_without_changing_source(monkeypatch, tmp_path):
+@pytest.mark.parametrize("catalog_orbit", [25, 26])
+def test_offline_retiling_reads_old_arrays_without_changing_source(
+    monkeypatch, tmp_path, catalog_orbit,
+):
     from shapely.geometry import box, mapping
 
     from hydrostate.data.regional import retiling
@@ -132,7 +135,7 @@ def test_offline_retiling_reads_old_arrays_without_changing_source(monkeypatch, 
     day = plan["periods"][0]["start"]
     monkeypatch.setattr(retiling, "catalog", lambda *a: [dict(
         geometry=mapping(box(-180, -90, 180, 90)),
-        properties=dict(relativeOrbitNumber_start=25, orbitProperties_pass="ASCENDING"),
+        properties=dict(relativeOrbitNumber_start=catalog_orbit, orbitProperties_pass="ASCENDING"),
     )])
     result = retiling.retile(target, source, [day])
     assert result["windows"] > 1
@@ -146,6 +149,11 @@ def test_offline_retiling_reads_old_arrays_without_changing_source(monkeypatch, 
             np.testing.assert_array_equal(raw[key], baseline[key])
     assert not (target / "inputs").exists()
     assert ds.input_root == source.resolve()
+    record = json.loads((target / "manifests" / f"{day}.json").read_text())
+    assert record["retile"]["uncovered_pixels"] == 0
+    if catalog_orbit == 26:
+        assert record["retile"]["selected_regular"] == 0
+        assert record["retile"]["source_windows_added"] == len(ds)
     for item in json.loads((target / "manifests" / f"{day}.json").read_text())["products"]:
         assert (product_path(source, item) / "_SUCCESS.json").exists()
     assert status(target, audit=True)["ready_dates"] == 1
