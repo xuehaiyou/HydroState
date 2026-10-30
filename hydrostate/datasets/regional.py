@@ -8,7 +8,13 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from hydrostate.data.regional.plan import blocks_for_window, epoch, load_plan, product
+from hydrostate.data.regional.plan import (
+    blocks_for_window,
+    epoch,
+    input_storage,
+    load_plan,
+    product,
+)
 from hydrostate.data.retrieval.alignment import align_inputs, sensor_masks
 from hydrostate.data.retrieval.contract import INPUT_GROUPS, SENSORS, TASKS, RetrievalSchema
 from hydrostate.datasets.retrieval_dataset import as_tensors
@@ -21,6 +27,7 @@ class RegionalDataset(Dataset):
         if cache_mib < 0:
             raise ValueError("Regional reader cache budget must be nonnegative")
         self.root, self.plan = Path(root), load_plan(root)
+        self.input_root, self.input_plan = input_storage(self.root, self.plan)
         path = self.root / "manifests" / (target + ".json")
         record = json.loads(path.read_text())
         if record["plan"] != self.plan["identity"]:
@@ -59,13 +66,13 @@ class RegionalDataset(Dataset):
             for slot, bounds in enumerate(self.period["slots"]):
                 for block in blocks_for_window(self.plan, row["row"], row["col"]):
                     item = product(
-                        self.plan, name, bounds, block, orbit if spec.sensor == "s1" else None
+                        self.input_plan, name, bounds, block, orbit if spec.sensor == "s1" else None
                     )
                     if item["id"] not in self.checked:
-                        if not ready(self.root, item):
+                        if not ready(self.input_root, item):
                             raise FileNotFoundError(f"Missing regional product: {item['id']}")
                         self.checked.add(item["id"])
-                    path = product_path(self.root, item)
+                    path = product_path(self.input_root, item)
                     by, bx = block[0] * size, block[1] * size
                     y0, x0 = max(row["row"], by), max(row["col"], bx)
                     y1 = min(row["row"] + 120, by + size)

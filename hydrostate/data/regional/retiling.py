@@ -1,4 +1,4 @@
-"""Retile prepared inputs offline, linking immutable native arrays without copying."""
+"""Retile prepared inputs offline, referencing immutable native arrays without copying."""
 
 import copy
 import json
@@ -13,7 +13,6 @@ from shapely.ops import transform
 from hydrostate.data.gee.contracts import atomic_json, fingerprint, locked
 from hydrostate.data.regional.exports import catalog
 from hydrostate.data.regional.plan import (
-    block_grid,
     blocks_for_window,
     load_plan,
     product,
@@ -21,7 +20,6 @@ from hydrostate.data.regional.plan import (
 )
 from hydrostate.data.retrieval.composites import radar_orbit
 from hydrostate.data.retrieval.contract import INPUT_GROUPS
-from hydrostate.storage.regional import product_path, ready
 
 
 def retile(root, source_root, dates, *, core=36, stride=34):
@@ -36,13 +34,15 @@ def retile(root, source_root, dates, *, core=36, stride=34):
     if not 2 <= core <= 40 or core % 2 or not 0 < stride <= core or stride % 2:
         raise ValueError("Retained core and stride must be even and fit the 40-pixel output")
     source = load_plan(source_root)
+    if source.get("input_source"):
+        raise ValueError("Retile from the original prepared input root, not another retiled view")
     if not set(dates) <= {p["start"] for p in source["periods"]}:
         raise ValueError("Dates must belong to the source plan")
     plan = copy.deepcopy(source)
     plan.pop("identity")
     plan["config"].update(core_size=core, stride=stride)
     plan["input_source"] = dict(
-        root=str(source_root), identity=source["identity"], mode="linked_arrays",
+        root=str(source_root), identity=source["identity"], mode="direct_arrays",
     )
     plan["identity"] = fingerprint(plan)
     geometry = shape(plan["geometry"])
@@ -80,10 +80,11 @@ def retile(root, source_root, dates, *, core=36, stride=34):
             source_manifest = json.loads((source_root / "manifests" / f"{day}.json").read_text())
             if source_manifest["plan"] != source["identity"]:
                 raise ValueError("Source manifest identity mismatch")
+            available = {p["id"] for p in source_manifest["products"]}
             scenes = catalog(None, source_root, source, "s1", period["slots"][0][0],
                              period["slots"][-1][1])
             tree = STRtree([shape(s["geometry"]) for s in scenes])
-            rows, demands = [], {}
+            rows, demands, seen = [], {}, set()
             for window, footprint in zip(windows, footprints):
                 indices = tree.query(footprint, predicate="intersects")
                 orbit = radar_orbit([scenes[int(i)]["properties"] for i in indices])
@@ -91,31 +92,18 @@ def retile(root, source_root, dates, *, core=36, stride=34):
                 for block in blocks_for_window(plan, window["row"], window["col"]):
                     for name, spec in INPUT_GROUPS.items():
                         chosen = orbit if spec.sensor == "s1" else None
+                        key = (name, block, chosen)
+                        if key in seen:
+                            continue
+                        seen.add(key)
                         for slot in period["slots"]:
-                            item = product(plan, name, slot, block, chosen)
+                            item = product(source, name, slot, block, chosen)
                             demands[item["id"]] = item
-            for item in demands.values():
-                if ready(root, item):
-                    continue
-                old = product(source, item["group"], item["slot"], item["block"], item["orbit"])
-                if not ready(source_root, old):
-                    raise FileNotFoundError(f"New window needs an uncached product: {old['id']}")
-                origin, destination = product_path(source_root, old), product_path(root, item)
-                destination.mkdir(parents=True, exist_ok=True)
-                atomic_json(destination / ".zgroup", dict(zarr_format=2))
-                atomic_json(destination / ".zattrs", dict(
-                    identity=item, input_contract=plan["input_contract"],
-                    grid=block_grid(plan, item["block"], INPUT_GROUPS[item["group"]].resolution),
-                ))
-                for field in ("values", "valid", "quality"):
-                    link = destination / field
-                    if not link.is_symlink():
-                        link.symlink_to(origin / field, target_is_directory=True)
-                    if link.resolve() != (origin / field).resolve() or not link.exists():
-                        raise ValueError("Invalid native array link")
-                atomic_json(destination / "_REUSE.json", dict(source_root=str(source_root),
-                            product=old, mode="linked_arrays"))
-                atomic_json(destination / "_SUCCESS.json", item)
+            missing = demands.keys() - available
+            if missing:
+                raise FileNotFoundError(
+                    f"New windows need {len(missing)} products outside source readiness"
+                )
             record = dict(plan=plan["identity"], period=period, products=list(demands.values()))
             pd.DataFrame(rows).to_parquet(root / "targets" / f"{day}.parquet", index=False)
             atomic_json(root / "targets" / f"{day}.json", record)

@@ -145,6 +145,8 @@ def receive_reused(ee, root, plan, job, settings, reuse):
 def prepare(root, *, reuse_roots=None, dates=None):
     root = Path(root)
     plan = load_plan(root)
+    if plan.get("input_source", {}).get("mode") == "direct_arrays":
+        raise ValueError("Direct input views are read-only; use retile to add ready dates")
     selected = {p["start"] for p in plan["periods"]}
     if dates is not None:
         if not dates or not set(dates) <= selected:

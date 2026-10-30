@@ -14,7 +14,7 @@ from hydrostate.data.gee.client import initialize
 from hydrostate.data.gee.contracts import atomic_json, locked
 from hydrostate.data.gee.state import ExportState
 from hydrostate.data.regional.exports import CompositeDriveTransport, jobs
-from hydrostate.data.regional.plan import load_plan
+from hydrostate.data.regional.plan import input_storage, load_plan
 from hydrostate.storage.regional import ingest, ready
 
 LOG = logging.getLogger(__name__)
@@ -133,10 +133,11 @@ def status(root, *, audit=False):
 
         from hydrostate.storage.regional import product_path
 
+        storage_root, _ = input_storage(root, plan)
         for item in products.values():
-            if not ready(root, item):
+            if not ready(storage_root, item):
                 raise ValueError(f"Missing product: {item['id']}")
-            group = zarr.open_group(str(product_path(root, item)), mode="r")
+            group = zarr.open_group(str(product_path(storage_root, item)), mode="r")
             valid = group["valid"][:].astype(bool)
             if not np.isfinite(group["values"][:]).all() or not np.array_equal(
                 valid[0], group["quality"][0] > 0
@@ -154,6 +155,8 @@ def status(root, *, audit=False):
 def prepare(root, *, token=None, retry_failed=False, drain_only=False):
     root = Path(root)
     plan = load_plan(root)
+    if plan.get("input_source", {}).get("mode") == "direct_arrays":
+        raise ValueError("Direct input views are read-only; use retile to add ready dates")
     settings = json.loads((root / "drive.json").read_text())
     validate_settings(settings)
     ee = initialize(plan["config"]["project"])

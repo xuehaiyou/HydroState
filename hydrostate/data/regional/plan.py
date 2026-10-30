@@ -45,6 +45,23 @@ def window_box(plan, row, col):
     return box(x, y - 1200, x + 1200, y)
 
 
+def input_storage(root, plan):
+    """Resolve a frozen direct input reference once, before reading any windows."""
+    reference = plan.get("input_source", {})
+    if reference.get("mode") != "direct_arrays":
+        return Path(root), plan
+    source_root = Path(reference["root"])
+    source = load_plan(source_root)
+    if source["identity"] != reference["identity"] or any(
+        source[key] != plan[key] for key in (
+            "grid", "block_size", "normalization", "groups", "input_contract", "input_profile",
+            "periods",
+        )
+    ):
+        raise ValueError("Referenced input plan changed or has incompatible pixel semantics")
+    return source_root, source
+
+
 def blocks_for_window(plan, row, col):
     size = plan["block_size"]
     return [

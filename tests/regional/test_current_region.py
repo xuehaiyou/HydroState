@@ -121,7 +121,7 @@ def test_native_cross_block_reader_and_missing_sensor_support(tmp_path):
         status(tmp_path, audit=True)
 
 
-def test_offline_retiling_links_old_arrays_without_changing_source(monkeypatch, tmp_path):
+def test_offline_retiling_reads_old_arrays_without_changing_source(monkeypatch, tmp_path):
     from shapely.geometry import box, mapping
 
     from hydrostate.data.regional import retiling
@@ -144,11 +144,27 @@ def test_offline_retiling_links_old_arrays_without_changing_source(monkeypatch, 
         assert accepted
         for key in raw:
             np.testing.assert_array_equal(raw[key], baseline[key])
+    assert not (target / "inputs").exists()
+    assert ds.input_root == source.resolve()
     for item in json.loads((target / "manifests" / f"{day}.json").read_text())["products"]:
-        for field in ("values", "valid", "quality"):
-            assert (product_path(target, item) / field).is_symlink()
+        assert (product_path(source, item) / "_SUCCESS.json").exists()
     assert status(target, audit=True)["ready_dates"] == 1
     assert retiling.retile(target, source, [day]) == result
+    from hydrostate.data.regional import pipeline, pixels
+
+    for prepare in (pipeline.prepare, pixels.prepare):
+        with pytest.raises(ValueError, match="read-only"):
+            prepare(target)
+    # A ready view cannot silently read a mutated source plan.
+    from hydrostate.data.gee.contracts import fingerprint
+
+    changed = json.loads(frozen)
+    changed["grid"]["left"] += 60
+    changed.pop("identity")
+    changed["identity"] = fingerprint(changed)
+    atomic_json(source / "plan.json", changed)
+    with pytest.raises(ValueError, match="Referenced input plan"):
+        RegionalDataset(target, day)
 
 
 def test_empty_observations_are_complete_but_not_predictable(tmp_path):
