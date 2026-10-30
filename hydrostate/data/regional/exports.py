@@ -33,7 +33,11 @@ def catalog(ee, root, plan, sensor, start, end):
         grid["left"] + grid["width"] * 10,
         grid["top"],
     ]
-    area = ee.Geometry.Rectangle(bounds, grid["crs"], False)
+    def fetch(sensor, month, following):
+        if ee is None:
+            raise FileNotFoundError(f"Missing cached {sensor} catalog for {month}")
+        area = ee.Geometry.Rectangle(bounds, grid["crs"], False)
+        return scene_catalog(ee, sensor, area, str(month), str(following))
     month = date.fromisoformat(start).replace(day=1)
     rows = []
     while month < date.fromisoformat(end):
@@ -42,7 +46,7 @@ def catalog(ee, root, plan, sensor, start, end):
         rows.extend(
             cached_json(
                 Path(root) / "catalog" / f"{key}.json",
-                lambda: scene_catalog(ee, sensor, area, str(month), str(following)),
+                lambda: fetch(sensor, month, following),
             )
         )
         month = following

@@ -121,6 +121,36 @@ def test_native_cross_block_reader_and_missing_sensor_support(tmp_path):
         status(tmp_path, audit=True)
 
 
+def test_offline_retiling_links_old_arrays_without_changing_source(monkeypatch, tmp_path):
+    from shapely.geometry import box, mapping
+
+    from hydrostate.data.regional import retiling
+
+    source, target = tmp_path / "source", tmp_path / "retiled"
+    plan, _ = populate(source, cross_blocks=True)
+    frozen = (source / "plan.json").read_bytes()
+    day = plan["periods"][0]["start"]
+    monkeypatch.setattr(retiling, "catalog", lambda *a: [dict(
+        geometry=mapping(box(-180, -90, 180, 90)),
+        properties=dict(relativeOrbitNumber_start=25, orbitProperties_pass="ASCENDING"),
+    )])
+    result = retiling.retile(target, source, [day])
+    assert result["windows"] > 1
+    assert (source / "plan.json").read_bytes() == frozen
+    ds = RegionalDataset(target, day)
+    baseline, _ = RegionalDataset(source, day).native_inputs(0)
+    for index in range(len(ds)):
+        raw, accepted = ds.native_inputs(index)
+        assert accepted
+        for key in raw:
+            np.testing.assert_array_equal(raw[key], baseline[key])
+    for item in json.loads((target / "manifests" / f"{day}.json").read_text())["products"]:
+        for field in ("values", "valid", "quality"):
+            assert (product_path(target, item) / field).is_symlink()
+    assert status(target, audit=True)["ready_dates"] == 1
+    assert retiling.retile(target, source, [day]) == result
+
+
 def test_empty_observations_are_complete_but_not_predictable(tmp_path):
     plan, _ = populate(tmp_path, empty=True)
     ds = RegionalDataset(tmp_path, plan["periods"][0]["start"])

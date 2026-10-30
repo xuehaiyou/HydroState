@@ -140,6 +140,19 @@ python tools/prepare_region.py prepare --backend pixels --root "$HYDROSTATE_REGI
 只准备本批正式推理需要的日期可追加 `--dates 2017-04-07`，不改变冻结计划的完整时间范围；
 后续可选择其他日期续跑。部分日期完成不会发布全计划的 `ready.json`。
 
+只调整推理窗口时，优先直接引用已有输入，避免重新装配/下载像素：
+
+```bash
+python tools/prepare_region.py retile --root /path/to/new_inference_root \
+  --source-root /path/to/prepared_region --dates 2017-04-07 --core-size 36 --stride 34
+```
+
+该离线入口保留原 AOI、原生块网格、全部时间范围及数据定义，仅改变窗口和融合范围。
+它用已缓存 S1 场景元数据重新选择新窗口轨道，缺少元数据或对应输入就报错，不联网补采。
+新产品元数据独立，`values/valid/quality` 链接到源库，因此源库必须保留。
+最末一行/列按原数据边界对齐，只有这些边缘窗口可能多于两像素重叠，以免漏掉边界。
+后续用相同命令指定其他已就绪日期即可扩展推理索引。
+
 复用来源记录在 `reuse.json`，续跑自动沿用。核对输入契约、归一化、波段、时间槽、
 S1 轨道和原生网格对齐后，直接使用旧 Tiles 覆盖的新图块，无需重新请求影像。
 网格起点不同可以在本地整块装配，值、QA 和观测时间摘要原样保留，不重采样或二次归一化。

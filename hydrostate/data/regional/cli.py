@@ -13,21 +13,32 @@ def prepare_main():
     from hydrostate.data.regional.plan import initialize
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("plan", "prepare", "status", "audit"))
+    parser.add_argument("command", choices=("plan", "prepare", "retile", "status", "audit"))
     parser.add_argument("--root", required=True, type=Path)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--drive-token", type=Path)
     parser.add_argument("--retry-failed", action="store_true")
     parser.add_argument("--backend", choices=("pixels", "drive"), default="pixels")
-    parser.add_argument("--dates", nargs="+", help="Prepare selected target starts only (pixels)")
+    parser.add_argument("--dates", nargs="+", help="Prepare or retile selected target starts only")
+    parser.add_argument("--source-root", type=Path, help="Prepared inputs for offline retiling")
+    parser.add_argument("--core-size", type=int, default=36)
+    parser.add_argument("--stride", type=int, default=34)
     parser.add_argument("--reuse-root", type=Path, action="append",
                         help="Reuse aligned native products from another region (pixels backend)")
     parser.add_argument("--drain", action="store_true", help="Finish existing Drive exports only")
     args = parser.parse_args()
-    if args.dates and (args.command != "prepare" or args.backend != "pixels"):
-        parser.error("--dates requires prepare --backend pixels")
+    if (args.dates and args.command != "retile"
+            and (args.command != "prepare" or args.backend != "pixels")):
+        parser.error("--dates requires retile or prepare --backend pixels")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if args.command == "plan":
+    if args.command == "retile":
+        from hydrostate.data.regional.retiling import retile
+
+        if not args.source_root or not args.dates:
+            parser.error("retile requires --source-root and --dates")
+        result = retile(args.root, args.source_root, args.dates,
+                        core=args.core_size, stride=args.stride)
+    elif args.command == "plan":
         if args.config is None:
             parser.error("plan requires --config")
         result = initialize(args.root, json.loads(args.config.read_text()))
