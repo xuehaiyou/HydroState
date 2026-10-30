@@ -181,7 +181,8 @@ Drive 默认最多 2 个在途逻辑导出、2 个下载入库线程，加 1 个
 
 FossFS 输入必须提交到 `c_foss_gpu`。`scripts/slurm/predict_region.sh` 默认单 GPU、
 3 CPU、32 GiB 内存；按 debug 实测调整读取进程和 CPU，单卡最多 6 CPU。
-提交时显式给出预计工作时间加 6 小时的 `--time`，超出队列上限则按日期分批。
+提交时显式给出预计端到端工作时间乘以 1.10 的 `--time`（向上取整到分钟），
+预计时间包含初始化和结果写出；超出队列上限则按日期分批。
 正式启动器通过 `srun --gpu-bind=single:1` 在 Slurm 分配的单 GPU step 内执行模型。
 代码经 Git 同步后冻结发布，设置以下运行环境，再提交一次并立即记录 job ID：
 
@@ -198,7 +199,7 @@ export HYDROSTATE_BATCH_SIZE=<debug实测的最大稳定batch>
 export HYDROSTATE_WORKERS=<debug实测的读取进程数>
 export HYDROSTATE_ESTIMATED_SECONDS=<本批日期预计秒数>
 mkdir -p "$HYDROSTATE_RUN_DIR"
-sbatch --parsable --time=<预计用时加6小时> --output="$HYDROSTATE_RUN_DIR/slurm-%j.out" \
+sbatch --parsable --time=<预计端到端用时乘以1.10> --output="$HYDROSTATE_RUN_DIR/slurm-%j.out" \
   --error="$HYDROSTATE_RUN_DIR/slurm-%j.err" \
   "$HYDROSTATE_CODE_ROOT/scripts/slurm/predict_region.sh" \
   --pilot-dates 2017-04-07 2020-07-11 2022-11-01

@@ -254,7 +254,18 @@ def test_current_model_checkpoint_to_regional_product(monkeypatch, tmp_path, pri
             ).build()
         ),
     )
-    plan, _ = populate(tmp_path / "inputs")
+    input_root = tmp_path / ("source" if private_rank == 0 else "inputs")
+    plan, _ = populate(input_root)
+    if private_rank == 0:
+        from shapely.geometry import box, mapping
+
+        from hydrostate.data.regional import retiling
+
+        monkeypatch.setattr(retiling, "catalog", lambda *a: [dict(
+            geometry=mapping(box(-180, -90, 180, 90)),
+            properties=dict(relativeOrbitNumber_start=25, orbitProperties_pass="ASCENDING"),
+        )])
+        retiling.retile(tmp_path / "inputs", input_root, [plan["periods"][0]["start"]])
     cfg = Config.fromfile("configs/hydrostate_mtlora.py")
     configure_data_contract(cfg)
     stats = dict(

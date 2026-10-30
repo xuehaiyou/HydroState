@@ -22,7 +22,7 @@ set -euo pipefail
 : "${HYDROSTATE_RUN_DIR:?Set a unique inference run directory}"
 : "${HYDROSTATE_BATCH_SIZE:?Set the batch validated in a debug allocation}"
 : "${HYDROSTATE_WORKERS:?Set the measured reader worker count}"
-: "${HYDROSTATE_ESTIMATED_SECONDS:?Set measured work estimate, excluding six-hour margin}"
+: "${HYDROSTATE_ESTIMATED_SECONDS:?Set end-to-end work estimate, excluding the 10 percent margin}"
 if [[ "${SLURM_JOB_PARTITION:-}" != c_foss_gpu || "${SLURM_CPUS_PER_TASK:-3}" -gt 6 ]]; then
     echo 'FossFS inference requires c_foss_gpu and at most 6 CPU cores per GPU.' >&2
     exit 2

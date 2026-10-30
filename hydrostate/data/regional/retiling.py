@@ -62,6 +62,13 @@ def retile(root, source_root, dates, *, core=36, stride=34):
     with locked(root / "prepare.lock", blocking=False):
         if (root / "plan.json").exists() and load_plan(root) != plan:
             raise ValueError("Existing retiled plan differs")
+        # Inference checks output disk headroom using these runtime settings too.
+        for name in ("drive.json", "pixels.json"):
+            origin = source_root / name
+            if origin.exists() and not (root / name).exists():
+                atomic_json(root / name, json.loads(origin.read_text()))
+        if not (root / "drive.json").exists():
+            raise FileNotFoundError("Source lacks the inference disk-reserve settings: drive.json")
         atomic_json(root / "plan.json", plan)
         pd.DataFrame(windows).to_parquet(root / "windows.parquet", index=False)
         for name in ("targets", "manifests"):
