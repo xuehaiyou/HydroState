@@ -115,12 +115,19 @@ def plot(csv, output):
         ('et_total_mean_mm_day', 'Mean total ET (mm/day)', '#C66A28', 'b  Regional total ET'),
         ('land_sm_mean_m3_m3', 'Mean land SM (m³/m³)', '#36836A', 'c  Land soil moisture'),
     ]
+    incomplete = (data['water_valid_fraction'] < 1 - 1e-6) | (
+        data['et_valid_fraction'] < 1 - 1e-6)
     for ax, (key, label, color, title) in zip(axes, panels):
-        ax.plot(dates, data[key], color=color, marker='o', markersize=4, linewidth=1.6)
+        ax.plot(dates, data[key], color=color, linewidth=1.6)
+        ax.scatter(dates[~incomplete], data.loc[~incomplete, key], color=color, s=20, zorder=3)
+        ax.scatter(dates[incomplete], data.loc[incomplete, key], facecolors='white',
+                   edgecolors=color, s=35, linewidths=1.5, zorder=4)
         ax.set_ylabel(label)
         ax.set_title(title, loc='left', fontsize=12, weight='bold', pad=8)
         ax.grid(axis='y', alpha=0.18)
         ax.margins(x=0.02, y=0.18)
+    axes[-1].set_xlim(pd.Timestamp(dates.dt.year.min(), 1, 1),
+                      pd.Timestamp(dates.dt.year.max() + 1, 1, 1))
     axes[-1].xaxis.set_major_locator(mdates.YearLocator())
     axes[-1].xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
     axes[-1].set_xlabel('Year (points at the midpoint of each 8-day period)')
@@ -128,10 +135,15 @@ def plot(csv, output):
                  x=0.14, y=0.97, ha='left', fontsize=17, weight='bold')
     fig.text(0.14, 0.925, 'Shared-LoRA | Original study region | Four sampled periods per year',
              fontsize=11, color='#555555')
-    fig.text(0.14, 0.07,
+    coverage_note = (
+        f"Open markers: incomplete water/ET coverage (minimum: "
+        f"{data[['water_valid_fraction', 'et_valid_fraction']].min().min():.1%})."
+        if incomplete.any() else 'Water/ET spatial coverage: 100% at all sampled dates.'
+    )
+    fig.text(0.14, 0.04,
              'Water area: fraction-weighted sum. Total ET: area mean. '
              'SM: land-area-weighted mean.\n'
-             'Lines connect seasonal samples; intervening dates are not inferred.',
+             'Lines join sampled dates, not continuous daily predictions.\n' + coverage_note,
              fontsize=10, color='#555555', linespacing=1.6)
     fig.canvas.draw()
     # All panels share identical plot edges and evenly spaced rows.
