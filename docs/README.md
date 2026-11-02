@@ -8,7 +8,8 @@
 | [DATA_PREPARATION](DATA_PREPARATION.md) | 本地/HPC 的正式执行入口和环境参数 |
 | [REGIONAL_INFERENCE](REGIONAL_INFERENCE.md) | 区域 Drive 准备、断点恢复和当前模型推理 |
 | [DATA_SCHEMA](DATA_SCHEMA.md) | 数据契约、分片和数据发布约定 |
-| [MTLORA](MTLORA.md) | 当前两个模型、融合模块和冻结策略 |
+| [MTLORA](MTLORA.md) | MTLoRA、shared-LoRA、全量微调及冻结策略 |
+| [UNET](UNET.md) | 随机初始化 U-Net 对照、输入、监督与运行入口 |
 | [REPOSITORY_STRUCTURE](REPOSITORY_STRUCTURE.md) | 目录职责、依赖方向和历史代码边界 |
 | [IMPLEMENTATION_STATUS](IMPLEMENTATION_STATUS.md) | 已验证内容和未完成事项 |
 | [PML 调查](PML_SUPERVISION_AUDIT_20261022.md) | ET/Ew 面积定义调查证据 |

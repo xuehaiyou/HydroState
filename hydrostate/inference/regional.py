@@ -33,22 +33,21 @@ def load_model(config, checkpoint, pretrained, statistics, device):
     from mmengine.registry import init_default_scope
 
     import hydrostate.models  # noqa: F401
-    from hydrostate.cli import configure_data_contract
+    from hydrostate.cli import configure_data_contract, configure_pretrained_encoder
     from hydrostate.registry import MODELS
 
     cfg = Config.fromfile(config)
     configure_data_contract(cfg)
     if cfg.data_contract != VERSION or cfg.model.encoder.input_profile != PROFILE:
         raise ValueError("Regional inference requires the current retrieval input contract")
-    if cfg.model.type != "MTLoRAHydroStateModel":
-        raise ValueError("This regional exporter requires the current MTLoRA/shared-LoRA model")
-    if not Path(pretrained).is_dir():
-        raise FileNotFoundError(pretrained)
+    if cfg.model.type not in ("MTLoRAHydroStateModel", "UNetHydroStateModel"):
+        raise ValueError("Regional export requires a current retrieval model")
+    configure_pretrained_encoder(cfg, pretrained)
     stats = json.loads(Path(statistics).read_text())
     if stats.get("data_contract", {}).get("input_profile") != PROFILE:
         raise ValueError("Training statistics do not declare the current input profile")
-    cfg.model.encoder.model_path = str(pretrained)
-    cfg.model.encoder.gradient_checkpointing = False
+    if "gradient_checkpointing" in cfg.model.encoder:
+        cfg.model.encoder.gradient_checkpointing = False
     cfg.model.target_statistics = stats
     init_default_scope("hydrostate")
     model = MODELS.build(cfg.model)

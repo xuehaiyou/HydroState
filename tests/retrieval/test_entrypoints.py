@@ -73,7 +73,7 @@ def test_historical_collection_config_fails_with_actionable_error():
         resolve_config(args)
 
 
-@pytest.mark.parametrize("name", ["mtlora", "mtlora_shared", "mtlora_frozen_embed"])
+@pytest.mark.parametrize("name", ["mtlora", "mtlora_shared", "mtlora_frozen_embed", "full", "unet"])
 def test_current_model_configs_and_dump_share_one_contract(tmp_path, name):
     cfg = Config.fromfile(str(ROOT / f"configs/hydrostate_{name}.py"))
     configure_data_contract(cfg)

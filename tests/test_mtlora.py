@@ -12,8 +12,9 @@ from test_multilevel_temporal_model import moments, raw_inputs
 from test_shared_private_model import samples
 
 from hydrostate.cli import configure_data_contract
-from hydrostate.models.mtlora import AlignedLandCoupling, MTLoRAExitBlock, MTLoRALinear
+from hydrostate.models.mtlora import MTLoRAExitBlock, MTLoRALinear
 from hydrostate.models.multilevel_temporal_model import MultiLevelTemporalOlmoEarthEncoder
+from hydrostate.models.retrieval_model import AlignedLandCoupling
 from hydrostate.models.shared_private_lora import LowRankUpdate
 from hydrostate.registry import MODELS
 from hydrostate.tasks import LEGACY_TASKS, task_config

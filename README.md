@@ -1,7 +1,8 @@
 # HydroState
 
 Joint retrieval of water, snow/ice, land fractions, land soil moisture, and
-water/ice/land ET with OlmoEarth v1.2 Base. Current inputs are **five 8-day mean
+water/ice/land ET with OlmoEarth v1.2 Base and a randomly initialized U-Net control.
+Current inputs are **five 8-day mean
 composites** of Sentinel-1, Sentinel-2 and Landsat, collected from GEE.
 Outputs are 30 m; product losses respect each label's observation support.
 
@@ -12,6 +13,7 @@ Outputs are 30 m; product losses respect each label's observation support.
 - [Regional input preparation and model inference](docs/REGIONAL_INFERENCE.md)
 - [Input specifications and independent label packs](docs/EXTENDING_VARIABLES.md)
 - [MTLoRA and shared-LoRA architectures](docs/MTLORA.md)
+- [Random-initialized U-Net control](docs/UNET.md)
 - [Repository responsibilities](docs/REPOSITORY_STRUCTURE.md)
 - [Implementation and validation status](docs/IMPLEMENTATION_STATUS.md)
 - [All documentation](docs/README.md)
@@ -51,7 +53,8 @@ CUDA_VISIBLE_DEVICES=0 python tools/test.py configs/hydrostate_mtlora.py CHECKPO
 ```
 
 Use `configs/hydrostate_mtlora_shared.py` for the shared-LoRA control on identical
-data. [Current Slurm scripts](scripts/slurm) request one GPU and at most six CPUs;
+data, or `configs/hydrostate_unet.py` for a U-Net trained from random weights
+without an OlmoEarth bundle. [Current Slurm scripts](scripts/slurm) request one GPU and at most six CPUs;
 see the preparation guide for environment variables and release checks.
 
 ## One current contract

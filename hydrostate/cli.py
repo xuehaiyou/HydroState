@@ -109,6 +109,21 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
                     evaluator["tasks"] = tasks
 
 
+def configure_pretrained_encoder(cfg: Config, pretrained=None) -> None:
+    """Check local FM weights only for encoders declaring that dependency."""
+    encoder = cfg.model.encoder
+    if "model_path" not in encoder:
+        return
+    path = pretrained if pretrained is not None else encoder.model_path
+    if not path:
+        raise ValueError("This encoder requires a local pretrained model_path")
+    for name in ("config.json", "weights.pth"):
+        file = Path(path) / name
+        if not file.is_file() or file.stat().st_size == 0:
+            raise FileNotFoundError(f"Missing pretrained encoder file: {file}")
+    encoder.model_path = str(path)
+
+
 def _parser(description: str, checkpoint: bool = False) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("config")
@@ -129,6 +144,7 @@ def _config(args) -> Config:
 def train_main() -> None:
     args = _parser("Train HydroState").parse_args()
     cfg = _config(args)
+    configure_pretrained_encoder(cfg)
     configure_target_statistics(cfg, training=True)
     Runner.from_cfg(cfg).train()
 
@@ -136,6 +152,7 @@ def train_main() -> None:
 def test_main() -> None:
     args = _parser("Test HydroState", checkpoint=True).parse_args()
     cfg = _config(args)
+    configure_pretrained_encoder(cfg)
     configure_target_statistics(cfg, training=False)
     cfg.load_from = args.checkpoint
     Runner.from_cfg(cfg).test()
@@ -146,6 +163,7 @@ def predict_main() -> None:
     # output hook in a derived config when regional export is implemented.
     args = _parser("Predict HydroState", checkpoint=True).parse_args()
     cfg = _config(args)
+    configure_pretrained_encoder(cfg)
     configure_target_statistics(cfg, training=False)
     cfg.load_from = args.checkpoint
     Runner.from_cfg(cfg).test()

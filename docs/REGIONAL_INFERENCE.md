@@ -54,6 +54,8 @@ python tools/predict_region.py \
 ```
 
 MTLoRA 使用 `configs/hydrostate_mtlora.py`，共享 LoRA 使用上面的 shared 配置；
+随机初始化 U-Net 使用 `configs/hydrostate_unet.py`，省略 `--pretrained`。
+FM 的 `--pretrained` 可省略，此时读取模型配置声明的本地权重目录。
 配置必须与训练 checkpoint 对应，权重严格加载。预训练目录包含 `config.json` 和
 `weights.pth`；统计量只能用对应训练集的文件，不能从区域影像重算。
 `--dates 2020-07-11` 可只推理某个已准备的目标周期。推理只读取本地数据，不需要 GEE。

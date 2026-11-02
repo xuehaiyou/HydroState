@@ -8,6 +8,7 @@ configs/
   data/collection/retrieval.py   当前采样参数
   hydrostate_retrieval.py        公共训练配置，从数据契约导入任务和输入定义
   hydrostate_mtlora*.py          模型选择及消融
+  hydrostate_unet.py             随机初始化 U-Net，共用当前七任务监督
   _base_/runtime.py              MMEngine 通用运行设置
   experiments/legacy/           历史架构、数据和机器配置
 hydrostate/

@@ -4,6 +4,7 @@
 配置选择：`configs/hydrostate_mtlora.py` 与 `configs/hydrostate_mtlora_shared.py`；
 两者继承 `hydrostate_retrieval.py`，共用当前七任务、五时间槽和训练统计。
 `configs/hydrostate_full.py` 提供相同任务结构的全量微调对照。
+不使用基础模型的对照见 [U-Net](UNET.md)，配置为 `configs/hydrostate_unet.py`。
 
 ## 编码器与分支
 

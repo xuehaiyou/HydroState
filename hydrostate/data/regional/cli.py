@@ -79,7 +79,7 @@ def predict_main():
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--model-config", required=True)
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--pretrained", required=True)
+    parser.add_argument("--pretrained", help="Override local FM weights; unused by U-Net")
     parser.add_argument("--statistics", required=True)
     parser.add_argument("--dates", nargs="+")
     parser.add_argument("--device", default="cuda")

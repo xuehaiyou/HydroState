@@ -9,8 +9,9 @@ from hydrostate.inference.regional_benchmark import run
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("root", "model-config", "checkpoint", "pretrained", "statistics", "output"):
+    for name in ("root", "model-config", "checkpoint", "statistics", "output"):
         parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--pretrained", type=Path, help="Optional FM weights override")
     parser.add_argument("--dates", nargs="+", required=True)
     parser.add_argument("--start-index", type=int, default=27000)
     parser.add_argument("--windows", type=int, default=32)

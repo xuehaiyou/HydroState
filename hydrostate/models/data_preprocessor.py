@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+from datetime import UTC, datetime
 from typing import Any
 
 import torch
@@ -48,7 +50,8 @@ class HydroDataPreprocessor(BaseDataPreprocessor):
     same preprocessing version is recorded in every shard's attributes.
     """
 
-    def __init__(self, tasks=LEGACY_TASKS, output_scale=3, input_profile=LEGACY_PROFILE, **kwargs):
+    def __init__(self, tasks=LEGACY_TASKS, output_scale=3, input_profile=LEGACY_PROFILE,
+                 encode_target_season=False, **kwargs):
         super().__init__(**kwargs)
         if type(output_scale) is not int or output_scale < 1:
             raise ValueError("output_scale must be a positive integer")
@@ -56,11 +59,24 @@ class HydroDataPreprocessor(BaseDataPreprocessor):
         self.output_scale = output_scale
         self.input_profile = input_profile
         self.input_keys = input_keys(input_profile)
+        self.encode_target_season = encode_target_season
 
     def forward(self, data: dict[str, Any], training: bool = False) -> dict[str, Any]:
         # Keep control metadata on CPU. Pack all gather indices into a single
         # tensor so cast_data transfers them once alongside the image tensors.
         inputs = prepare_model_inputs(data["inputs"], self.input_profile)
+        if self.encode_target_season:
+            # Calendar-year phase is computed on small CPU controls before device transfer.
+            # Use the central slot start, including for shortened year-end PML intervals.
+            stamps = inputs["slot_bounds"][:, 2, 0].detach().cpu().tolist()
+            phases = []
+            for stamp in stamps:
+                when = datetime.fromtimestamp(stamp, UTC)
+                start = datetime(when.year, 1, 1, tzinfo=UTC).timestamp()
+                end = datetime(when.year + 1, 1, 1, tzinfo=UTC).timestamp()
+                angle = 2 * math.pi * (stamp - start) / (end - start)
+                phases.append((math.sin(angle), math.cos(angle)))
+            inputs["target_season"] = torch.tensor(phases, dtype=torch.float32)
         metadata = None
         temporal = {
             key: inputs.pop(key).detach().to(device="cpu", dtype=dtype)

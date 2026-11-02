@@ -86,9 +86,11 @@ def launch(tmp_path):
     )
 
     def run(count, script="12_train_l40s.sh", requested=None, bf16=True, precision="bfloat16",
-            architecture=None):
+            architecture=None, missing_pretrained=False):
         environment = dict(env, TEST_VISIBLE_GPUS=str(count), TEST_BF16=str(int(bf16)))
         environment["HYDROSTATE_PRECISION"] = precision
+        if missing_pretrained:
+            environment["HYDROSTATE_MODEL_PATH"] = str(tmp_path / "absent-model")
         if requested is not None:
             environment["HYDROSTATE_GPUS_PER_NODE"] = requested
         result = subprocess.run(
@@ -179,11 +181,12 @@ def test_current_launcher_refuses_multiple_visible_gpus(launch):
 
 @pytest.mark.parametrize("architecture,config", [
     ("mtlora", "hydrostate_mtlora.py"), ("lora", "hydrostate_mtlora_shared.py"),
-    ("full", "hydrostate_full.py"),
+    ("full", "hydrostate_full.py"), ("unet", "hydrostate_unet.py"),
 ])
 def test_slurm_architecture_and_resume_overrides_reach_training(launch, architecture, config):
     result, invocation = launch(
-        1, script="scripts/slurm/train_retrieval.sh", architecture=architecture
+        1, script="scripts/slurm/train_retrieval.sh", architecture=architecture,
+        missing_pretrained=architecture == "unet",
     )
     assert result.returncode == 0, result.stderr
     assert invocation["args"][1] == f"configs/{config}"

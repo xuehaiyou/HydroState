@@ -20,6 +20,7 @@ from .shared_private_model import SharedPrivateHydroStateModel
 from .staged_model import StagedHydroStateModel
 from .task_branches import StagedTaskDecoder, TaskGatedInteraction
 from .temporal_model import TemporalHydroStateModel, TemporalOlmoEarthEncoder
+from .unet import UNetDecoder, UNetEncoder, UNetHydroStateModel
 
 __all__ = [
     "AuxiliaryInputFusion",
@@ -45,4 +46,7 @@ __all__ = [
     "TargetTimeQuery",
     "TemporalHydroStateModel",
     "TemporalOlmoEarthEncoder",
+    "UNetDecoder",
+    "UNetEncoder",
+    "UNetHydroStateModel",
 ]

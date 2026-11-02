@@ -324,6 +324,9 @@ def test_current_model_checkpoint_to_regional_product(monkeypatch, tmp_path, pri
         torch.save(dict(state_dict=model.state_dict()), checkpoint)
         cfg.dump(str(tmp_path / "model.py"))
         atomic_json(tmp_path / "stats.json", stats)
+        # The mocked FM loader still obeys the local-weight preflight contract.
+        (tmp_path / "config.json").write_text("{}")
+        (tmp_path / "weights.pth").write_bytes(b"mocked pretrained weights")
         model, provenance = load_model(
             tmp_path / "model.py", checkpoint, tmp_path, tmp_path / "stats.json", "cpu"
         )

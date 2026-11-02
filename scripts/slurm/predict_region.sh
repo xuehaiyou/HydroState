@@ -17,7 +17,6 @@ set -euo pipefail
 : "${HYDROSTATE_REGION_ROOT:?Set the prepared regional input root}"
 : "${HYDROSTATE_REGION_MODEL_CONFIG:?Set the trained model config}"
 : "${HYDROSTATE_CHECKPOINT:?Set the selected trained checkpoint}"
-: "${HYDROSTATE_MODEL_PATH:?Set the pretrained backbone directory}"
 : "${HYDROSTATE_TARGET_STATS:?Set the frozen training statistics}"
 : "${HYDROSTATE_RUN_DIR:?Set a unique inference run directory}"
 : "${HYDROSTATE_BATCH_SIZE:?Set the batch validated in a debug allocation}"
@@ -29,7 +28,6 @@ if [[ "${SLURM_JOB_PARTITION:-}" != c_foss_gpu || "${SLURM_CPUS_PER_TASK:-3}" -g
 fi
 test -r "$HYDROSTATE_REGION_ROOT/plan.json"
 test -r "$HYDROSTATE_CHECKPOINT"
-test -d "$HYDROSTATE_MODEL_PATH"
 mkdir -p "$HYDROSTATE_RUN_DIR"
 cd "$HYDROSTATE_CODE_ROOT"
 sha256sum --check --status "$HYDROSTATE_SOURCE_HASHES"
@@ -38,11 +36,15 @@ conda activate "${HYDROSTATE_CONDA_ENV:-hydrostate}"
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1 BLOSC_NTHREADS=1 PYTHONUNBUFFERED=1
+pretrained_args=()
+if [[ -n "${HYDROSTATE_MODEL_PATH:-}" ]]; then
+    pretrained_args=(--pretrained "$HYDROSTATE_MODEL_PATH")
+fi
 exec srun --gpu-bind=single:1 python tools/predict_region.py \
     --root "$HYDROSTATE_REGION_ROOT" \
     --model-config "$HYDROSTATE_REGION_MODEL_CONFIG" \
     --checkpoint "$HYDROSTATE_CHECKPOINT" \
-    --pretrained "$HYDROSTATE_MODEL_PATH" \
+    "${pretrained_args[@]}" \
     --statistics "$HYDROSTATE_TARGET_STATS" \
     --run-dir "$HYDROSTATE_RUN_DIR" \
     --device cuda --workers "$HYDROSTATE_WORKERS" --batch-size "$HYDROSTATE_BATCH_SIZE" "$@"

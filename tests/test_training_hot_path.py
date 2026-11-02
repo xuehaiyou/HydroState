@@ -13,6 +13,7 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.parallel import DistributedDataParallel
 
+from hydrostate.data.input_products import LEGACY_PROFILE
 from hydrostate.losses.uncertainty_nll import (
     UncertaintyWeightedNLL,
     global_observation_means,
@@ -87,6 +88,7 @@ def capture_encoder():
     encoder = OlmoEarthEncoder.__new__(OlmoEarthEncoder)
     nn.Module.__init__(encoder)
     encoder.backbone = CaptureBackbone()
+    encoder.input_profile = LEGACY_PROFILE
     encoder.landsat_toa_adapter = None
     encoder.out_channels = 1
     return encoder
@@ -327,6 +329,7 @@ def test_causal_grouping_handles_prepared_cpu_metadata(condition):
 
     encoder = CausalOlmoEarthEncoder.__new__(CausalOlmoEarthEncoder)
     nn.Module.__init__(encoder)
+    encoder.input_profile = LEGACY_PROFILE
     encoder.backbone = CaptureBackbone()
     encoder.landsat_toa_adapter = None
     encoder.backbone.timestamp_error_tolerance = timedelta(days=15)

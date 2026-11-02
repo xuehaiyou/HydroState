@@ -52,7 +52,7 @@ def compare_release(args, date, records, model, output):
     folder = output / ("comparison_" + date)
     folder.mkdir()
     torch.save(records, folder / "records.pt")
-    options = {k: str(getattr(args, k)) for k in (
+    options = {k: str(getattr(args, k)) if getattr(args, k) is not None else None for k in (
         "root", "model_config", "checkpoint", "pretrained", "statistics", "device")}
     atomic_json(folder / "arguments.json", dict(options, date=date))
     env = dict(os.environ, PYTHONPATH=str(args.reference_release))

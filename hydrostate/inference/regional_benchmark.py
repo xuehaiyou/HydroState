@@ -164,11 +164,14 @@ def pipeline_probe(dataset, start, count, model, device, workers, mosaic, batch_
 def profile_model(model, records, device, output_dir):
     handles, stacks = [], {}
     modules = {"encoder": model.encoder, "input_fusion": model.input_fusion}
-    modules.update({f"query/{t}": module for t, module in model.queries.items()})
-    modules.update({f"decoder/{t}": module for t, module in model.decoders.items()})
-    modules.update(
-        {f"block/{i}": module for i, module in enumerate(model.encoder.backbone.model.blocks)}
-    )
+    modules.update({f"query/{t}": module for t, module in getattr(model, "queries", {}).items()})
+    if hasattr(model, "decoders"):
+        modules.update({f"decoder/{t}": module for t, module in model.decoders.items()})
+    else:
+        modules["decoder"] = model.decoder
+    blocks = (model.encoder.backbone.model.blocks if hasattr(model.encoder, "backbone")
+              else model.encoder.blocks)
+    modules.update({f"block/{i}": module for i, module in enumerate(blocks)})
 
     def before(name):
         def enter(module, inputs):

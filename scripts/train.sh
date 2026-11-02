@@ -19,8 +19,8 @@ export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export HYDROSTATE_MODEL_PATH="${HYDROSTATE_MODEL_PATH:-/fossfs/xiaozhen/HydroState/pretrained/OlmoEarth-v1_2-Base}"
 export HYDROSTATE_MANIFEST="${HYDROSTATE_MANIFEST:-$HYDROSTATE_DATA_ROOT/samples.parquet}"
 test -s "$HYDROSTATE_MANIFEST"
-test -s "$HYDROSTATE_MODEL_PATH/config.json"
-test -s "$HYDROSTATE_MODEL_PATH/weights.pth"
+# The Python CLI checks encoder weights after resolving the model configuration.
+# Random-initialized U-Net has no pretrained directory dependency.
 
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export PYTHONUNBUFFERED=1
