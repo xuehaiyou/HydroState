@@ -1,6 +1,7 @@
 """Area-consistent regional summaries and seasonal inference time-series figures."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -37,10 +38,9 @@ def summarize(product, output):
     height, width = group['water'].shape[1:]
     inside = geometry_mask([plan['geometry']], (height, width), transform, invert=True)
     aoi_pixels = int(inside.sum())
-    rows = []
     arrays = {t: group[t] for t in ('land', 'soil_moisture',
                                     'land_valid', 'soil_moisture_valid')}
-    for index in np.flatnonzero(group['date_complete'][:]):
+    def summarize_date(index):
         start, end = group['time_bounds'][index].astype('datetime64[s]')
         day = str(start)[:10]
         # Export audits already contain exact full-resolution area sums for these
@@ -65,7 +65,7 @@ def summarize(product, output):
         if np.any(totals[[1, 3, 5]] == 0):
             raise ValueError(f'No valid support for completed date {index}')
         start, end = group['time_bounds'][index].astype('datetime64[s]')
-        rows.append(dict(
+        row = dict(
             start=str(start)[:10], end=str(end)[:10],
             midpoint=str(start + (end - start) // 2),
             water_area_km2=totals[0] * area_km2,
@@ -76,8 +76,13 @@ def summarize(product, output):
             et_valid_fraction=totals[3] / aoi_pixels,
             sm_valid_area_km2=totals[6] * area_km2,
             sm_effective_land_area_km2=totals[5] * area_km2,
-        ))
-        print(json.dumps(rows[-1]), flush=True)
+        )
+        print(json.dumps(row), flush=True)
+        return row
+
+    # A single bounded pool overlaps filesystem latency; array handles are read-only.
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        rows = list(pool.map(summarize_date, np.flatnonzero(group['date_complete'][:])))
     if not rows:
         raise ValueError('No completed dates')
     pd.DataFrame(rows).sort_values('start').to_csv(output / 'timeseries.csv', index=False)
