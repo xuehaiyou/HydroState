@@ -74,4 +74,10 @@ U-Net 不需要 `--pretrained`；FM 可通过该参数覆盖配置中的本地�
 仍要求非空 `config.json` 和 `weights.pth`。区域 benchmark 同样支持省略该参数。
 模型配置必须对应 checkpoint，严格加载参数。
 
+当 debug 队列需要等待时，可用 `tools/experiments/submit_after_debug.py --run-root RUN`
+在 `afterok` CPU 作业中接续提交。运行记录必须包含冻结源码/环境、debug 提交命令、
+GPU 容量和实查的常规队列限制。工具要求完整一轮训练/验证、有限损失和至少 10% 显存
+余量；按实测完整轮次耗时乘正式轮数再加 10% 申请时限，超限时按 epoch 拆分续训。
+正式训练重新随机初始化，不读取 debug 权重；独占意向文件和逐次回执防止重复提交。
+
 本地验证范围与硬件限制见 [验收记录](validation/UNET_20261102.md)。
