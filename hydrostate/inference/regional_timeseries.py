@@ -38,15 +38,30 @@ def summarize(product, output):
     inside = geometry_mask([plan['geometry']], (height, width), transform, invert=True)
     aoi_pixels = int(inside.sum())
     rows = []
-    tasks = ('water', 'land', 'et_total', 'soil_moisture')
+    arrays = {t: group[t] for t in ('land', 'soil_moisture',
+                                    'land_valid', 'soil_moisture_valid')}
     for index in np.flatnonzero(group['date_complete'][:]):
-        totals = np.zeros(7, dtype='f8')
-        for y in range(0, height, 256):
-            key = (int(index), slice(y, y + 256), slice(None))
-            values = {t: group[t][key] for t in tasks}
-            masks = {t: group[t + '_valid'][key].astype(bool) & inside[y:y + 256]
-                     for t in tasks}
-            totals += block_totals(*(values[t] for t in tasks), masks)
+        start, end = group['time_bounds'][index].astype('datetime64[s]')
+        day = str(start)[:10]
+        # Export audits already contain exact full-resolution area sums for these
+        # two metrics. Reuse them; only conditional SM needs a new joint reduction.
+        audit = json.loads((product.parent / f'{product.stem}_{day}.json').read_text())
+        if audit['target']['start'] != day or audit['audit']['inside_pixels'] != aoi_pixels:
+            raise ValueError('Per-date export audit disagrees with the product grid')
+        stats = audit['audit']['variables']
+        water, et = stats['water'], stats['et_total']
+        totals = np.array([water['mean'] * water['valid_pixels'], water['valid_pixels'],
+                           et['mean'] * et['valid_pixels'], et['valid_pixels'],
+                           0, 0, 0], dtype='f8')
+        for y in range(0, height, 512):
+            key = (int(index), slice(y, y + 512), slice(None))
+            land, sm = arrays['land'][key], arrays['soil_moisture'][key]
+            valid = (arrays['land_valid'][key].astype(bool)
+                     & arrays['soil_moisture_valid'][key].astype(bool)
+                     & inside[y:y + 512] & np.isfinite(land) & np.isfinite(sm) & (land > 0))
+            totals[4] += (sm[valid].astype('f8') * land[valid]).sum()
+            totals[5] += land[valid].sum(dtype='f8')
+            totals[6] += valid.sum()
         if np.any(totals[[1, 3, 5]] == 0):
             raise ValueError(f'No valid support for completed date {index}')
         start, end = group['time_bounds'][index].astype('datetime64[s]')
@@ -73,6 +88,7 @@ def summarize(product, output):
         et='area mean of valid total ET; no extra surface weighting of total ET',
         sm='sum(valid * land_fraction * land_SM) / sum(valid * land_fraction)',
         support='Per-date valid AOI; no display-only 5% mask; no fill for missing pixels',
+        reduction='Reuse full-resolution export audits for water and ET; recompute weighted SM',
         interpretation='32 seasonal 8-day predictions, not a complete daily or annual series',
     ), indent=2))
 
