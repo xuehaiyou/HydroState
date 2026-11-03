@@ -16,6 +16,24 @@ def main():
     command.add_argument("--root", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--limit", type=int)
+    command = stages.add_parser("split-index", help="Group stations and exclude product support")
+    command.add_argument("--index", type=Path, required=True)
+    command.add_argument("--manifest", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--seed", type=int, default=43)
+    command = stages.add_parser("strata", help="Cached point sampling of JRC, cover and climate")
+    command.add_argument("--stations", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--config", type=Path, required=True)
+    command = stages.add_parser(
+        "candidates", help="QC morning windows from indexed shallow sources"
+    )
+    command.add_argument("--index", type=Path, required=True)
+    command.add_argument("--splits", type=Path, required=True)
+    command.add_argument("--strata", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--as-of", required=True)
+    command.add_argument("--limit", type=int)
     for name in ("inventory", "extract"):
         command = stages.add_parser(name)
         command.add_argument("--root", type=Path, required=True)
@@ -45,6 +63,35 @@ def main():
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "candidates":
+        from .candidates import prepare_candidates
+
+        report = prepare_candidates(
+            args.index, args.splits, args.strata, args.output, as_of=args.as_of, limit=args.limit
+        )
+        print(json.dumps({k: v for k, v in report.items() if k != "files"}), flush=True)
+        return
+    if args.stage == "strata":
+        from mmengine.config import Config
+
+        from hydrostate.data.gee.client import initialize
+
+        from .stratify import enrich_index
+
+        config = Config.fromfile(str(args.config)).to_dict()
+        report = enrich_index(
+            initialize(config["project"]), args.stations, args.output, config["climate_asset"]
+        )
+        print(json.dumps(report), flush=True)
+        return
+    if args.stage == "split-index":
+        from .splits import split_index
+
+        print(
+            json.dumps(split_index(args.index, args.manifest, args.output, seed=args.seed)),
+            flush=True,
+        )
+        return
     if args.stage == "index":
         from .index import build_index
 
@@ -82,10 +129,11 @@ def main():
         from .temporal import DAY, epoch
 
         starts = sorted(epoch(r["target_time"]) for r in selected)
-        if any(b-a < config["min_date_gap_days"]*DAY for a, b in zip(starts, starts[1:])):
+        if any(b - a < config["min_date_gap_days"] * DAY for a, b in zip(starts, starts[1:])):
             parser.error("Pilot target windows violate the configured per-station date gap")
-        collect_pilot(initialize(config["project"]), selected, args.output, config,
-                       load_computed_config())
+        collect_pilot(
+            initialize(config["project"]), selected, args.output, config, load_computed_config()
+        )
         return
     paths = sorted(args.root.glob(args.pattern))
     if not paths:
@@ -96,7 +144,7 @@ def main():
         if args.limit is not None:
             if args.limit <= 0:
                 parser.error("--limit must be positive")
-            paths = paths[:args.limit]
+            paths = paths[: args.limit]
         prepare_labels(paths, args.output, args.source, args.start, args.end, args.as_of)
         return
     if args.stage == "inventory":
