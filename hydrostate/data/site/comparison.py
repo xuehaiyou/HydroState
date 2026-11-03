@@ -99,7 +99,12 @@ def smap_observations(ee, record, cache, *, reuse_caches=(), local_products=None
         images = collection(ee, "sm").filterDate(identity["start"], identity["end"])
         size = images.size().getInfo()
         if not size:
-            return dict(identity=identity, observations=[], projection=None)
+            return dict(
+                identity=identity,
+                observations=[],
+                projection=None,
+                response_source="GEE_native_point_query",
+            )
         point = ee.Geometry.Point([identity["lon"], identity["lat"]])
 
         def sample(image):
@@ -172,7 +177,13 @@ def pair_sm(record, products):
         projection=products["projection"],
         product_response_source=products.get("response_source", "point_query_cache"),
         reused_metadata=products.get("reused_metadata"),
-        reason=None if pairs else "no_common_QA_valid_dates",
+        reason=(
+            None
+            if pairs
+            else "no_common_QA_valid_dates"
+            if products["observations"]
+            else "no_product_images_in_window"
+        ),
     )
 
 
@@ -290,6 +301,7 @@ def plot_sm_comparison(report, output):
         f"{m['windows']} windows · {m['sites']} {'site' if m['sites'] == 1 else 'sites'}\n"
         f"RMSE {m['rmse']:.3f} · Bias {m['bias']:+.3f} · R² {r2}",
         fontsize=9,
+        va="top",
     )
     ax.legend(
         title="Centre water frequency",
@@ -300,10 +312,11 @@ def plot_sm_comparison(report, output):
     )
     fig.text(
         0.17,
-        0.055,
+        0.025,
         "UTC-date approximation; point vs. coarse pixel.\n"
         "Spatial representativeness remains to be accepted.",
         fontsize=8,
+        va="bottom",
     )
     fig.savefig(output / "sm_smap_scatter.png", dpi=600)
     fig.savefig(output / "sm_smap_scatter.pdf")

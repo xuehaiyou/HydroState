@@ -32,6 +32,11 @@ def test_pairing_uses_common_dates_and_preserves_training_value():
     assert result["common_days"] == 1
     assert result["excluded_days"][0]["reason"] == "SMAP_missing_or_QA"
     assert metrics([result])["r2"] is None
+    empty = pair_sm(record, dict(projection=None, observations=[]))
+    assert empty["reason"] == "no_product_images_in_window"
+    assert empty["site_value"] is None and empty["training_value"] == 0.6
+    rejected = pair_sm(record, dict(product, observations=product["observations"][1:]))
+    assert rejected["reason"] == "no_common_QA_valid_dates"
 
 
 def test_r2_can_be_negative_and_is_not_correlation_squared():
