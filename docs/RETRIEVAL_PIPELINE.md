@@ -3,6 +3,8 @@
 当前入口是 `configs/data/collection/retrieval.py` 和
 `configs/hydrostate_retrieval.py`。采样、读取、训练和验证使用同一套新契约，
 不自动转换旧的 4 槽或 16 变量样本。站点样本暂不接入。
+站点已确认采用独立 Zarr、训练层联合使用的方案，见
+[站点样本与联合训练方案](SITE_SAMPLE_PLAN.md)；该方案尚未接入本文的产品执行流程。
 
 ## 时间与影像输入
 
