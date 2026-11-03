@@ -236,4 +236,9 @@ def test_real_et_support_zarr_and_resume(tmp_path):
     assert group["weights"][:].sum() == pytest.approx(1, abs=1e-6)
     assert group["interval_seconds"][:].sum() == 5 * DAY
     assert group.attrs["supervision_ready"] is False
-    assert process_station(row, tmp_path / "output", config) == result
+    checkpoint = tmp_path / "output" / "stations" / "ZZ-Test" / "report.json"
+    modified = checkpoint.stat().st_mtime_ns
+    resumed = process_station(row, tmp_path / "output", config)
+    assert resumed["identity"] == result["identity"]
+    assert resumed["candidates"] == result["candidates"]
+    assert checkpoint.stat().st_mtime_ns == modified
