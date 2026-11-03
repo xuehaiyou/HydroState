@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import zarr
 
-from hydrostate.data.gee.contracts import atomic_json, fingerprint
+from hydrostate.data.gee.contracts import atomic_json, fingerprint, map_point
 from hydrostate.data.gee.products import collection
 from hydrostate.data.retrieval.catalog import cached_json
 from hydrostate.data.retrieval.specs import SOURCES
@@ -42,7 +42,7 @@ class LocalSMAP:
                 record["lon"], record["lat"]
             )
             affine = Affine(*grid["transform"])
-            col, index = np.floor(~affine * (x, y)).astype(int)
+            col, index = np.floor(map_point(~affine, x, y)).astype(int)
             if [int(col), int(index)] != support["cell"]:
                 continue
             observations = stored["observations"]
@@ -335,6 +335,7 @@ def compare_candidate_points(
         selected.append(row)
         picker.record(row, success=True)
         seen.add(row["physical_group_id"])
+        picker.rows = [r for r in picker.rows if r["physical_group_id"] not in seen]
     atomic_json(
         output / "point_selection.json",
         dict(

@@ -56,3 +56,37 @@ def test_exhausted_bin_does_not_block_other_quota_and_seed_reproducible():
         assert picker.counts[3] == 0
         choices.append(selected)
     assert choices[0] == choices[1]
+
+
+def test_quality_candidate_checkpoint_keeps_real_mornings_and_provenance(tmp_path):
+    from hydrostate.data.site.candidates import _read_candidate_file
+
+    path = tmp_path / "N_S_sm_sensor.stm"
+    path.write_text(
+        "N N S 41 25 600 0.05 0.05 Sensor\n"
+        + "".join(f"2021/10/{d:02d} 04:00 0.2 G M\n" for d in range(8, 16))
+    )
+    (tmp_path / "labels").mkdir()
+    row = dict(
+        source_path=str(path),
+        source_bytes=path.stat().st_size,
+        source_mtime_ns=path.stat().st_mtime_ns,
+        file_id="test",
+        site_id="ismn:N:S",
+        physical_group_id="ismn:N:S",
+        spatial_group_id="spatial",
+        split="train",
+        lon=25.0,
+        lat=41.0,
+        frequency_bin=0,
+        landcover=10,
+        climate_class=8,
+        time_start="2021-10-08T04:00:00",
+        time_end="2021-10-15T04:01:00",
+    )
+    config = dict(input_start="2013-03-18", as_of="2026-11-03")
+    summary, rows = _read_candidate_file((row, str(tmp_path), config))
+    assert summary["valid_windows"] == 1
+    assert rows[0]["valid_days"] == 8
+    assert rows[0]["target_time"] == "2021-10-08"
+    assert _read_candidate_file((row, str(tmp_path), config)) == (summary, rows)

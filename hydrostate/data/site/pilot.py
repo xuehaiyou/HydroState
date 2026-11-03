@@ -70,7 +70,7 @@ def observed_occurrence(values):
     raise ValueError("JRC occurrence missing despite water detections; centre requires review")
 
 
-def collect_pilot(ee, records, root, config, norm):
+def collect_pilot(ee, records, root, config, norm, *, allow_empty=False):
     """Development-only samples; formal release still requires grouped splits and quotas."""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -78,8 +78,8 @@ def collect_pilot(ee, records, root, config, norm):
     identity = fingerprint(
         {k: v for k, v in config.items() if k not in ("version", "input_profile")}
     )
-    accepted = []
     with locked(root / ".collection.lock", blocking=False):
+        accepted = [json.loads(p.read_text()) for p in sorted((root / "records").glob("*.json"))]
         path = root / "collection.json"
         if path.exists() and json.loads(path.read_text()) != config:
             raise ValueError("Pilot production configuration changed")
@@ -101,7 +101,9 @@ def collect_pilot(ee, records, root, config, norm):
             sid = fingerprint(dict(record=record, config_sha256=identity))[:24]
             committed = root / "records" / f"{sid}.json"
             if committed.exists():
-                accepted.append(json.loads(committed.read_text()))
+                continue
+            rejection = root / "rejected" / f"{sid}.json"
+            if rejection.exists():
                 continue
             inputs, scenes, eligible = input_arrays(ee, sample, root / "cache", norm, config)
             masks = sensor_masks(inputs)
@@ -142,7 +144,8 @@ def collect_pilot(ee, records, root, config, norm):
                 group_id=record["group_id"],
                 lon=record["lon"],
                 lat=record["lat"],
-                split="train",
+                split=record.get("split", "train"),
+                candidate_id=record.get("candidate_id", sid),
                 version=VERSION,
                 input_profile=PROFILE,
                 crs=sample["crs"],
@@ -152,6 +155,7 @@ def collect_pilot(ee, records, root, config, norm):
                 frequency_bin=sample["frequency_bin"],
                 sampling_group=sample["frequency_bin"],
                 climate_class=sample.get("climate_class", 0),
+                landcover=sample.get("landcover", 0),
                 observation_capacity=1,
                 input_path=str((base / "inputs.zarr").relative_to(root)),
                 label_path=str((base / "labels.zarr").relative_to(root)),
@@ -161,8 +165,10 @@ def collect_pilot(ee, records, root, config, norm):
             atomic_json(committed, row)
             accepted.append(row)
             print(json.dumps(dict(sample_id=sid, status="pilot_zarr_complete")), flush=True)
-        if not accepted:
+        if not accepted and not allow_empty:
             raise ValueError("No pilot samples passed input and station-label checks")
+        if not accepted:
+            return []
         temporary = root / "samples.parquet.part"
         pd.DataFrame(accepted).to_parquet(temporary, index=False)
         temporary.replace(root / "samples.parquet")

@@ -67,12 +67,38 @@ def main():
     command.add_argument("--count", type=int, default=12)
     command.add_argument("--product-manifest", type=Path)
     command.add_argument("--reuse-cache", type=Path, action="append", default=[])
+    command = stages.add_parser("collect", help="Small stratified multi-station development Zarrs")
+    command.add_argument("--candidates", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--config", type=Path, required=True)
+    command.add_argument("--per-bin", type=int, default=2)
     command = stages.add_parser("validate-model", help="CPU forward/backward on real station Zarrs")
     command.add_argument("--manifest", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "collect":
+        from mmengine.config import Config
+        from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.data.normalize import (
+            load_computed_config,
+        )
+
+        from hydrostate.data.gee.client import initialize
+
+        from .collection import collect_stations
+
+        config = Config.fromfile(str(args.config)).to_dict()
+        report = collect_stations(
+            initialize(config["project"]),
+            args.candidates,
+            args.output,
+            config,
+            load_computed_config(),
+            per_bin=args.per_bin,
+        )
+        print(json.dumps(report), flush=True)
+        return
     if args.stage == "compare-points":
         from hydrostate.data.gee.client import initialize
 

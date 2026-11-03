@@ -77,3 +77,36 @@ def test_independent_station_zarr_and_support_augmentation(tmp_path):
     torch.testing.assert_close(
         batch["data_samples"]["site_sm_native_value"], torch.tensor([[0.23], [0.23]])
     )
+
+
+def test_multi_station_collection_preserves_committed_manifest_and_split(tmp_path, monkeypatch):
+    from hydrostate.data.site import pilot
+
+    schema = SiteSchema()
+    inputs = {key: np.zeros(spec.tail_shape, spec.dtype) for key, spec in schema.inputs.items()}
+    for name in inputs:
+        if name.endswith("_valid"):
+            inputs[name][...] = 1
+    monkeypatch.setattr(pilot, "input_arrays", lambda *args: (inputs, {}, True))
+    monkeypatch.setattr(
+        pilot, "strata", lambda *args: dict(frequency_bin=0, climate_class=8, landcover=10)
+    )
+    first = dict(
+        site_id="a",
+        group_id="a",
+        lon=25.0,
+        lat=41.0,
+        target_time="2021-01-01",
+        target_end="2021-01-09",
+        sm=dict(value=0.2, valid=True),
+        split="train",
+        candidate_id="a1",
+    )
+    second = dict(first, site_id="b", group_id="b", lon=26.0, split="validation", candidate_id="b1")
+    config = dict(climate_asset="fixture", min_input_fraction=0.5, min_active_slots=2)
+    assert len(pilot.collect_pilot(None, [first], tmp_path, config, {})) == 1
+    assert len(pilot.collect_pilot(None, [second], tmp_path, config, {})) == 2
+    assert len(pilot.collect_pilot(None, [first], tmp_path, config, {})) == 2
+    frame = pd.read_parquet(tmp_path / "samples.parquet")
+    assert set(frame.split) == {"train", "validation"}
+    assert set(frame.candidate_id) == {"a1", "b1"}

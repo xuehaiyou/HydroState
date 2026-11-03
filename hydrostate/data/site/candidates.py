@@ -131,14 +131,20 @@ def prepare_candidates(index, splits, strata, output, *, as_of, workers=2, limit
         on=["site_id", "lon", "lat"],
         validate="many_to_one",
     )
-    eligible = eligible[eligible.frequency_bin.ge(0) & eligible.split.ne("unresolved")]
+    input_start = json.loads((strata / "strata_report.json").read_text())["input_start"]
+    eligible = eligible[
+        eligible.frequency_bin.ge(0)
+        & eligible.split.ne("unresolved")
+        & eligible.time_end.ge(input_start)
+        & eligible.time_start.lt(as_of)
+    ]
     if limit:
         eligible = eligible.head(limit)
     config = dict(
         version="site_sm_candidates_v1",
         as_of=as_of,
         limit=limit,
-        input_start=json.loads((strata / "strata_report.json").read_text())["input_start"],
+        input_start=input_start,
         source_sha256=sha256(index / "source_files.parquet"),
         split_sha256=sha256(splits / "station_splits.parquet"),
         strata_sha256=sha256(strata / "station_strata.parquet"),
