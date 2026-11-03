@@ -34,6 +34,9 @@ def ismn_header(path, *, require_shallow=True):
     ) or network.upper() in {"COSMOS", "PBO_H2O"}
     if require_shallow and nonpoint:
         raise UnsupportedSource("Non-point soil-moisture support requires its own operator")
+    aggregated = any(word in sensor.lower() for word in ("area-weighted", "average"))
+    if require_shallow and aggregated:
+        raise UnsupportedSource("Aggregated sensor support requires an explicit spatial operator")
     lat, lon = float(lat), float(lon)
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         raise UnsupportedSource("Invalid ISMN coordinates")
@@ -49,7 +52,7 @@ def ismn_header(path, *, require_shallow=True):
         depth_from_m=lower,
         depth_to_m=upper,
         instrument=sensor,
-        support_type="nonpoint_unresolved" if nonpoint else (
+        support_type="nonpoint_unresolved" if nonpoint or aggregated else (
             "point" if lower == upper else "point_layer"
         ),
         time_basis="UTC",

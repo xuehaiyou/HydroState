@@ -60,3 +60,10 @@ def test_historical_offset_requires_explicit_resolution(tmp_path):
             writer.writerow(dict(SITE_ID="US-X", VARIABLE=key, DATAVALUE=value))
     with pytest.raises(UnsupportedSource, match="historical UTC_OFFSET"):
         fluxnet_metadata(tmp_path / "AMF_US-X_FLUXNET_FLUXMET_HH_2020.csv")
+
+
+def test_aggregated_sensor_is_not_a_point_even_when_depth_is_shallow(tmp_path):
+    path=ismn_file(tmp_path,sensor='Stevens-Hydraprobe-A1-area-weighted')
+    with pytest.raises(UnsupportedSource,match='Aggregated sensor support'):
+        ismn_header(path)
+    assert ismn_header(path,require_shallow=False)['support_type']=='nonpoint_unresolved'
