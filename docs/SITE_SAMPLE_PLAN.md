@@ -1,8 +1,10 @@
 # 站点 SM / ET 样本与联合训练方案
 
-更新：2026-11-03。**方案已确认并开始实施；底层读取、时间标签和监督接口已有实现，
-正式划分、分层采样、产品对照验收与联合训练仍需完成。**
-实施范围与运行证据见[首轮实施记录](validation/SITE_PIPELINE_20261103.md)。
+更新：2026-11-03。**四来源上传、永久解压、文件索引与候选固定划分已完成；
+浅层晨间 SM 已完成质量整理、分层小试、少量点位产品对照及真实模型接口验证。
+正式生产、代表性与 ET 足迹验收、SCR 发布及联合训练仍需完成。**
+运行证据见[首轮实施记录](validation/SITE_PIPELINE_20261103.md)和
+[索引、分层与多站点小试](validation/SITE_INDEX_SPLIT_20261103.md)。
 
 流程：原始资料上传 → CPU 在原目录永久解压 → 站点窗口整理与固定划分 →
 分层随机抽样 → 遥感配对与独立 Zarr → 小试及产品一致性检查 → 发布 SCR → 联合训练。
@@ -45,9 +47,10 @@
   输入有效性。输入规格见[当前契约](../hydrostate/data/retrieval/contract.py)。
 
 已有产品范围的依据是[现有采样配置](../configs/data/collection/retrieval.py)：
-当前 [S2 SR 集合](https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED)
-从 2017 年开始，使用的 [PML MODIS 版](https://developers.google.com/earth-engine/datasets/catalog/projects_pml_evapotranspiration_PML_OUTPUT_PML_V22a)
-截至 2024 年。这些边界不直接作为独立站点标签的时间边界。
+[S2 SR 集合目录说明](https://developers.google.com/earth-engine/datasets/catalog/COPERNICUS_S2_SR_HARMONIZED)
+标示从 2017 年开始，使用的 [PML MODIS 版](https://developers.google.com/earth-engine/datasets/catalog/projects_pml_evapotranspiration_PML_OUTPUT_PML_V22a)
+截至 2024 年。实际 GEE 元数据存在早于说明日期的 S2 条目，已在小试记录中列出，不能
+据此推断全球完整覆盖。这些边界不直接作为独立站点标签的时间边界，以逐窗口可用输入为准。
 
 ## 3. 标签、质量与观测支持
 
@@ -79,7 +82,8 @@
 - 初始要求至少 95% 足迹权重落在图块有效范围，满足后归一化并记录截断比例；
   不足不静默归一。窗口平均足迹作用于周期预测是时间聚合近似，不能解释成逐时精确监督。
 
-**首轮试采默认门槛：** SM 有效晨间日期至少 80%；ET 实测时长占完整窗口至少 50%，
+**首轮试采默认门槛：** SM 有效晨间日期至少 80%；ET 有效时长占完整窗口至少 80%，
+实测时长占完整窗口至少 50%，
 白天、夜间有效覆盖分别至少 80%。有效 ET 时长包含合格实测和允许的高质量填补；
 实测比例的分母是完整窗口。昼夜长度按位置和日期确定，不存在的昼／夜时段不计算比例。
 这些及上述足迹门槛是待小试检验的项目参数，不是网络统一标准；正式生产前冻结，

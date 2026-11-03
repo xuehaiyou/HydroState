@@ -47,8 +47,10 @@
 - ICOS `4382519`：6 分 34 秒完成，ExitCode 0；外层及 210 个嵌套包永久保留，
   不需要再次解压。AmeriFlux BASE 556 包上传完成，`4382570` 以 normal QoS
   解压，6 分 47 秒完成，ExitCode 0。
-- FLUXNET 全量上传仍在继续。后台 `queue_after_transfer.py` 仅在对应 rsync 成功后
-  提交该来源的 CPU 解压；状态写入上述本地运行目录的 `remaining_extraction_jobs.json`。
+- FLUXNET 于香港时间 17:16 完成全量上传；随后 CPU 解压 `4383162` 用时 37 分 04 秒，
+  ExitCode 0，781 包均有完成标记。四来源的上传与永久解压均已完成。
+  后台 `queue_after_transfer.py` 仅在对应 rsync 成功后提交该来源的 CPU 解压；
+  状态写入上述本地运行目录的 `remaining_extraction_jobs.json`。
   时限基于已测约 95 MB/s，按 90 MB/s 与包级开销估算，再加 10% 余量。
 
 ## 验证
