@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 
 from hydrostate.data.gee.contracts import fingerprint
@@ -11,6 +12,17 @@ from hydrostate.data.site.contract import VERSION, SiteSchema
 from hydrostate.datasets.collate import hydro_collate
 from hydrostate.datasets.site_dataset import SiteDataset
 from hydrostate.storage import SampleShardWriter
+
+
+def test_jrc_never_water_is_distinct_from_no_observations():
+    from hydrostate.data.site.pilot import observed_occurrence
+
+    assert observed_occurrence(dict(occurrence=-1, valid_obs=445, detections=0)) == 0
+    assert observed_occurrence(dict(occurrence=80, valid_obs=100, detections=90)) == 80
+    with pytest.raises(ValueError, match="no JRC observations"):
+        observed_occurrence(dict(occurrence=-1, valid_obs=0, detections=0))
+    with pytest.raises(ValueError, match="water detections"):
+        observed_occurrence(dict(occurrence=-1, valid_obs=100, detections=5))
 
 
 def test_independent_station_zarr_and_support_augmentation(tmp_path):

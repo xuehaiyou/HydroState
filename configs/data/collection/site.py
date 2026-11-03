@@ -6,3 +6,4 @@ min_input_fraction = 0.5
 min_active_slots = 2
 min_date_gap_days = 30
 seed = 43
+frequency_observation_policy = "jrc_metadata_valid_observations_v1"

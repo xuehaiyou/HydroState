@@ -31,10 +31,11 @@ def site_grid(lon, lat):
 def strata(ee, lon, lat, cache, climate_asset):
     def fetch():
         point = ee.Geometry.Point([lon, lat])
-        occurrence = ee.Image("JRC/GSW1_4/GlobalSurfaceWater").select("occurrence").unmask(0)
-        observed = ee.ImageCollection("JRC/GSW1_4/YearlyHistory").select("waterClass").max().gt(0)
+        occurrence = ee.Image("JRC/GSW1_4/GlobalSurfaceWater").select("occurrence")
+        metadata = ee.Image("JRC/GSW1_4/Metadata").select(["valid_obs", "detections"])
         image = (
-            occurrence.updateMask(observed)
+            occurrence.unmask(-1, False)
+            .addBands(metadata.unmask(-1, False))
             .addBands(ee.Image(climate_asset).select(0).rename("climate_class"))
             .addBands(
                 ee.ImageCollection("ESA/WorldCover/v200").first().select("Map").rename("landcover")
@@ -42,18 +43,31 @@ def strata(ee, lon, lat, cache, climate_asset):
         )
         return image.reduceRegion(ee.Reducer.first(), point, scale=30).getInfo()
 
-    result = cached_json(cache / f"{fingerprint([lon, lat, climate_asset])}.json", fetch)
-    occurrence = result.get("occurrence")
-    if occurrence is None:
-        raise ValueError("Station centre has no JRC observations; it is not frequency zero")
+    result = cached_json(
+        cache / f"{fingerprint([lon, lat, climate_asset, 'metadata_v1'])}.json", fetch
+    )
+    occurrence = observed_occurrence(result)
     frequency = 0 if occurrence == 0 else 6 if occurrence == 100 else int(occurrence // 20) + 1
     return dict(
         result,
+        occurrence=occurrence,
         frequency_bin=frequency,
         sampling_group=frequency,
         jrc_observed=True,
         strata_source="JRC_GSW1_4; ESA_WorldCover_v200; configured_Koppen_asset",
     )
+
+
+def observed_occurrence(values):
+    """Recover published masked never-water zeros only with positive valid-observation evidence."""
+    if (values.get("valid_obs") or 0) <= 0:
+        raise ValueError("Station centre has no JRC observations; it is not frequency zero")
+    occurrence = values.get("occurrence")
+    if occurrence is not None and 0 <= occurrence <= 100:
+        return occurrence
+    if values.get("detections") == 0:
+        return 0
+    raise ValueError("JRC occurrence missing despite water detections; centre requires review")
 
 
 def collect_pilot(ee, records, root, config, norm):

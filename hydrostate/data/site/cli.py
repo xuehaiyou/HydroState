@@ -31,7 +31,20 @@ def main():
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--target-times", nargs="+", required=True)
+    command = stages.add_parser("compare-sm", help="SMAP pairing diagnostic for development Zarrs")
+    command.add_argument("--manifest", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--project", required=True)
     args = parser.parse_args()
+    if args.stage == "compare-sm":
+        from hydrostate.data.gee.client import initialize
+
+        from .comparison import collect_sm_comparison, plot_sm_comparison
+
+        report = collect_sm_comparison(initialize(args.project), args.manifest, args.output)
+        plot_sm_comparison(report, args.output)
+        print(json.dumps(report["overall"]), flush=True)
+        return
     if args.stage == "pilot":
         from mmengine.config import Config
         from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.data.normalize import (
