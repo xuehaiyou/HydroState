@@ -37,13 +37,23 @@ class AlignedLandCoupling(WaterSoilCoupling):
 class RetrievalModelMixin:
     """Shared current-contract SM support and ET export, independent of architecture."""
 
-    def __init__(self, land_time_policy="aligned_or_window", **kwargs):
+    def __init__(self, land_time_policy="aligned_or_window", site_supervision=None, **kwargs):
         if land_time_policy not in ("aligned_or_window", "require_aligned"):
             raise ValueError("Unknown land_time_policy")
         self.land_time_policy = land_time_policy
         super().__init__(**kwargs)
         if self.water_soil_coupling is not None:
             self.water_soil_coupling = AlignedLandCoupling(**vars(self.water_soil_coupling))
+        if site_supervision is not None:
+            from .site_supervision import SiteObjective
+
+            self.site_objective = SiteObjective(**site_supervision)
+
+    def _loss_from_outputs(self, outputs, data_samples, auxiliary=None, auxiliary_weights=None):
+        losses = super()._loss_from_outputs(outputs, data_samples, auxiliary, auxiliary_weights)
+        if hasattr(self, "site_objective"):
+            losses.update(self.site_objective(outputs, data_samples))
+        return losses
 
     def _land_samples(self, inputs, samples):
         coupling = self.water_soil_coupling

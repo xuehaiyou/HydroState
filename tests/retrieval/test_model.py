@@ -401,3 +401,36 @@ def test_unet_season_phase_uses_utc_calendar_year(unet):
         data = model.data_preprocessor(sample)
         torch.testing.assert_close(data["inputs"]["target_season"], torch.tensor(
             [[math.sin(2 * math.pi * phase), math.cos(2 * math.pi * phase)]] * 2))
+
+
+def test_unet_station_only_batch_independent_masks_and_backward(unet):
+    from hydrostate.models.site_supervision import SiteObjective
+
+    model, _ = unet
+    model.site_objective = SiteObjective(dict(
+        version="site_training_statistics_v1", split="train", ddof=0,
+        training_fingerprint="1"*64,
+        observations={name: dict(count=10, mean=.2, std=.1)
+                      for name in ("site_sm", "site_et")}))
+    sample = batch(24)
+    for name, value in sample["data_samples"].items():
+        if name.endswith("_valid"):
+            value.zero_()
+    for name in ("site_sm", "site_et"):
+        sample["data_samples"][f"{name}_native_value"] = torch.tensor([[.2], [float("nan")]])
+        sample["data_samples"][f"{name}_native_valid"] = torch.tensor([[True], [False]])
+        weights = torch.zeros(2, 1, 8, 8)
+        weights[:, :, 3, 3] = 1
+        sample["data_samples"][f"{name}_native_weights"] = weights
+    data = model.data_preprocessor(sample, training=True)
+    losses = model.loss(**data)
+    assert losses["valid_count_soil_moisture"] == 0
+    assert losses["valid_count_site_sm"] == 1
+    assert losses["valid_count_site_et"] == 1
+    assert all(torch.isfinite(value) for value in losses.values())
+    sum(value for key, value in losses.items() if key.startswith("loss_")).backward()
+    assert model.encoder.blocks[0][0].weight.grad.abs().sum() > 0
+    assert all(torch.isfinite(p.grad).all() for p in model.parameters() if p.grad is not None)
+    predictions = model.predict(**data)
+    assert predictions[0]["valid_site_sm"].all()
+    assert not predictions[1]["valid_site_sm"].any()

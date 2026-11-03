@@ -31,6 +31,28 @@ def as_tensors(arrays):
     }
 
 
+def read_shard_arrays(root, cache, row, kind, specs, version, config_hash):
+    """Shared strict native-array reader; each independent collection supplies its identity."""
+    path = root / row[f"{kind}_path"]
+    if not (path / "_SUCCESS.json").exists():
+        raise ValueError(f"Incomplete shard: {path}")
+    group = cache.get(str(path))
+    if (group.attrs.get("schema_version") != version
+            or group.attrs.get("config_sha256") != config_hash):
+        raise ValueError(f"Shard contract mismatch: {path}")
+    if kind == "input" and group.attrs.get("input_grids") != grid_metadata(
+        dict(crs=row["crs"], transform=json.loads(row["transform"]))
+    ):
+        raise ValueError(f"Native input grids disagree with tile bounds: {path}")
+    result = {}
+    for name, spec in specs.items():
+        array = group[name]
+        if array.shape[1:] != spec.tail_shape or array.dtype != np.dtype(spec.dtype):
+            raise ValueError(f"Invalid schema for {path}/{name}")
+        result[name] = array[int(row.shard_index)].copy()
+    return result
+
+
 @DATASETS.register_module()
 class RetrievalDataset(Dataset):
     def __init__(
@@ -95,26 +117,9 @@ class RetrievalDataset(Dataset):
         return len(self.table)
 
     def _arrays(self, row, kind, specs):
-        path = self.root / row[f"{kind}_path"]
-        if not (path / "_SUCCESS.json").exists():
-            raise ValueError(f"Incomplete shard: {path}")
-        group = self.cache.get(str(path))
-        if (
-            group.attrs.get("schema_version") != VERSION
-            or group.attrs.get("config_sha256") != self.config_hash
-        ):
-            raise ValueError(f"Shard contract mismatch: {path}")
-        if kind == "input" and group.attrs.get("input_grids") != grid_metadata(
-            dict(crs=row["crs"], transform=json.loads(row["transform"]))
-        ):
-            raise ValueError(f"Native input grids disagree with tile bounds: {path}")
-        result = {}
-        for name, spec in specs.items():
-            array = group[name]
-            if array.shape[1:] != spec.tail_shape or array.dtype != np.dtype(spec.dtype):
-                raise ValueError(f"Invalid schema for {path}/{name}")
-            result[name] = array[int(row.shard_index)].copy()
-        return result
+        return read_shard_arrays(
+            self.root, self.cache, row, kind, specs, VERSION, self.config_hash
+        )
 
     def _load_targets(self, row, metadata):
         targets = self._arrays(row, "label", self.schema.targets)

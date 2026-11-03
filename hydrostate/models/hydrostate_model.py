@@ -363,6 +363,10 @@ class HydroStateModel(BaseModel):
                 for task in tasks
             }
         )
+        if data_samples is not None and "site_sm_native_value" in data_samples:
+            from .site_supervision import station_values
+
+            supervised.update(station_values(outputs, data_samples))
         for index in range(batch_size):
             item = {task: outputs[task][index] for task in tasks}
             if sm_prediction_support is not None:
@@ -385,7 +389,7 @@ class HydroStateModel(BaseModel):
                 for key in ("prediction_valid", *(f"{task}_native_weights" for task in tasks)):
                     if key in data_samples:
                         item[key] = data_samples[key][index]
-                for task in tasks:
+                for task in supervised:
                     pred, target, valid = supervised[task]
                     item[f"supervised_{task}"] = pred[index]
                     item[f"target_{task}"] = target[index]
