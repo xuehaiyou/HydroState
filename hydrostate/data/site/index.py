@@ -238,7 +238,12 @@ def build_index(raw_root, output, *, limit=None, reuse=None):
         frame.to_parquet(output / "source_files.parquet", index=False)
         usable = frame[frame.status.eq("indexed")].copy()
         columns = ["site_id", "group_id", "source", "network", "lat", "lon", "metadata_issue"]
-        stations = usable[columns].drop_duplicates()
+        stations = (
+            usable[columns]
+            .groupby(columns[:-1], dropna=False, sort=True)["metadata_issue"]
+            .agg(lambda values: ";".join(sorted(set(values.dropna()) - {""})))
+            .reset_index()
+        )
         # More than one location is kept as separate geometry, but linked by source station ID.
         stations["location_id"] = [
             fingerprint([r.site_id, r.lon, r.lat])[:24] for r in stations.itertuples()

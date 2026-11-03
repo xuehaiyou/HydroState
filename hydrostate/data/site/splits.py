@@ -28,7 +28,8 @@ def transformer(source, target):
 
 def xyz(lon, lat):
     lon, lat = np.deg2rad(lon), np.deg2rad(lat)
-    return 6350000 * np.array([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)])
+    # Below the minimum WGS84 curvature radius: the spatial hash cannot prune real overlaps.
+    return 6300000 * np.array([np.cos(lat) * np.cos(lon), np.cos(lat) * np.sin(lon), np.sin(lat)])
 
 
 class CircleIndex:

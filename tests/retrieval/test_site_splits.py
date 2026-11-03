@@ -66,3 +66,14 @@ def test_previously_developed_site_group_cannot_be_heldout():
     table, _ = assign_splits(pd.DataFrame(rows), [], development_sites=["developed"])
     assert table.split.item() == "train"
     assert table.split_reason.item() == "previous_development_group"
+
+
+def test_spatial_hash_is_conservative_at_equator_and_high_latitude():
+    import numpy as np
+
+    from hydrostate.data.site.splits import GEOD, xyz
+
+    for lat in (0, 30, 80):
+        for bearing in (0, 30, 90, 170):
+            lon2, lat2, _ = GEOD.fwd(0, lat, bearing, 34000)
+            assert np.linalg.norm(xyz(0, lat) - xyz(lon2, lat2)) < 34000
