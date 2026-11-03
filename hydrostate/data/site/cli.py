@@ -35,7 +35,17 @@ def main():
     command.add_argument("--manifest", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--project", required=True)
+    command = stages.add_parser("validate-model", help="CPU forward/backward on real station Zarrs")
+    command.add_argument("--manifest", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--config", type=Path, required=True)
+    command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "validate-model":
+        from .validation import validate_training_path
+
+        validate_training_path(args.manifest, args.config, args.product_statistics, args.output)
+        return
     if args.stage == "compare-sm":
         from hydrostate.data.gee.client import initialize
 
