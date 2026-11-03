@@ -122,3 +122,24 @@ class TestExpressions(ApiTestCase):
                     sm_enabled=False,
                 )
         assert pml is None and sm == dict(valid_days=0, skipped="tile_land_fraction")
+
+    def test_station_strata_batched_graph_and_cached_coordinates(self):
+        import json
+
+        import pandas as pd
+
+        from hydrostate.data.site.stratify import enrich_index
+
+        with TemporaryDirectory() as directory:
+            root=Path(directory)
+            path=root/'stations.parquet'
+            pd.DataFrame([dict(location_id='a',lon=25.,lat=41.)]).to_parquet(path)
+            responses=[dict(features=[dict(properties=dict(point_id=0,occurrence=-1,
+                 valid_obs=10,detections=0,climate_class=8,landcover=10))]),
+                 1400000000000,1490000000000,1360000000000]
+            with patch.object(ee.data,'computeValue',side_effect=responses):
+                report=enrich_index(ee,path,root/'out','example/climate',workers=1)
+            assert report['source_location_bins']=={0:1}
+            assert json.loads((root/'out'/'input_dates.json').read_text())['first_utc']['landsat']
+            with patch.object(ee.data,'computeValue',side_effect=AssertionError('cache miss')):
+                assert enrich_index(ee,path,root/'out','example/climate',workers=1)==report

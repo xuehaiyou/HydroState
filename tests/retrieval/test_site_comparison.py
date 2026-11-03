@@ -41,3 +41,66 @@ def test_r2_can_be_negative_and_is_not_correlation_squared():
     assert result["bias"] == 10
     assert result["rmse"] == 10
     assert result["windows"] == 3 and result["sites"] == 1
+
+
+def test_existing_point_cache_never_calls_gee(tmp_path):
+    import json
+    from dataclasses import asdict
+
+    from hydrostate.data.gee.contracts import fingerprint
+    from hydrostate.data.retrieval.specs import SOURCES
+    from hydrostate.data.site.comparison import smap_observations
+
+    record = dict(lon=25.0, lat=41.0, target_time="2021-01-01", target_end="2021-01-09")
+    identity = dict(
+        sources=[asdict(s) for s in SOURCES["sm"]],
+        lon=25.0,
+        lat=41.0,
+        start="2021-01-01",
+        end="2021-01-09",
+    )
+    old = tmp_path / "old"
+    old.mkdir()
+    data = dict(identity=identity, observations=[], projection=None)
+    (old / f"{fingerprint(identity)}.json").write_text(json.dumps(data))
+    # None is deliberately unusable as an EE client: a local hit must not access the network.
+    result = smap_observations(None, record, tmp_path / "new", reuse_caches=[old])
+    assert result["response_source"] == "existing_point_cache"
+
+
+def test_local_native_smap_reuse_requires_actual_cell_and_version(tmp_path):
+    import json
+
+    import pandas as pd
+
+    from hydrostate.data.site.comparison import LocalSMAP
+
+    label = tmp_path / "labels.zarr"
+    label.mkdir()
+    pd.DataFrame(
+        [dict(target_time="2021-01-01", target_end="2021-01-09", label_path="labels.zarr")]
+    ).to_parquet(tmp_path / "samples.parquet")
+    attrs = dict(
+        sm_quality=dict(
+            support=dict(
+                grid=dict(crs="EPSG:4326", transform=[0.08, 0, -180, 0, -0.08, 85]),
+                cell=[2250, 1062],
+            ),
+            observations=[
+                dict(
+                    date="2021-01-02",
+                    soil_moisture_am=0.2,
+                    asset_id="NASA/SMAP/SPL3SMP_E/005/20210102",
+                )
+            ],
+        )
+    )
+    (label / ".zattrs").write_text(json.dumps(attrs))
+    lookup = LocalSMAP(tmp_path / "samples.parquet")
+    record = dict(target_time="2021-01-01", target_end="2021-01-09", lon=0.04, lat=0.0)
+    value = lookup.find(record, {})
+    assert value["observations"][0]["retrieval_qual_flag_am"] == 0
+    assert lookup.find(dict(record, lon=0.14), {}) is None
+    attrs["sm_quality"]["observations"][0]["asset_id"] = "NASA/SMAP/SPL3SMP_E/006/20210102"
+    (label / ".zattrs").write_text(json.dumps(attrs))
+    assert lookup.find(record, {}) is None

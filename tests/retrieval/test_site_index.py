@@ -59,3 +59,14 @@ def test_bif_xlsx_uses_same_metadata_convention(tmp_path):
     book.save(path)
     row = bif_metadata(path, "ameriflux", "XX-X")
     assert row["metadata_issue"] == ""
+
+
+def test_icos_variable_dictionary_is_not_an_observation_table(tmp_path):
+    from hydrostate.data.site.index import source_tables
+
+    base = tmp_path / "release" / "ICOSETC_XX-X_ARCHIVE_L2"
+    base.mkdir(parents=True)
+    observed = base / "ICOSETC_XX-X_FLUXNET_HH_L2.csv"
+    observed.touch()
+    (base / "ICOSETC_XX-X_VARINFO_FLUXNET_HH_L2.csv").touch()
+    assert source_tables(tmp_path, "icos") == [observed]

@@ -16,6 +16,7 @@ def main():
     command.add_argument("--root", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--limit", type=int)
+    command.add_argument("--reuse", type=Path)
     command = stages.add_parser("split-index", help="Group stations and exclude product support")
     command.add_argument("--index", type=Path, required=True)
     command.add_argument("--manifest", type=Path, required=True)
@@ -57,12 +58,36 @@ def main():
     command.add_argument("--manifest", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--project", required=True)
+    command = stages.add_parser(
+        "compare-points", help="Few station/product points, local before GEE"
+    )
+    command.add_argument("--candidates", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--project", required=True)
+    command.add_argument("--count", type=int, default=12)
+    command.add_argument("--product-manifest", type=Path)
+    command.add_argument("--reuse-cache", type=Path, action="append", default=[])
     command = stages.add_parser("validate-model", help="CPU forward/backward on real station Zarrs")
     command.add_argument("--manifest", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "compare-points":
+        from hydrostate.data.gee.client import initialize
+
+        from .comparison import compare_candidate_points
+
+        report = compare_candidate_points(
+            initialize(args.project),
+            args.candidates,
+            args.output,
+            count=args.count,
+            product_manifest=args.product_manifest,
+            reuse_caches=args.reuse_cache,
+        )
+        print(json.dumps(report["overall"]), flush=True)
+        return
     if args.stage == "candidates":
         from .candidates import prepare_candidates
 
@@ -95,7 +120,10 @@ def main():
     if args.stage == "index":
         from .index import build_index
 
-        print(json.dumps(build_index(args.root, args.output, limit=args.limit)), flush=True)
+        print(
+            json.dumps(build_index(args.root, args.output, limit=args.limit, reuse=args.reuse)),
+            flush=True,
+        )
         return
     if args.stage == "validate-model":
         from .validation import validate_training_path

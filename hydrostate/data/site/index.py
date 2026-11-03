@@ -14,7 +14,7 @@ from hydrostate.data.gee.contracts import atomic_json, fingerprint, locked
 from .archives import sha256
 from .readers import UnsupportedSource, ismn_header
 
-INDEX_VERSION = "site_source_index_v1"
+INDEX_VERSION = "site_source_index_v2"
 
 
 def bif_rows(path):
@@ -114,7 +114,9 @@ def source_tables(root, source):
     if source == "ameriflux":
         return sorted(p for p in root.glob("*/*.csv") if re.search(r"_BASE_(?:HH|HR)_", p.name))
     # ARCHIVE already contains standalone FLUXES/METEO products: index it once.
-    return sorted(root.glob("*/*_ARCHIVE_L2/*_FLUXNET_HH_L2.csv"))
+    return sorted(
+        p for p in root.glob("*/*_ARCHIVE_L2/*_FLUXNET_HH_L2.csv") if "_VARINFO_" not in p.name
+    )
 
 
 def source_record(path, source, metadata_cache):
@@ -178,10 +180,15 @@ def source_record(path, source, metadata_cache):
     return result
 
 
-def build_index(raw_root, output, *, limit=None):
+def build_index(raw_root, output, *, limit=None, reuse=None):
     raw_root, output = Path(raw_root), Path(output)
     output.mkdir(parents=True, exist_ok=True)
-    config = dict(version=INDEX_VERSION, raw_root=str(raw_root.resolve()), limit=limit)
+    config = dict(
+        version=INDEX_VERSION,
+        raw_root=str(raw_root.resolve()),
+        limit=limit,
+        reuse=str(Path(reuse).resolve()) if reuse else None,
+    )
     with locked(output / ".index.lock", blocking=False):
         config_path = output / "index_config.json"
         if config_path.exists() and json.loads(config_path.read_text()) != config:
@@ -198,13 +205,18 @@ def build_index(raw_root, output, *, limit=None):
                 paths = paths[:limit]
             for index, path in enumerate(paths, 1):
                 dest = cache / f"{fingerprint(str(path.resolve()))[:24]}.json"
-                if dest.exists():
-                    row = json.loads(dest.read_text())
+                previous = dest
+                if not previous.exists() and reuse:
+                    previous = Path(reuse) / "files" / dest.name
+                if previous.exists():
+                    row = json.loads(previous.read_text())
                     if (row["source_bytes"], row["source_mtime_ns"]) != (
                         path.stat().st_size,
                         path.stat().st_mtime_ns,
                     ):
                         raise ValueError(f"Indexed source changed: {path}")
+                    if previous != dest:
+                        atomic_json(dest, row)
                 else:
                     try:
                         row = source_record(path, source, metadata_cache)

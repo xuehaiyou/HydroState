@@ -1,5 +1,6 @@
 """Traceable station/SMAP diagnostic pairing; no selection by product agreement."""
 
+import json
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +15,64 @@ from hydrostate.data.retrieval.catalog import cached_json
 from hydrostate.data.retrieval.specs import SOURCES
 
 
-def smap_observations(ee, record, cache):
+class LocalSMAP:
+    """Reuse native daily observations already saved in product Zarr metadata, not tile means."""
+
+    def __init__(self, manifest):
+        self.root = Path(manifest).parent
+        self.table = pd.read_parquet(manifest)
+
+    def find(self, record, identity):
+        from affine import Affine
+        from pyproj import Transformer
+
+        matches = self.table[
+            self.table.target_time.eq(record["target_time"])
+            & self.table.target_end.eq(record["target_end"])
+        ]
+        for row in matches.itertuples():
+            attrs_path = self.root / row.label_path / ".zattrs"
+            attrs = json.loads(attrs_path.read_text())
+            stored = attrs.get("sm_quality", {})
+            support = stored.get("support")
+            if not support or not stored.get("observations"):
+                continue
+            grid = support["grid"]
+            x, y = Transformer.from_crs(4326, grid["crs"], always_xy=True).transform(
+                record["lon"], record["lat"]
+            )
+            affine = Affine(*grid["transform"])
+            col, index = np.floor(~affine * (x, y)).astype(int)
+            if [int(col), int(index)] != support["cell"]:
+                continue
+            observations = stored["observations"]
+            if not all(
+                any(
+                    p["asset_id"].startswith(s.collection + "/")
+                    and (not s.start or s.start <= p["date"] < s.end)
+                    for s in SOURCES["sm"]
+                )
+                for p in observations
+            ):
+                continue
+            # Product production stored a value only after applying native QA=0 and [0,1].
+            values = [
+                dict(
+                    p, retrieval_qual_flag_am=(0 if p.get("soil_moisture_am") is not None else None)
+                )
+                for p in observations
+            ]
+            return dict(
+                identity=identity,
+                observations=values,
+                projection=grid,
+                response_source="local_product_native_observations",
+                reused_metadata=str(attrs_path),
+            )
+        return None
+
+
+def smap_observations(ee, record, cache, *, reuse_caches=(), local_products=None):
     """Sample the actual GEE publication grid; the catalogue exposes no overpass-time band."""
     identity = dict(
         sources=[asdict(s) for s in SOURCES["sm"]],
@@ -25,6 +83,19 @@ def smap_observations(ee, record, cache):
     )
 
     def fetch():
+        for root in reuse_caches:
+            previous = Path(root) / f"{fingerprint(identity)}.json"
+            if previous.exists():
+                value = json.loads(previous.read_text())
+                if value["identity"] != identity:
+                    raise ValueError("Product point cache identity mismatch")
+                return dict(
+                    value, response_source="existing_point_cache", reused_metadata=str(previous)
+                )
+        if local_products is not None:
+            value = local_products.find(record, identity)
+            if value is not None:
+                return value
         images = collection(ee, "sm").filterDate(identity["start"], identity["end"])
         size = images.size().getInfo()
         if not size:
@@ -46,6 +117,7 @@ def smap_observations(ee, record, cache):
         observations = ee.FeatureCollection(images.toList(size).map(sample)).getInfo()["features"]
         return dict(
             identity=identity,
+            response_source="GEE_native_point_query",
             observations=[f["properties"] for f in observations],
             projection=images.first().select("soil_moisture_am").projection().getInfo(),
         )
@@ -98,6 +170,8 @@ def pair_sm(record, products):
         time_match="ideal_morning_UTC_date_approximation; exact_overpass_not_exposed",
         support="point_vs_native_SMAP_grid; representativeness_not_yet_accepted",
         projection=products["projection"],
+        product_response_source=products.get("response_source", "point_query_cache"),
+        reused_metadata=products.get("reused_metadata"),
         reason=None if pairs else "no_common_QA_valid_dates",
     )
 
@@ -235,3 +309,71 @@ def plot_sm_comparison(report, output):
     fig.savefig(output / "sm_smap_scatter.pdf")
     fig.savefig(output / "sm_smap_scatter.svg")
     plt.close(fig)
+
+
+def compare_candidate_points(
+    ee, candidates, output, *, count=12, seed=43, product_manifest=None, reuse_caches=()
+):
+    """A few station/window point checks, independently of expensive satellite input collection."""
+    from .candidates import StratifiedPicker
+
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    table = pd.read_parquet(candidates)
+    table = table[table.split.eq("train")]
+    picker = StratifiedPicker(table.to_dict("records"), seed=seed)
+    quotas = {b: count for b in range(7)}
+    selected = []
+    seen = set()
+    while len(selected) < count:
+        row = picker.next(quotas)
+        if row is None:
+            break
+        if row["physical_group_id"] in seen:
+            picker.record(row, success=False)
+            continue
+        selected.append(row)
+        picker.record(row, success=True)
+        seen.add(row["physical_group_id"])
+    atomic_json(
+        output / "point_selection.json",
+        dict(
+            seed=seed,
+            requested=count,
+            selected=selected,
+            policy="train only; no product agreement filtering",
+        ),
+    )
+    local = LocalSMAP(product_manifest) if product_manifest else None
+    rows = []
+    for selected_row in selected:
+        record = json.loads(Path(selected_row["label_record"]).read_text())["windows"][
+            selected_row["record_index"]
+        ]
+        record = dict(record, group_id=selected_row["physical_group_id"])
+        product = smap_observations(
+            ee, record, output / "cache", reuse_caches=reuse_caches, local_products=local
+        )
+        rows.append(
+            dict(
+                pair_sm(record, product),
+                sample_id=selected_row["candidate_id"],
+                frequency_bin=selected_row["frequency_bin"],
+            )
+        )
+    report = dict(
+        status="few_point_consistency_check_not_model_accuracy",
+        rows=rows,
+        overall=metrics(rows),
+        per_site={
+            site: metrics([r for r in rows if r["group_id"] == site])
+            for site in sorted({r["group_id"] for r in rows})
+        },
+    )
+    atomic_json(output / "sm_smap_pairs.json", report)
+    pd.DataFrame(
+        [{k: v for k, v in r.items() if not isinstance(v, (dict, list))} for r in rows]
+    ).to_csv(output / "sm_smap_pairs.csv", index=False)
+    if report["overall"]["windows"]:
+        plot_sm_comparison(report, output)
+    return report
