@@ -12,6 +12,18 @@ from .archives import extract, inventory
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     stages = parser.add_subparsers(dest="stage", required=True)
+    command = stages.add_parser("icos-footprints", help="ICOS ET and FFP support candidates")
+    for name in ("index", "splits", "strata", "output"):
+        command.add_argument(f"--{name}", type=Path, required=True)
+    command.add_argument("--as-of", required=True)
+    command.add_argument("--start")
+    command.add_argument("--end")
+    command.add_argument("--stations", nargs="+")
+    command.add_argument("--workers", type=int, default=2)
+    command.add_argument("--canopy-max-age-days", type=int, default=366)
+    command = stages.add_parser("availability", help="Combined SM/ET candidate capacities")
+    for name in ("sm-candidates", "et-candidates", "output"):
+        command.add_argument(f"--{name}", type=Path, required=True)
     command = stages.add_parser("index", help="Index source headers without scanning observations")
     command.add_argument("--root", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
@@ -92,6 +104,22 @@ def main():
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "icos-footprints":
+        from .icos_footprints import prepare_icos_footprints
+
+        report = prepare_icos_footprints(
+            args.index, args.splits, args.strata, args.output, as_of=args.as_of,
+            start=args.start, end=args.end, stations=args.stations, workers=args.workers,
+            canopy_max_age_days=args.canopy_max_age_days,
+        )
+        print(json.dumps({k: v for k, v in report.items() if k != "reports"}), flush=True)
+        return
+    if args.stage == "availability":
+        from .availability import summarize_availability
+
+        report = summarize_availability(args.sm_candidates, args.et_candidates, args.output)
+        print(json.dumps(report), flush=True)
+        return
     if args.stage == "et-points":
         from .et_points import prepare_et_points
 
