@@ -12,6 +12,10 @@ from .archives import extract, inventory
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     stages = parser.add_subparsers(dest="stage", required=True)
+    command = stages.add_parser("index", help="Index source headers without scanning observations")
+    command.add_argument("--root", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--limit", type=int)
     for name in ("inventory", "extract"):
         command = stages.add_parser(name)
         command.add_argument("--root", type=Path, required=True)
@@ -41,6 +45,11 @@ def main():
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "index":
+        from .index import build_index
+
+        print(json.dumps(build_index(args.root, args.output, limit=args.limit)), flush=True)
+        return
     if args.stage == "validate-model":
         from .validation import validate_training_path
 

@@ -20,18 +20,19 @@ class UnsupportedSource(ValueError):
     """Known source with insufficient metadata/quality support for the declared target."""
 
 
-def ismn_header(path):
+def ismn_header(path, *, require_shallow=True):
     with Path(path).open() as stream:
         fields = shlex.split(stream.readline())
     if len(fields) != 9 or "_sm_" not in Path(path).name:
         raise UnsupportedSource("Not an ISMN separate-header soil-moisture file")
     database, network, site, lat, lon, elevation, lower, upper, sensor = fields
     lower, upper = float(lower), float(upper)
-    if not 0 <= lower <= upper <= 0.05:
+    if require_shallow and not 0 <= lower <= upper <= 0.05:
         raise UnsupportedSource("Depth outside the declared shallow 0–5 cm target")
-    if any(
+    nonpoint = any(
         word in sensor.lower() for word in ("cosmic", "hydroinnova", "gps", "gnss")
-    ) or network.upper() in {"COSMOS", "PBO_H2O"}:
+    ) or network.upper() in {"COSMOS", "PBO_H2O"}
+    if require_shallow and nonpoint:
         raise UnsupportedSource("Non-point soil-moisture support requires its own operator")
     lat, lon = float(lat), float(lon)
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
@@ -48,7 +49,9 @@ def ismn_header(path):
         depth_from_m=lower,
         depth_to_m=upper,
         instrument=sensor,
-        support_type="point" if lower == upper else "point_layer",
+        support_type="nonpoint_unresolved" if nonpoint else (
+            "point" if lower == upper else "point_layer"
+        ),
         time_basis="UTC",
         unit="m3 m-3",
     )
