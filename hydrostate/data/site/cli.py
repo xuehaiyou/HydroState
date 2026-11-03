@@ -67,6 +67,20 @@ def main():
     command.add_argument("--count", type=int, default=12)
     command.add_argument("--product-manifest", type=Path)
     command.add_argument("--reuse-cache", type=Path, action="append", default=[])
+    command = stages.add_parser("et-points", help="Bounded temporal ET QC for point diagnostics")
+    for name in ("index", "splits", "strata", "output"):
+        command.add_argument(f"--{name}", type=Path, required=True)
+    for name in ("start", "end", "as-of"):
+        command.add_argument(f"--{name}", required=True)
+    command.add_argument("--stations", type=int, default=4)
+    command.add_argument("--per-site", type=int, default=4)
+    command.add_argument("--max-files", type=int, default=12)
+    command.add_argument("--reuse-labels", type=Path, action="append", default=[])
+    command = stages.add_parser("compare-et", help="Native PML ET point pairing and scatter")
+    command.add_argument("--selection", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--project", required=True)
+    command.add_argument("--product-manifest", type=Path)
     command = stages.add_parser("collect", help="Small stratified multi-station development Zarrs")
     command.add_argument("--candidates", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
@@ -78,6 +92,27 @@ def main():
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "et-points":
+        from .et_points import prepare_et_points
+
+        report = prepare_et_points(
+            args.index, args.splits, args.strata, args.output, start=args.start, end=args.end,
+            as_of=args.as_of, stations=args.stations, per_site=args.per_site,
+            max_files=args.max_files, reuse_labels=args.reuse_labels,
+        )
+        print(json.dumps({k: report[k] for k in ("stations", "windows", "scope")}), flush=True)
+        return
+    if args.stage == "compare-et":
+        from hydrostate.data.gee.client import initialize
+
+        from .et_comparison import compare_et_points
+
+        report = compare_et_points(
+            initialize(args.project), args.selection, args.output,
+            product_manifest=args.product_manifest,
+        )
+        print(json.dumps(report["overall"]), flush=True)
+        return
     if args.stage == "collect":
         from mmengine.config import Config
         from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.data.normalize import (
