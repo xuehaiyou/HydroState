@@ -15,6 +15,21 @@ SM_CONFIG = dict(min_known_fraction=0.95, max_water_ice_fraction=0.05)
 
 
 class TestExpressions(ApiTestCase):
+    def test_station_native_smap_query_and_cache(self):
+        from hydrostate.data.site.comparison import smap_observations
+
+        sample = dict(lon=25.28, lat=41.18, target_time="2021-12-03", target_end="2021-12-11")
+        responses = [1, dict(features=[dict(properties=dict(date="2021-12-04",
+                         soil_moisture_am=.2, retrieval_qual_flag_am=0, asset_id="fixture"))]),
+                     dict(crs="EPSG:4326", transform=[.1, 0, -180, 0, -.1, 90])]
+        with TemporaryDirectory() as directory:
+            with patch.object(ee.data, "computeValue", side_effect=responses) as rpc:
+                result = smap_observations(ee, sample, directory)
+                assert rpc.call_count == 3
+            with patch.object(ee.data, "computeValue", side_effect=AssertionError("cache miss")):
+                assert smap_observations(ee, sample, directory) == result
+        assert result["observations"][0]["retrieval_qual_flag_am"] == 0
+
     def test_composite_graphs(self):
         image = ee.Image("example").set("system:time_start", ee.Date("2020-01-01").millis())
         for sensor in ("s1", "s2", "landsat"):

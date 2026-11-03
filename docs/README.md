@@ -6,7 +6,7 @@
 |---|---|
 | [RETRIEVAL_PIPELINE](RETRIEVAL_PIPELINE.md) | 科学定义、采样、时间匹配、质量控制及监督尺度 |
 | [DATA_PREPARATION](DATA_PREPARATION.md) | 本地/HPC 的正式执行入口和环境参数 |
-| [站点样本与联合训练方案](SITE_SAMPLE_PLAN.md) | 原始资料、独立 Zarr、分层抽样、划分隔离及产品一致性散点图；待实施 |
+| [站点样本与联合训练方案](SITE_SAMPLE_PLAN.md) | 原始资料、独立 Zarr、分层抽样、划分隔离及产品一致性；首轮小试已运行，正式联合训练待接入 |
 | [REGIONAL_INFERENCE](REGIONAL_INFERENCE.md) | 区域 Drive 准备、断点恢复和当前模型推理 |
 | [DATA_SCHEMA](DATA_SCHEMA.md) | 数据契约、分片和数据发布约定 |
 | [MTLORA](MTLORA.md) | MTLoRA、shared-LoRA、全量微调及冻结策略 |

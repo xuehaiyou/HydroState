@@ -80,13 +80,14 @@ def test_quality_encoding_reuse_preserves_nonzero_outputs_and_gradients():
 
 
 @pytest.mark.parametrize(
-    "private_rank,checkpoint,extended,finetuning",
-    [(0, False, False, "lora"), (2, False, False, "lora"),
-     (0, True, False, "lora"), (2, True, False, "lora"), (2, True, True, "lora"),
-     (0, False, False, "full"), (0, True, False, "full")],
+    "private_rank,checkpoint,extended,finetuning,station",
+    [(0, False, False, "lora", False), (2, False, False, "lora", False),
+     (0, True, False, "lora", False), (2, True, False, "lora", False),
+     (2, True, True, "lora", False), (0, False, False, "full", False),
+     (0, True, False, "full", False), (2, False, False, "lora", True)],
 )
 def test_current_model_forward_backward_and_prediction(
-    monkeypatch, tmp_path, private_rank, checkpoint, extended, finetuning
+    monkeypatch, tmp_path, private_rank, checkpoint, extended, finetuning, station
 ):
     from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.nn.flexi_vit import EncoderConfig
     from rslearn.models.olmoearth_pretrain import model as wrapper
@@ -142,6 +143,18 @@ def test_current_model_forward_backward_and_prediction(
             head.in_channels = 8
         cfg.model.target_statistics = statistics()
         sample = batch()
+        if station:
+            cfg.model.site_supervision = dict(statistics=dict(
+                version="site_training_statistics_v1", split="train", ddof=0,
+                training_fingerprint="1"*64,
+                observations={name: dict(count=10, mean=.2, std=.1)
+                              for name in ("site_sm", "site_et")}))
+            for name in ("site_sm", "site_et"):
+                sample["data_samples"][f"{name}_native_value"] = torch.full((2, 1), .2)
+                sample["data_samples"][f"{name}_native_valid"] = torch.ones(2, 1, dtype=torch.bool)
+                weights = torch.zeros(2, 1, 4, 4)
+                weights[:, :, 1, 1] = 1
+                sample["data_samples"][f"{name}_native_weights"] = weights
         if extended:
             cfg.model.target_statistics["task_specs"] = task_config(cfg.model.tasks)
             cfg.model.target_statistics["tasks"]["swe"] = dict(count=10, mean=1, std=0.5)
@@ -160,6 +173,8 @@ def test_current_model_forward_backward_and_prediction(
             output["water"] + output["snow_ice"] + output["land"], torch.ones(2, 1, 4, 4)
         )
         loss = model.loss(**data)
+        if station:
+            assert loss["valid_count_site_sm"] == loss["valid_count_site_et"] == 2
         assert all(torch.isfinite(v) for v in loss.values())
         sum(v for k, v in loss.items() if k.startswith("loss_")).backward()
         assert model.encoder.landsat_toa_adapter.weight.grad is not None

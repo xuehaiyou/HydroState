@@ -40,7 +40,7 @@ def smap_observations(ee, record, cache):
                 maxPixels=8,
             )
             return ee.Feature(None, values).set(
-                date=image.date().format("YYYY-MM-dd"), asset_id=image.get("asset_id")
+                dict(date=image.date().format("YYYY-MM-dd"), asset_id=image.get("asset_id"))
             )
 
         observations = ee.FeatureCollection(images.toList(size).map(sample)).getInfo()["features"]
@@ -213,7 +213,7 @@ def plot_sm_comparison(report, output):
     fig.text(
         0.17,
         0.89,
-        f"{m['windows']} windows · {m['sites']} sites\n"
+        f"{m['windows']} windows · {m['sites']} {'site' if m['sites'] == 1 else 'sites'}\n"
         f"RMSE {m['rmse']:.3f} · Bias {m['bias']:+.3f} · R² {r2}",
         fontsize=9,
     )
