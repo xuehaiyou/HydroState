@@ -118,7 +118,7 @@ def main():
         from .availability import summarize_availability
 
         report = summarize_availability(args.sm_candidates, args.et_candidates, args.output)
-        print(json.dumps(report), flush=True)
+        print(json.dumps({k: v for k, v in report.items() if k != "rows"}), flush=True)
         return
     if args.stage == "et-points":
         from .et_points import prepare_et_points

@@ -70,11 +70,16 @@ def metadata_events(path, kind, utc_offset):
         if not np.isfinite(number) or number < 0:
             discarded["invalid_height"] += 1
             continue
-        if time in events and events[time][0] == priority and events[time][1] != number:
-            raise UnsupportedSource(f"Ambiguous {kind} height at {date}")
-        if time not in events or priority > events[time][0]:
-            events[time] = (priority, number)
-    return [(t, v[1]) for t, v in sorted(events.items())], dict(discarded)
+        events.setdefault(time, {}).setdefault(priority, set()).add(number)
+    resolved = []
+    for time, priorities in sorted(events.items()):
+        values = priorities[max(priorities)]
+        value = next(iter(values)) if len(values) == 1 else None
+        if value is None:
+            discarded["ambiguous_height_update"] += 1
+        # An ambiguous update invalidates its period until the next known update.
+        resolved.append((time, value))
+    return resolved, dict(discarded)
 
 
 def read_intervals(path, columns, utc_offset):
@@ -159,7 +164,7 @@ def process_station(row, root, config):
             canopy_events=canopy,
             metadata_rejections=dict(instrument=height_rejects, canopy=canopy_rejects),
         )
-        if not heights or not canopy:
+        if not any(v is not None for _, v in heights) or not any(v is not None for _, v in canopy):
             raise UnsupportedSource("No unambiguous dated instrument/aggregate canopy height")
         fluxnet = read_intervals(source, ["LE_F_MDS", "LE_F_MDS_QC"], offset)
         fluxes = read_intervals(paths["fluxes"], [*PARAMETERS.values(), "FOOTPRINT_FLAG"], offset)
@@ -182,6 +187,15 @@ def process_station(row, root, config):
             provider_0_or_3=int(provider.sum()),
             joint_parameter_valid=int(good.sum()),
         )
+        report["parameter_rejection_counts"] = dict(
+            unknown_canopy=int((~np.isfinite(hc)).sum()),
+            unknown_or_nonpositive_zm=int((~np.isfinite(zm) | (zm <= 0)).sum()),
+            roughness_sublayer=int((zm <= 12.5 * 0.15 * hc).sum()),
+            low_ustar=int((params["ustar"] <= 0.1).sum()),
+            missing_pblh=int((~np.isfinite(params["h"])).sum()),
+            rejected_provider_flag=int((~provider).sum()),
+        )
+        report["interval_counts_scope"] = "entire_source_archive; rejection categories overlap"
         le, qc = data.LE_F_MDS.to_numpy(float), data.LE_F_MDS_QC.to_numpy(float)
         first = max(config["input_start"], config.get("start") or config["input_start"])
         last = min(
@@ -339,7 +353,7 @@ def prepare_icos_footprints(
     if workers < 1 or canopy_max_age_days <= 0 or files.empty:
         raise ValueError("Positive resources/metadata age and eligible stations required")
     config = dict(
-        version="site_icos_ffp_v1",
+        version="site_icos_ffp_v2",
         as_of=as_of,
         start=start,
         end=end,

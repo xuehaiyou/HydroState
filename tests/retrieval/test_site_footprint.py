@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
 import pytest
+import zarr
 
+from hydrostate.data.site.archives import sha256
 from hydrostate.data.site.availability import availability_rows
 from hydrostate.data.site.footprint import (
     FFP_INTEGRAL,
@@ -10,7 +12,12 @@ from hydrostate.data.site.footprint import (
     parameter_valid,
     window_mass,
 )
-from hydrostate.data.site.icos_footprints import history_values, metadata_events, read_intervals
+from hydrostate.data.site.icos_footprints import (
+    history_values,
+    metadata_events,
+    process_station,
+    read_intervals,
+)
 from hydrostate.data.site.temporal import DAY, epoch, interval_et
 
 PARAMS = dict(zm=10.0, ws=3.0, h=1000.0, ol=-100.0, sigmav=0.8, ustar=0.4, wd=0.0)
@@ -96,6 +103,33 @@ def test_metadata_priority_no_future_backfill_and_expiry(tmp_path):
     assert np.isnan(values[0]) and values[1] == 2 and np.isnan(values[2])
 
 
+def test_metadata_conflict_is_local_to_period_not_entire_station(tmp_path):
+    path = tmp_path / "metadata.csv"
+    rows = []
+    for group, (day, statistic, height) in enumerate(
+        [
+            ("20210101", "Mean", 1),
+            ("20210101", "Mean", 2),
+            ("20210101", "90th Percentile", 3),
+            ("20210201", "90th Percentile", 4),
+            ("20210201", "90th Percentile", 5),
+            ("20210301", "Mean", 6),
+        ]
+    ):
+        values = dict(HEIGHTC=str(height), HEIGHTC_DATE=day, HEIGHTC_STATISTIC=statistic)
+        rows.extend(
+            dict(GROUP_ID=group, VARIABLE_GROUP="GRP_HEIGHTC", VARIABLE=k, DATAVALUE=v)
+            for k, v in values.items()
+        )
+    pd.DataFrame(rows).to_csv(path, index=False)
+    events, reasons = metadata_events(path, "canopy", 0)
+    result = history_values(
+        events, np.array([epoch("2021-01-02"), epoch("2021-02-02"), epoch("2021-03-02")])
+    )
+    assert result[0] == 3 and np.isnan(result[1]) and result[2] == 6
+    assert reasons["ambiguous_height_update"] == 1
+
+
 def test_local_standard_to_utc_and_common_support_rechecks_nights(tmp_path):
     path = tmp_path / "data.csv"
     path.write_text("TIMESTAMP_START,TIMESTAMP_END,LE\n202101010000,202101010030,100\n")
@@ -135,3 +169,71 @@ def test_availability_deduplicates_sensors_and_preserves_empty_groups():
 def test_reject_invalid_durations():
     with pytest.raises(ValueError, match="durations"):
         window_mass([PARAMS], [-1], 9.0, 45.0)
+
+
+def test_real_et_support_zarr_and_resume(tmp_path):
+    prefix = tmp_path / "ICOSETC_ZZ-Test"
+    times = pd.date_range("2021-12-27", "2022-01-01", freq="h", inclusive="left")
+    frame = pd.DataFrame(
+        dict(
+            TIMESTAMP_START=times.strftime("%Y%m%d%H%M"),
+            TIMESTAMP_END=(times + pd.Timedelta(hours=1)).strftime("%Y%m%d%H%M"),
+        )
+    )
+    source = tmp_path / "ICOSETC_ZZ-Test_FLUXNET_HH_L2.csv"
+    frame.assign(LE_F_MDS=100.0, LE_F_MDS_QC=0).to_csv(source, index=False)
+    frame.assign(
+        WS=3.0, PBLH=1000.0, MO_LENGTH=-100.0, V_SIGMA=1.0, USTAR=0.5, WD=180.0, FOOTPRINT_FLAG=3
+    ).to_csv(f"{prefix}_FLUXES_L2.csv", index=False)
+    for suffix, group, values in [
+        (
+            "VARINFO_FLUXES",
+            "GRP_VAR_INFO",
+            dict(VAR_INFO_VARNAME="USTAR", VAR_INFO_HEIGHT="5.2", VAR_INFO_DATE="20210101"),
+        ),
+        (
+            "ANCILLARY",
+            "GRP_HEIGHTC",
+            dict(HEIGHTC=".3", HEIGHTC_DATE="20211201", HEIGHTC_STATISTIC="Mean"),
+        ),
+        ("SITEINFO", "GRP_UTC_OFFSET", dict(UTC_OFFSET="0")),
+    ]:
+        pd.DataFrame(
+            [
+                dict(GROUP_ID=1, VARIABLE_GROUP=group, VARIABLE=k, DATAVALUE=v)
+                for k, v in values.items()
+            ]
+        ).to_csv(f"{prefix}_{suffix}_L2.csv", index=False)
+    row = dict(
+        site_id="icos:ZZ-Test",
+        source_path=str(source),
+        source_bytes=source.stat().st_size,
+        source_mtime_ns=source.stat().st_mtime_ns,
+        utc_offset_hours=0,
+        metadata_sha256=sha256(tmp_path / "ICOSETC_ZZ-Test_SITEINFO_L2.csv"),
+        physical_group_id="physical",
+        spatial_group_id="spatial",
+        split="train",
+        frequency_bin=0,
+        lon=9.0,
+        lat=45.0,
+        landcover=30,
+        climate_class=1,
+    )
+    config = dict(
+        input_start="2013-03-18",
+        start="2021-12-27",
+        end="2022-01-01",
+        as_of="2022-02-01",
+        canopy_max_age_days=366,
+    )
+    result = process_station(row, tmp_path / "output", config)
+    assert result["footprint_tile_valid"] == 1
+    candidate = result["candidates"][0]
+    assert candidate["et"] == pytest.approx(100 * DAY / 2450000)
+    group = zarr.open_group(candidate["footprint_zarr"], mode="r")
+    assert 0.95 < group["mass"][:].sum() < 1
+    assert group["weights"][:].sum() == pytest.approx(1, abs=1e-6)
+    assert group["interval_seconds"][:].sum() == 5 * DAY
+    assert group.attrs["supervision_ready"] is False
+    assert process_station(row, tmp_path / "output", config) == result
