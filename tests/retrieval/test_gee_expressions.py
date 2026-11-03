@@ -136,8 +136,10 @@ class TestExpressions(ApiTestCase):
             pd.DataFrame([dict(location_id='a',lon=25.,lat=41.)]).to_parquet(path)
             responses=[dict(features=[dict(properties=dict(point_id=0,occurrence=-1,
                  valid_obs=10,detections=0,climate_class=8,landcover=10))]),
-                 1400000000000,1490000000000,1360000000000]
-            with patch.object(ee.data,'computeValue',side_effect=responses):
+                  ]
+            with patch.object(ee.data,'computeValue',side_effect=responses), patch(
+                'hydrostate.data.site.stratify.input_dates', return_value=dict(
+                    first_utc=dict(landsat='2013-03-18',s1='2014-10-03',s2='2017-03-28'))):
                 report=enrich_index(ee,path,root/'out','example/climate',workers=1)
             assert report['source_location_bins']=={0:1}
             assert json.loads((root/'out'/'input_dates.json').read_text())['first_utc']['landsat']

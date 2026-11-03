@@ -3,18 +3,67 @@
 import json
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 
 from hydrostate.data.gee.contracts import atomic_json, fingerprint
-from hydrostate.data.gee.products import collection
 from hydrostate.data.retrieval.catalog import cached_json
 from hydrostate.data.retrieval.specs import SOURCES
 
 from .archives import sha256
 from .pilot import observed_occurrence
+
+
+def first_catalogue_day(ee, source, *, today=None):
+    """Binary search indexed metadata with one returned asset; never globally sort images."""
+    lower = date.fromisoformat(source.start) if source.start else date(1970, 1, 1)
+    upper = (today or datetime.now(UTC).date()) + timedelta(days=1)
+    if source.end:
+        upper = min(upper, date.fromisoformat(source.end))
+
+    def exists(end):
+        response = ee.data.listImages(
+            dict(
+                parent=source.collection,
+                pageSize=1,
+                view="BASIC",
+                startTime=lower.isoformat() + "T00:00:00Z",
+                endTime=end.isoformat() + "T00:00:00Z",
+            )
+        )
+        return bool(response.get("images"))
+
+    if not exists(upper):
+        raise ValueError(f"No input catalogue observations: {source.collection}")
+    low, high = lower.toordinal(), upper.toordinal()
+    while high - low > 1:
+        middle = (low + high) // 2
+        if exists(date.fromordinal(middle)):
+            high = middle
+        else:
+            low = middle
+    return date.fromordinal(low).isoformat()
+
+
+def input_dates(ee, output):
+    first = {}
+    for sensor in ("s1", "s2", "landsat"):
+        dates = [
+            cached_json(
+                output / "input_start_cache" / f"{fingerprint(s.collection)}.json",
+                lambda s=s: dict(first_utc=first_catalogue_day(ee, s)),
+            )
+            for s in SOURCES[sensor]
+        ]
+        first[sensor] = min(d["first_utc"] for d in dates)
+    return dict(
+        first_utc=first,
+        sources={k: [s.collection for s in SOURCES[k]] for k in first},
+        basis="First catalogue day before scene QA; each candidate still checks actual inputs",
+        query="listImages pageSize=1, binary date search",
+    )
 
 
 def enrich_index(ee, stations_path, output, climate_asset, *, workers=4, batch_size=64):
@@ -90,24 +139,7 @@ def enrich_index(ee, stations_path, output, climate_asset, *, workers=4, batch_s
     )
     merged.to_parquet(output / "station_strata.parquet", index=False)
 
-    def input_dates():
-        first = {
-            sensor: collection(ee, sensor)
-            .sort("system:time_start")
-            .first()
-            .get("system:time_start")
-            .getInfo()
-            for sensor in ("s1", "s2", "landsat")
-        }
-        return dict(
-            first_utc={
-                k: datetime.fromtimestamp(v / 1000, UTC).date().isoformat()
-                for k, v in first.items()
-            },
-            sources={k: [s.collection for s in SOURCES[k]] for k in first},
-        )
-
-    dates = cached_json(output / "input_dates.json", input_dates)
+    dates = cached_json(output / "input_dates.json", lambda: input_dates(ee, output))
     report = dict(
         complete=True,
         locations=len(merged),
