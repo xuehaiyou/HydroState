@@ -273,9 +273,11 @@ def plot_et_comparison(report, output):
             edgecolors="none",
             label=site.removeprefix("flux:"),
         )
+    # A small shared margin keeps valid near-zero markers fully visible.
+    margin = 0.03 * limit
     ax.set(
-        xlim=(0, limit),
-        ylim=(0, limit),
+        xlim=(-margin, limit + margin),
+        ylim=(-margin, limit + margin),
         xlabel="PML land ET (mm/day)",
         ylabel="Station ET from LE (mm/day)",
     )
