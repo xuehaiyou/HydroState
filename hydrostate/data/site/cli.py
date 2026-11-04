@@ -18,6 +18,11 @@ def main():
     command.add_argument("--workers", type=int, default=4)
     command.add_argument("--max-attempts", type=int)
     command.add_argument("--candidate-ids", nargs="+")
+    command.add_argument(
+        "--initial-only",
+        action="store_true",
+        help="Finish the existing draw; defer numerical quotas until actual per-bin QC is known",
+    )
     command = stages.add_parser("audit-production", help="Audit committed station Zarrs")
     command.add_argument("--root", type=Path, required=True)
     command.add_argument("--plan", type=Path, required=True)
@@ -155,6 +160,7 @@ def main():
             workers=args.workers,
             max_attempts=args.max_attempts,
             candidate_ids=args.candidate_ids,
+            initial_only=args.initial_only,
         )
         print(json.dumps(result), flush=True)
         return

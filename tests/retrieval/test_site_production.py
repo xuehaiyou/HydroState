@@ -127,7 +127,8 @@ def fixture_plan(tmp_path):
     return plan
 
 
-def test_resume_initial_first_same_bin_refill_and_real_zarr(tmp_path, monkeypatch):
+@pytest.mark.parametrize("initial_only", [False, True])
+def test_resume_initial_first_same_bin_refill_and_real_zarr(tmp_path, monkeypatch, initial_only):
     plan = fixture_plan(tmp_path)
     root = tmp_path / "out"
     monkeypatch.setattr(release, "lineage", lambda *a: {})
@@ -148,20 +149,37 @@ def test_resume_initial_first_same_bin_refill_and_real_zarr(tmp_path, monkeypatc
         return arrays, {}, sample["candidate_id"] != "b"
 
     monkeypatch.setattr(production, "input_arrays", inputs)
-    first = production.collect_production(None, plan, root, CONFIG, {}, workers=1, max_attempts=1)
+    first = production.collect_production(
+        None, plan, root, CONFIG, {}, workers=1, max_attempts=1, initial_only=initial_only
+    )
     assert not first["complete"] and calls == ["a"]
-    second = production.collect_production(None, plan, root, CONFIG, {}, workers=1)
-    assert second["complete"] and calls == ["a", "b", "c"]
-    assert second["successful_by_bin"] == {0: 1, 1: 1}
+    second = production.collect_production(
+        None, plan, root, CONFIG, {}, workers=1, initial_only=initial_only
+    )
+    expected_calls = ["a", "b"] if initial_only else ["a", "b", "c"]
+    expected_count = 1 if initial_only else 2
+    assert second["complete"] == (not initial_only)
+    assert calls == expected_calls
+    if initial_only:
+        assert second["quotas"] == {} and second["shortfall"] == {}
+        assert second["initial_screening_complete"]
+        assert second["quota_status"] == "pending_after_initial_screening"
+        assert not (root / "refills").exists()
+    else:
+        assert second["successful_by_bin"] == {0: 1, 1: 1}
     table = pd.read_parquet(root / "samples.parquet")
     assert table.lon.iloc[0] == 25.12345678912345
-    assert len(SiteDataset(root / "samples.parquet", "train")) == 2
+    assert len(SiteDataset(root / "samples.parquet", "train")) == expected_count
     item = SiteDataset(root / "samples.parquet", "train")[0]
     assert item["data_samples"]["site_sm_native_weights"][0, 20, 20] == 1
-    audit = release.audit_production(root, plan, require_complete=True)
-    assert audit["samples"] == 2
+    audit = release.audit_production(root, plan, require_complete=not initial_only)
+    assert audit["samples"] == expected_count
+    # Persisted initial-only policy must survive a restart that omits the CLI flag.
     production.collect_production(None, plan, root, CONFIG, {}, workers=1)
-    assert calls == ["a", "b", "c"]
+    assert calls == expected_calls
+    if initial_only:
+        with pytest.raises(ValueError, match="not complete"):
+            release.audit_production(root, plan, require_complete=True)
 
 
 def test_known_failed_footprint_is_found_across_source_name(tmp_path):

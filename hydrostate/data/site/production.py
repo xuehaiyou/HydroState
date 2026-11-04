@@ -363,7 +363,16 @@ def refill_round(output, lookup, rows, failures, quotas, config):
 
 
 def collect_production(
-    ee, plan, output, config, norm, *, workers=4, max_attempts=None, candidate_ids=None
+    ee,
+    plan,
+    output,
+    config,
+    norm,
+    *,
+    workers=4,
+    max_attempts=None,
+    candidate_ids=None,
+    initial_only=False,
 ):
     from .release import lineage
 
@@ -390,6 +399,22 @@ def collect_production(
         },
     )
     with locked(output / ".production.lock", blocking=False):
+        policy_path = output / "sampling_policy.json"
+        if initial_only:
+            atomic_json(
+                policy_path,
+                dict(
+                    mode="initial_only",
+                    numerical_quotas=None,
+                    next_step="derive_balanced_plan_from_initial_successes_by_bin_and_split",
+                    retain_surplus=True,
+                ),
+            )
+        elif policy_path.exists():
+            policy = json.loads(policy_path.read_text())
+            if policy["mode"] != "initial_only":
+                raise ValueError("Unsupported sampling policy")
+            initial_only = True
         contract = output / "collection.json"
         if contract.exists() and json.loads(contract.read_text()) != production:
             raise ValueError("Production semantics changed; use a new output directory")
@@ -402,7 +427,8 @@ def collect_production(
         for member in table_records(members):
             member_map[member["input_candidate_id"]].append(member)
         attempted = {r["candidate_id"] for r in rows + failures}
-        quotas = selected.frequency_bin.value_counts().to_dict()
+        initial_counts = selected.frequency_bin.value_counts().to_dict()
+        quotas = {} if initial_only else initial_counts
         counts = Counter(r["frequency_bin"] for r in rows)
         began, processed = monotonic(), 0
 
@@ -418,6 +444,13 @@ def collect_production(
                 attempted=len(attempted),
                 rejected=len(failures),
                 quotas=quotas,
+                initial_candidates_by_bin=initial_counts,
+                initial_screening_complete=set(selected.candidate_id).issubset(attempted),
+                quota_status="pending_after_initial_screening" if initial_only else "original_draw",
+                successful_by_bin_and_split={
+                    str(b): dict(Counter(r["split"] for r in rows if r["frequency_bin"] == b))
+                    for b in range(7)
+                },
                 successful_by_bin=dict(counts),
                 shortfall={b: max(0, n - counts[b]) for b, n in quotas.items()},
                 successful_by_split=dict(Counter(r["split"] for r in rows)),
@@ -476,6 +509,7 @@ def collect_production(
         ]
         if max_attempts is not None:
             initial = initial[:max_attempts]
+        snapshot()
         try:
             # Submit only a bounded wave; all original dates are already mutually separated.
             with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -484,6 +518,9 @@ def collect_production(
                         consume(result)
             remaining_original = set(selected.candidate_id) - attempted
             if not remaining_original and candidate_ids is None:
+                if initial_only:
+                    audit_selection(rows, candidates, config["min_date_gap_days"])
+                    return snapshot()
                 while True:
                     draw = refill_round(output, lookup, rows, failures, quotas, config)
                     if not draw:
