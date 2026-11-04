@@ -15,7 +15,7 @@ from hydrostate.registry import MODELS
 from .statistics import station_statistics
 
 
-def validate_training_path(manifest, config, product_statistics, output, *, batch_size=2):
+def validate_training_path(manifest, config, product_statistics, output, *, batch_size=3):
     """Use actual training-only site scales; product scales are explicit, frozen input."""
     torch.set_num_threads(2)
     torch.manual_seed(43)
@@ -29,7 +29,20 @@ def validate_training_path(manifest, config, product_statistics, output, *, batc
     cfg.model.target_statistics = str(product_statistics)
     cfg.model.site_supervision = dict(statistics=stats)
     model = MODELS.build(cfg.model).train()
-    samples = hydro_collate([dataset[i] for i in range(min(batch_size, len(dataset)))])
+    selected = []
+    if "et_support" in dataset.table:
+        for mask in (
+            dataset.table.valid_sm.gt(0),
+            dataset.table.et_support.eq("static_210m"),
+            dataset.table.et_support.eq("footprint"),
+        ):
+            if mask.any():
+                selected.append(int(mask[mask].index[0]))
+    selected = list(dict.fromkeys(selected))
+    if len(selected) > batch_size:
+        raise ValueError("Batch size must cover all available station operator types")
+    selected += [i for i in range(len(dataset)) if i not in selected][: batch_size - len(selected)]
+    samples = hydro_collate([dataset[i] for i in selected])
     data = model.data_preprocessor(samples, training=True)
     losses = model.loss(**data)
     objective = sum(value for name, value in losses.items() if name.startswith("loss_"))
@@ -48,6 +61,19 @@ def validate_training_path(manifest, config, product_statistics, output, *, batc
         scope="CPU_forward_backward_only_not_accuracy_or_training",
         architecture=cfg.model.type,
         batch=len(predictions),
+        sample_ids=dataset.table.iloc[selected].sample_id.tolist(),
+        checked_operators=sorted(
+            (
+                {"point"}
+                if "valid_sm" in dataset.table and dataset.table.iloc[selected].valid_sm.gt(0).any()
+                else set()
+            )
+            | (
+                set(dataset.table.iloc[selected].et_support) - {"none"}
+                if "et_support" in dataset.table
+                else set()
+            )
+        ),
         parameters=sum(p.numel() for p in model.parameters()),
         input_grid=[120, 120],
         output_grid=[40, 40],

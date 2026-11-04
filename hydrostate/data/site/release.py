@@ -158,6 +158,12 @@ def publish(root, plan, output, model_validation):
             or model["station_statistics"]["data_contract"]["config_sha256"] != contract_hash
         ):
             raise ValueError("Missing model validation for this collection contract")
+        table = pd.read_parquet(root / "samples.parquet")
+        operators = set(table.et_support) - {"none"}
+        if table.valid_sm.gt(0).any():
+            operators.add("point")
+        if not operators.issubset(model.get("checked_operators", [])):
+            raise ValueError("Model pilot did not exercise every published operator type")
         atomic_json(root / "site_target_stats.json", station_statistics(root / "samples.parquet"))
         shutil.copy2(model_validation, root / "training_path.json")
         output.mkdir(parents=True, exist_ok=True)
