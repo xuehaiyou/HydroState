@@ -102,6 +102,20 @@ def test_full_temporal_qc_includes_no_footprint_and_reuses_partial_run(tmp_path)
     assert bundled.iloc[0].source == "fluxnet"
     selected, plan = draw_capacity(bundled)
     assert len(selected) == 1 and plan["selected"][3] == 1
+    sm_path, footprint_path = tmp_path / "sm.parquet", tmp_path / "footprint.parquet"
+    table.iloc[:1].assign(candidate_id="sm_example").to_parquet(sm_path, index=False)
+    pd.DataFrame().to_parquet(footprint_path, index=False)
+    plan_dir = tmp_path / "complete_plan"
+    result = sample_capacity(sm_path, output / "candidates.parquet", footprint_path, plan_dir)
+    assert result["complete"]
+    assert result["cohorts"]["joint_temporal"]["selected_total"] == 1
+    assert result["cohorts"]["joint_temporal"]["selected_labels"] == dict(
+        has_sm=1, has_et=1, has_et_footprint=0
+    )
+    chosen_path = plan_dir / "joint_temporal" / "selected.parquet"
+    modified = chosen_path.stat().st_mtime_ns
+    sample_capacity(sm_path, output / "candidates.parquet", footprint_path, plan_dir)
+    assert chosen_path.stat().st_mtime_ns == modified
 
 
 def test_bundle_keeps_distinct_centres_and_gap_crosses_sources_targets(tmp_path):
