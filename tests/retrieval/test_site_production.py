@@ -170,3 +170,25 @@ def test_known_failed_footprint_is_found_across_source_name(tmp_path):
     row = dict(target_time="2021-01-01", target_end="2021-01-09", footprint_tile_valid=False)
     p.write_text(json.dumps(dict(windows=[row])))
     assert production.known_footprint(dict(row, site_id="fluxnet:BE-Bra"), tmp_path) == row
+
+
+def test_refill_preserves_remaining_date_capacity_before_spatial_balance(tmp_path):
+    dates = ["2021-01-01", "2021-01-25", "2021-02-10"]
+    rows = [
+        dict(
+            candidate_id=str(i),
+            physical_group_id="site",
+            frequency_bin=0,
+            target_time=day,
+            landcover=i,
+            climate_class=1,
+            year=2021,
+            month=int(day[5:7]),
+        )
+        for i, day in enumerate(dates)
+    ]
+    lookup = {r["candidate_id"]: r for r in rows}
+    draw = production.refill_round(tmp_path, lookup, [], [], {0: 2}, CONFIG)
+    assert set(draw) == {"0", "2"}  # Choosing Jan 25 would lose one attainable sample.
+    failed = [dict(rows[int(cid)], status="rejected") for cid in draw]
+    assert production.refill_round(tmp_path, lookup, [], failed, {0: 2}, CONFIG) == ["1"]

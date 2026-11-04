@@ -306,6 +306,62 @@ def audit_selection(rows, candidates, gap_days):
             raise ValueError("Production violates global station date gap")
 
 
+def refill_round(output, lookup, rows, failures, quotas, config):
+    """Freeze each refill draw before QA; failures rebuild capacity only in the next round.
+
+    An admissibility heap cannot reopen dates after a failed test. Planning a full
+    maximum-capacity round first keeps that heap monotone and resume order fixed.
+    """
+    from .sampling_capacity import MaximumDateSchedule
+
+    folder = Path(output) / "refills"
+    folder.mkdir(exist_ok=True)
+    attempted = {r["candidate_id"] for r in rows + failures}
+    rounds = sorted(folder.glob("*.json"))
+    if rounds:
+        previous = json.loads(rounds[-1].read_text())
+        remaining = [cid for cid in previous["candidate_ids"] if cid not in attempted]
+        if remaining:
+            return remaining
+    available = StratifiedPicker(
+        list(lookup.values()), seed=config["seed"], gap_days=config["min_date_gap_days"]
+    )
+    for r in rows + failures:
+        available.record(lookup[r["candidate_id"]], success=r["status"] == "success")
+    eligible = [
+        r
+        for r in lookup.values()
+        if available.eligible(r)
+        and available.counts[r["frequency_bin"]] < quotas.get(r["frequency_bin"], 0)
+    ]
+    if not eligible:
+        return []
+    schedule = MaximumDateSchedule(pd.DataFrame(eligible), config["min_date_gap_days"])
+    picker = StratifiedPicker(
+        list(lookup.values()),
+        seed=config["seed"],
+        gap_days=config["min_date_gap_days"],
+        admissible=schedule.eligible,
+    )
+    for r in rows + failures:
+        picker.record(lookup[r["candidate_id"]], success=r["status"] == "success")
+    chosen = []
+    while (row := picker.next(quotas)) is not None:
+        chosen.append(row["candidate_id"])
+        schedule.select(row)
+        picker.record(row, success=True)
+    atomic_json(
+        folder / f"{len(rounds) + 1:04d}.json",
+        dict(
+            candidate_ids=chosen,
+            successes_before=len(rows),
+            attempted_before=len(attempted),
+            rule="maximum_remaining_date_capacity_then_spatial_year_month_random",
+        ),
+    )
+    return chosen
+
+
 def collect_production(
     ee, plan, output, config, norm, *, workers=4, max_attempts=None, candidate_ids=None
 ):
@@ -428,20 +484,14 @@ def collect_production(
                         consume(result)
             remaining_original = set(selected.candidate_id) - attempted
             if not remaining_original and candidate_ids is None:
-                picker = StratifiedPicker(
-                    list(lookup.values()), seed=config["seed"], gap_days=config["min_date_gap_days"]
-                )
-                for r in rows + failures:
-                    picker.record(lookup[r["candidate_id"]], success=r["status"] == "success")
-                while max_attempts is None or processed < max_attempts:
-                    row = picker.next(quotas)
-                    if row is None:
+                while True:
+                    draw = refill_round(output, lookup, rows, failures, quotas, config)
+                    if not draw:
                         break
-                    result = collect(row)
-                    consume(result)
-                    picker.record(row, success=result["status"] == "success")
-                else:
-                    return snapshot()
+                    for cid in draw:
+                        if max_attempts is not None and processed >= max_attempts:
+                            return snapshot()
+                        consume(collect(lookup[cid]))
                 audit_selection(rows, candidates, config["min_date_gap_days"])
                 return snapshot(complete=True)
             return snapshot()
