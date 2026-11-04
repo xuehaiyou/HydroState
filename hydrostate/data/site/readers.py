@@ -153,6 +153,22 @@ def fluxnet_windows(path, start, end, as_of):
     if not re.search(r"_FLUXNET_(?:FLUXMET_|FULLSET_)?(?:HH|HR)_", Path(path).name):
         raise UnsupportedSource("Expected FLUXNET HH/HR, never daily QC or ERA5")
     meta = fluxnet_metadata(path)
+    return standard_flux_windows(path, meta, start, end, as_of)
+
+
+def standard_flux_windows(path, meta, start, end, as_of):
+    """ONEFlux HH/HR fields with previously verified FLUXNET/ICOS metadata.
+
+    AmeriFlux BASE flags are not interchangeable with this QC definition. Metadata
+    uncertainty affecting coordinates/time must be resolved before calling this reader.
+    """
+    if meta["source"] not in ("fluxnet", "icos") or meta["time_basis"] != "local_standard":
+        raise UnsupportedSource("Expected verified ONEFlux local-standard metadata")
+    if not (
+        -90 <= meta["lat"] <= 90 and -180 <= meta["lon"] <= 180
+        and -14 <= meta["utc_offset_hours"] <= 14
+    ):
+        raise UnsupportedSource("Invalid coordinates or UTC offset")
     columns = pd.read_csv(path, nrows=0).columns
     required = ["TIMESTAMP_START", "TIMESTAMP_END", "LE_F_MDS", "LE_F_MDS_QC"]
     if not set(required).issubset(columns):

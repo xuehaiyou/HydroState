@@ -12,6 +12,22 @@ from .archives import extract, inventory
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     stages = parser.add_subparsers(dest="stage", required=True)
+    command = stages.add_parser("et-candidates", help="Full ONEFlux ET temporal quality screening")
+    for name in ("index", "splits", "strata", "output"):
+        command.add_argument(f"--{name}", type=Path, required=True)
+    command.add_argument("--as-of", required=True)
+    command.add_argument(
+        "--sources", nargs="+", choices=["fluxnet", "icos"], default=["fluxnet", "icos"]
+    )
+    command.add_argument("--workers", type=int, default=2)
+    command.add_argument("--limit", type=int)
+    command = stages.add_parser(
+        "sample-capacity", help="Stratified draws with global station date gaps"
+    )
+    for name in ("sm-candidates", "et-candidates", "footprint-candidates", "output"):
+        command.add_argument(f"--{name}", type=Path, required=True)
+    command.add_argument("--seed", type=int, default=43)
+    command.add_argument("--gap-days", type=int, default=30)
     command = stages.add_parser("icos-footprints", help="ICOS ET and FFP support candidates")
     for name in ("index", "splits", "strata", "output"):
         command.add_argument(f"--{name}", type=Path, required=True)
@@ -104,6 +120,27 @@ def main():
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "et-candidates":
+        from .et_candidates import prepare_et_candidates
+
+        report = prepare_et_candidates(
+            args.index, args.splits, args.strata, args.output, as_of=args.as_of,
+            sources=args.sources, workers=args.workers, limit=args.limit,
+        )
+        print(json.dumps({k: v for k, v in report.items() if k not in (
+            "files", "frequency", "config", "exclusions")}), flush=True)
+        return
+    if args.stage == "sample-capacity":
+        from .sampling_capacity import sample_capacity
+
+        report = sample_capacity(args.sm_candidates, args.et_candidates,
+                                 args.footprint_candidates, args.output,
+                                 seed=args.seed, gap_days=args.gap_days)
+        print(
+            json.dumps(dict(complete=report["complete"], cohorts=list(report["cohorts"]))),
+            flush=True,
+        )
+        return
     if args.stage == "icos-footprints":
         from .icos_footprints import prepare_icos_footprints
 

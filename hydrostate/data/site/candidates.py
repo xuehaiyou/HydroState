@@ -2,9 +2,11 @@
 
 import json
 import random
+from bisect import bisect_left, insort
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from datetime import timedelta
+from heapq import heapify, heappop, heapreplace
 from pathlib import Path
 
 import pandas as pd
@@ -210,10 +212,44 @@ def prepare_candidates(index, splits, strata, output, *, as_of, workers=2, limit
         return report
 
 
-class StratifiedPicker:
-    """Water quotas first, then landcover×climate, year, month; spatial diversity breaks ties."""
+class _SamplingBucket:
+    """Lazy monotone priorities avoid rescanning every candidate after each selection."""
 
-    def __init__(self, rows, *, seed=43, gap_days=30):
+    def __init__(self, counter, key, *, children=(), rows=(), eligible=None):
+        self.counter, self.key = counter, key
+        self.rows, self.cursor, self.eligible = rows, 0, eligible
+        self.heap = []
+        for i, child in enumerate(children):
+            choice = child.peek()
+            if choice is not None:
+                self.heap.append((choice[0], i, child))
+        heapify(self.heap)
+
+    def peek(self):
+        prefix = () if self.counter is None else (self.counter[self.key],)
+        if self.eligible is not None:
+            while self.cursor < len(self.rows):
+                rank, row = self.rows[self.cursor]
+                if self.eligible(row):
+                    return (*prefix, rank), row
+                self.cursor += 1
+            return None
+        while self.heap:
+            previous, index, child = self.heap[0]
+            choice = child.peek()
+            if choice is None:
+                heappop(self.heap)
+            elif choice[0] != previous:
+                heapreplace(self.heap, (choice[0], index, child))
+            else:
+                return (*prefix, *choice[0]), choice[1]
+        return None
+
+
+class StratifiedPicker:
+    """Water quotas, then land-cover×climate, year, month; site diversity breaks ties."""
+
+    def __init__(self, rows, *, seed=43, gap_days=30, admissible=None):
         self.rows = sorted(rows, key=lambda r: r["candidate_id"])
         self.rng = random.Random(seed)
         self.rng.shuffle(self.rows)
@@ -222,12 +258,48 @@ class StratifiedPicker:
         self.space, self.years, self.months, self.sites = (Counter() for _ in range(4))
         self.dates = defaultdict(list)
         self.attempted = set()
+        self.admissible = admissible
+        self.timestamps = {r["candidate_id"]: epoch(r["target_time"]) for r in self.rows}
+        if len(self.timestamps) != len(self.rows):
+            raise ValueError("Sampling candidate IDs must be unique")
+        groups = defaultdict(list)
+        for rank, row in enumerate(self.rows):
+            groups[row["frequency_bin"]].append((rank, row))
+        self.buckets = {b: self._build(rows) for b, rows in groups.items()}
+
+    def _build(self, rows, level=0, key=None):
+        counters = (None, self.space, self.years, self.months, self.sites)
+        if level == 4:
+            return _SamplingBucket(counters[level], key, rows=rows, eligible=self.eligible)
+        groups = defaultdict(list)
+        for rank, row in rows:
+            b = row["frequency_bin"]
+            space = (b, row["landcover"], row["climate_class"])
+            keys = (
+                space,
+                (*space, row["year"]),
+                (*space, row["year"], row["month"]),
+                (b, row["physical_group_id"]),
+            )
+            groups[keys[level]].append((rank, row))
+        return _SamplingBucket(
+            counters[level],
+            key,
+            children=[
+                self._build(members, level + 1, child_key) for child_key, members in groups.items()
+            ],
+        )
 
     def eligible(self, row):
-        return row["candidate_id"] not in self.attempted and all(
-            abs(epoch(row["target_time"]) - d) >= self.gap
-            for d in self.dates[row["physical_group_id"]]
+        if row["candidate_id"] in self.attempted:
+            return False
+        dates = self.dates[row["physical_group_id"]]
+        time = self.timestamps[row["candidate_id"]]
+        i = bisect_left(dates, time)
+        separated = (i == 0 or time - dates[i - 1] >= self.gap) and (
+            i == len(dates) or dates[i] - time >= self.gap
         )
+        return separated and (self.admissible is None or self.admissible(row))
 
     def next(self, quotas):
         # Choose the least fulfilled requested bin; exhausted bins cannot block the others.
@@ -236,21 +308,9 @@ class StratifiedPicker:
             key=lambda b: (self.counts[b] / quotas[b], b),
         )
         for b in bins:
-            candidates = [r for r in self.rows if r["frequency_bin"] == b and self.eligible(r)]
-            if not candidates:
-                continue
-
-            def priority(r):
-                space = (b, r["landcover"], r["climate_class"])
-                year = (*space, r["year"])
-                return (
-                    self.space[space],
-                    self.years[year],
-                    self.months[(*year, r["month"])],
-                    self.sites[(b, r["physical_group_id"])],
-                )
-
-            return min(candidates, key=priority)
+            choice = self.buckets[b].peek() if b in self.buckets else None
+            if choice is not None:
+                return choice[1]
         return None
 
     def record(self, row, *, success):
@@ -265,4 +325,4 @@ class StratifiedPicker:
         self.years[year] += 1
         self.months[(*year, row["month"])] += 1
         self.sites[(b, row["physical_group_id"])] += 1
-        self.dates[row["physical_group_id"]].append(epoch(row["target_time"]))
+        insort(self.dates[row["physical_group_id"]], self.timestamps[row["candidate_id"]])

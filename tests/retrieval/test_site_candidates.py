@@ -58,6 +58,56 @@ def test_exhausted_bin_does_not_block_other_quota_and_seed_reproducible():
     assert choices[0] == choices[1]
 
 
+def test_bucket_sampler_matches_original_lexicographic_search():
+    from hydrostate.data.site.temporal import epoch
+
+    rows = candidates()
+    # Include a nearby centre in another water group; the date gap is still shared.
+    rows += [dict(r, candidate_id="other_" + r["candidate_id"], frequency_bin=3) for r in rows[:30]]
+    picker = StratifiedPicker(rows, seed=17)
+    quotas = {0: 30, 3: 30, 5: 30}
+    attempts = 0
+    while True:
+        expected = None
+        bins = sorted(
+            (b for b in quotas if picker.counts[b] < quotas[b]),
+            key=lambda b: (picker.counts[b] / quotas[b], b),
+        )
+        for b in bins:
+            eligible = [
+                r
+                for r in picker.rows
+                if r["frequency_bin"] == b
+                and r["candidate_id"] not in picker.attempted
+                and all(
+                    abs(epoch(r["target_time"]) - d) >= 30 * 86400
+                    for d in picker.dates[r["physical_group_id"]]
+                )
+            ]
+            if not eligible:
+                continue
+
+            def priority(r):
+                space = (b, r["landcover"], r["climate_class"])
+                year = (*space, r["year"])
+                return (
+                    picker.space[space],
+                    picker.years[year],
+                    picker.months[(*year, r["month"])],
+                    picker.sites[(b, r["physical_group_id"])],
+                )
+
+            expected = min(eligible, key=priority)
+            break
+        actual = picker.next(quotas)
+        assert actual == expected
+        if actual is None:
+            break
+        picker.record(actual, success=attempts % 7 != 0)
+        attempts += 1
+    assert attempts > 10
+
+
 def test_quality_candidate_checkpoint_keeps_real_mornings_and_provenance(tmp_path):
     from hydrostate.data.site.candidates import _read_candidate_file
 
