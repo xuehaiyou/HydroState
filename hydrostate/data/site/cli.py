@@ -12,6 +12,19 @@ from .archives import extract, inventory
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     stages = parser.add_subparsers(dest="stage", required=True)
+    command = stages.add_parser("produce", help="Resume the frozen joint draw and refill failures")
+    for name in ("plan", "output", "config"):
+        command.add_argument(f"--{name}", type=Path, required=True)
+    command.add_argument("--workers", type=int, default=4)
+    command.add_argument("--max-attempts", type=int)
+    command.add_argument("--candidate-ids", nargs="+")
+    command = stages.add_parser("audit-production", help="Audit committed station Zarrs")
+    command.add_argument("--root", type=Path, required=True)
+    command.add_argument("--plan", type=Path, required=True)
+    command.add_argument("--require-complete", action="store_true")
+    command = stages.add_parser("publish", help="Audit and publish a complete station collection")
+    for name in ("root", "plan", "output", "model-validation"):
+        command.add_argument(f"--{name}", type=Path, required=True)
     command = stages.add_parser("et-candidates", help="Full ONEFlux ET temporal quality screening")
     for name in ("index", "splits", "strata", "output"):
         command.add_argument(f"--{name}", type=Path, required=True)
@@ -120,22 +133,75 @@ def main():
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "produce":
+        from mmengine.config import Config
+        from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.data.normalize import (
+            load_computed_config,
+        )
+
+        from hydrostate.data.gee.client import initialize
+
+        from .production import collect_production
+
+        if args.workers < 1 or (args.max_attempts is not None and args.max_attempts < 1):
+            parser.error("workers/max-attempts must be positive")
+        config = Config.fromfile(str(args.config)).to_dict()
+        result = collect_production(
+            initialize(config["project"]),
+            args.plan,
+            args.output,
+            config,
+            load_computed_config(),
+            workers=args.workers,
+            max_attempts=args.max_attempts,
+            candidate_ids=args.candidate_ids,
+        )
+        print(json.dumps(result), flush=True)
+        return
+    if args.stage in ("audit-production", "publish"):
+        from .release import audit_production, publish
+
+        if args.stage == "publish":
+            result = publish(args.root, args.plan, args.output, args.model_validation)
+        else:
+            result = audit_production(args.root, args.plan, require_complete=args.require_complete)
+        print(json.dumps(result), flush=True)
+        return
     if args.stage == "et-candidates":
         from .et_candidates import prepare_et_candidates
 
         report = prepare_et_candidates(
-            args.index, args.splits, args.strata, args.output, as_of=args.as_of,
-            sources=args.sources, workers=args.workers, limit=args.limit,
+            args.index,
+            args.splits,
+            args.strata,
+            args.output,
+            as_of=args.as_of,
+            sources=args.sources,
+            workers=args.workers,
+            limit=args.limit,
         )
-        print(json.dumps({k: v for k, v in report.items() if k not in (
-            "files", "frequency", "config", "exclusions")}), flush=True)
+        print(
+            json.dumps(
+                {
+                    k: v
+                    for k, v in report.items()
+                    if k not in ("files", "frequency", "config", "exclusions")
+                }
+            ),
+            flush=True,
+        )
         return
     if args.stage == "sample-capacity":
         from .sampling_capacity import sample_capacity
 
-        report = sample_capacity(args.sm_candidates, args.et_candidates,
-                                 args.footprint_candidates, args.output,
-                                 seed=args.seed, gap_days=args.gap_days)
+        report = sample_capacity(
+            args.sm_candidates,
+            args.et_candidates,
+            args.footprint_candidates,
+            args.output,
+            seed=args.seed,
+            gap_days=args.gap_days,
+        )
         print(
             json.dumps(dict(complete=report["complete"], cohorts=list(report["cohorts"]))),
             flush=True,
@@ -145,8 +211,15 @@ def main():
         from .icos_footprints import prepare_icos_footprints
 
         report = prepare_icos_footprints(
-            args.index, args.splits, args.strata, args.output, as_of=args.as_of,
-            start=args.start, end=args.end, stations=args.stations, workers=args.workers,
+            args.index,
+            args.splits,
+            args.strata,
+            args.output,
+            as_of=args.as_of,
+            start=args.start,
+            end=args.end,
+            stations=args.stations,
+            workers=args.workers,
             canopy_max_age_days=args.canopy_max_age_days,
         )
         print(json.dumps({k: v for k, v in report.items() if k != "reports"}), flush=True)
@@ -161,9 +234,17 @@ def main():
         from .et_points import prepare_et_points
 
         report = prepare_et_points(
-            args.index, args.splits, args.strata, args.output, start=args.start, end=args.end,
-            as_of=args.as_of, stations=args.stations, per_site=args.per_site,
-            max_files=args.max_files, reuse_labels=args.reuse_labels,
+            args.index,
+            args.splits,
+            args.strata,
+            args.output,
+            start=args.start,
+            end=args.end,
+            as_of=args.as_of,
+            stations=args.stations,
+            per_site=args.per_site,
+            max_files=args.max_files,
+            reuse_labels=args.reuse_labels,
         )
         print(json.dumps({k: report[k] for k in ("stations", "windows", "scope")}), flush=True)
         return
@@ -173,7 +254,9 @@ def main():
         from .et_comparison import compare_et_points
 
         report = compare_et_points(
-            initialize(args.project), args.selection, args.output,
+            initialize(args.project),
+            args.selection,
+            args.output,
             product_manifest=args.product_manifest,
         )
         print(json.dumps(report["overall"]), flush=True)
