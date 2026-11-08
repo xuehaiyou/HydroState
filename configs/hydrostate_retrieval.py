@@ -1,11 +1,13 @@
 """Current five-slot retrieval: MTLoRA, separate ET branches, weak SM supervision."""
 
-import importlib
+# Declare classic MMEngine inheritance before imports; stdlib detection differs in HPC envs.
+_base_ = ["./_base_/runtime.py"]
+
+import importlib  # noqa: E402 -- MMEngine inheritance mode must be declared first.
 
 _contract = importlib.import_module("hydrostate.data.retrieval.contract")
 _specs = importlib.import_module("hydrostate.data.retrieval.specs")
 
-_base_ = ["./_base_/runtime.py"]
 custom_imports = dict(
     imports=["hydrostate.models", "hydrostate.datasets", "hydrostate.evaluation"],
     allow_failed_imports=False,

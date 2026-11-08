@@ -155,3 +155,12 @@ def test_release_verification_rejects_wrong_manifest_and_contract(tmp_path):
     stats.write_text(json.dumps(dict(manifest_sha256="0" * 64)))
     with pytest.raises(ValueError, match="manifest mismatch"):
         verify(tmp_path, stats)
+
+
+def test_joint_config_classic_inheritance_does_not_depend_on_stdlib_detection(monkeypatch):
+    import mmengine.config.config as config_module
+
+    monkeypatch.setattr(config_module, '_is_builtin_module', lambda name: False)
+    cfg = Config.fromfile(str(ROOT / 'configs/hydrostate_joint.py'))
+    assert cfg.model.site_supervision.loss_weights == dict(site_sm=2, site_et=2)
+    assert cfg.train_dataloader.dataset.type == 'JointRetrievalDataset'
