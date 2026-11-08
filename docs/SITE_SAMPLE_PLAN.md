@@ -385,3 +385,56 @@ python tools/data/verify_joint_training.py --config configs/hydrostate_joint.py 
 需指定冻结代码、校验和、新输出目录以及 GPU 实测 micro-batch 和梯度累积。
 脚本先执行预检再调用原训练入口。当前默认有效 batch/轮数沿用主模型配置；
 GPU batch 探测、吞吐与资源时限核定属于正式提交前验证，不因本次接通配置自动启动训练。
+
+## 2026-11-08：多批次 v3 发布到 SCR
+
+新入口为 `prepare_sites.py publish-joint`，`scripts/finalize_site_production.sh`
+已切换到此入口。旧单批次 `publish` 命令保留供历史流程使用，不用于本次 v3 发布。
+发布包采用以下结构，仍保持原来的 Zarr 格式：
+
+```text
+site_joint_v3_20261108/
+  cohorts/0/                 # 原始批次 Zarr、原生产 manifest/config/记录
+  cohorts/1/                 # 补充批次，保留不同的 ET 置信度配置
+  cohort_0.parquet            # v3 选择清单，样本路径仍相对于各批次根目录
+  cohort_1.parquet
+  inventory.parquet
+  datasets.json              # 相对路径指向包内批次，供联合训练读取
+  site_target_stats.json     # v3 训练统计，原样复制，绝不重算旧划分统计
+  split_report.json
+  proofs/                    # 产品排除清单和原空间隔离依据
+  plans/                     # 两个批次各自的冻结候选计划
+  provenance/                # 原 v3 文件与通过的联合预检记录
+  publication.json           # 源文件指纹、代码版本及断点身份
+  _PUBLISHED.json            # 所有步骤成功后最后原子写入
+```
+
+发布前要求：v3 统计完成、真实混合 Zarr 批次预检通过且指纹一致、两个批次均完成
+冻结候选筛选。`complete=false` 的原始配额标记不再阻挡本次已完成的初筛数据发布；
+但必须检查全部候选已被处理。只接受绑定当前完整 manifest/config/report 的全量
+数组验收，早期六样本验收或旧版不完整验收会触发重审。
+
+按清单计算实际剩余复制空间，默认另外保留 20 GiB；不足时不复制。
+源生产锁与目标发布锁防止并发修改，rsync 根据文件校验和续传，复制后再比较一次
+所有清单文件校验和，并实际读取发布包中的三种划分及可用监督类型。
+只复制生产样本、记录和必要元数据，不复制 GEE 缓存。成功验收可按批次复用，
+未完成验收的批次重审；复制中断不会产生完成标记，原样重跑命令即可继续。
+训练入口拒绝带 publication.json 但没有 _PUBLISHED.json 的半成品目录。
+发布后元数据改变也会触发校验失败。源数据、原生产配置及 v3 源清单不改写，
+仅在源批次增加/更新验收与验收进度侧文件。
+
+示例（先执行 `--check-only` 检查前置条件、容量和待重审批次）：
+
+```bash
+python tools/data/prepare_sites.py publish-joint \
+  --split-root /fossfs/xiaozhen/HydroState/site/splits_frequency_task_v3_20261108 \
+  --plans /fossfs/xiaozhen/HydroState/site/et_candidates_20261104/sampling/joint_temporal \
+          /fossfs/xiaozhen/HydroState/site/supplement_plan_20261108 \
+  --preflight /fossfs/xiaozhen/HydroState/site/runs/joint_preflight_20261108/preflight.json \
+  --output /scr/u/xiaoz/HydroState/samples/site_joint_v3_20261108 \
+  --code-commit <实际冻结代码提交> --check-only
+```
+
+去掉 `--check-only` 后依次执行全量验收、复制和发布验收。完成后将
+`HYDROSTATE_SITE_SPLIT_ROOT` 指向这个 SCR 发布根目录即可复用联合训练入口。
+数据发布本身不启动 GPU 训练，也不替代正式训练前的 GPU batch/显存验证。

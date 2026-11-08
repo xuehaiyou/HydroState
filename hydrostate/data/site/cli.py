@@ -34,6 +34,13 @@ def main():
     command = stages.add_parser("publish", help="Audit and publish a complete station collection")
     for name in ("root", "plan", "output", "model-validation"):
         command.add_argument(f"--{name}", type=Path, required=True)
+    command = stages.add_parser("publish-joint", help="Publish completed cohorts with the v3 split")
+    for name in ("split-root", "output", "preflight"):
+        command.add_argument(f"--{name}", type=Path, required=True)
+    command.add_argument("--plans", nargs="+", type=Path, required=True)
+    command.add_argument("--code-commit", required=True)
+    command.add_argument("--reserve-gib", type=float, default=20)
+    command.add_argument("--check-only", action="store_true")
     command = stages.add_parser("et-candidates", help="Full ONEFlux ET temporal quality screening")
     for name in ("index", "splits", "strata", "output"):
         command.add_argument(f"--{name}", type=Path, required=True)
@@ -142,6 +149,20 @@ def main():
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "publish-joint":
+        from .publication import publish_joint
+
+        result = publish_joint(
+            args.split_root,
+            args.plans,
+            args.output,
+            args.preflight,
+            code_commit=args.code_commit,
+            reserve_gib=args.reserve_gib,
+            check_only=args.check_only,
+        )
+        print(json.dumps(result), flush=True)
+        return
     if args.stage == "resplit":
         from .resplit import resplit_cohorts
         from .statistics import cohort_statistics

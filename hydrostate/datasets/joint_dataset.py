@@ -40,7 +40,7 @@ class JointRetrievalDataset(Dataset):
         report = json.loads((self.site_root / "split_report.json").read_text())
         if report["version"] != "site_frequency_task_spatial_split_v3":
             raise ValueError("Joint training requires task-covering v3 station split")
-        selection_path = Path(report["joint_product_selection"])
+        selection_path = self.site_root / report["joint_product_selection"]
         if sha256(selection_path) != report["joint_product_selection_sha256"]:
             raise ValueError("Product overlap exclusion selection changed")
         self.product = RetrievalDataset(
@@ -72,11 +72,31 @@ class JointRetrievalDataset(Dataset):
         for item in definitions:
             if item["type"] != "SiteDataset":
                 raise ValueError("Unexpected site dataset type")
-            source = Path(item["data_root"])
-            if sha256(source / "samples.parquet") != report["source_manifests"][str(source)]:
+            source = self.site_root / item["data_root"]
+            if sha256(source / "samples.parquet") != report["source_manifests"][item["data_root"]]:
                 raise ValueError("Station source manifest changed")
+            original_sites = pd.read_parquet(source / "samples.parquet").set_index("sample_id")
+            selected_sites = pd.read_parquet(self.site_root / item["manifest"]).set_index(
+                "sample_id"
+            )
+            if selected_sites.index.has_duplicates or set(selected_sites.index) != set(
+                original_sites.index
+            ):
+                raise ValueError("Station selection must preserve every source sample exactly once")
+            columns = [name for name in original_sites.columns if name != "split"]
+            if not selected_sites.loc[original_sites.index, columns].equals(
+                original_sites[columns]
+            ):
+                raise ValueError("Station selection changed immutable source sample fields")
+            if "original_split" in selected_sites and (
+                selected_sites.loc[original_sites.index, "original_split"].tolist()
+                != original_sites.split.tolist()
+            ):
+                raise ValueError("Station original split provenance changed")
             self.sites.append(
-                SiteDataset(item["manifest"], split, data_root=source, training=training)
+                SiteDataset(
+                    self.site_root / item["manifest"], split, data_root=source, training=training
+                )
             )
         inventory = pd.read_parquet(self.site_root / "inventory.parquet")
         split_path = selection_path.parent / "station_splits.parquet"

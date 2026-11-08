@@ -76,8 +76,10 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
     statistics = load_target_statistics(source, tasks)
     joint = cfg.train_dataloader.dataset.type == "JointRetrievalDataset"
     if joint:
+        from hydrostate.data.site.publication import require_publication_ready
         from hydrostate.registry import DATASETS
 
+        require_publication_ready(cfg.train_dataloader.dataset.site_split_root)
         loaded_joint = DATASETS.build(dict(cfg.train_dataloader.dataset))
         site_config = cfg.model.get("site_supervision")
         if not site_config:

@@ -51,12 +51,14 @@ def lineage(config, candidates=None):
     return {str(p): sha256(p) for p in paths}
 
 
-def audit_production(root, plan, *, require_complete=False):
+def audit_production(root, plan, *, require_complete=False, require_screened=False):
     root, plan = Path(root), Path(plan)
     config = json.loads((root / "collection.json").read_text())
     report = json.loads((root / "collection_report.json").read_text())
     if require_complete and not report["complete"]:
         raise ValueError("Initial draw and replacements are not complete")
+    if require_screened and not report.get("initial_screening_complete"):
+        raise ValueError("Frozen candidate screening has not finished")
     for name, digest in config["plan_sha256"].items():
         if sha256(plan / name) != digest:
             raise ValueError("Frozen sampling plan changed")
@@ -68,7 +70,9 @@ def audit_production(root, plan, *, require_complete=False):
     attempted = {
         p.stem for folder in ("records", "rejected") for p in (root / folder).glob("*.json")
     }
-    if report["complete"] and not set(selected.candidate_id).issubset(attempted):
+    if (report["complete"] or require_screened) and not set(selected.candidate_id).issubset(
+        attempted
+    ):
         raise ValueError("Original selected candidates have not all been attempted")
     audit_selection(table.to_dict("records"), candidates, config["min_date_gap_days"])
     if len(table) != report["successful"] or table.empty:
@@ -81,7 +85,11 @@ def audit_production(root, plan, *, require_complete=False):
     product_schema = RetrievalSchema()
     empty_products = {k: np.zeros(s.tail_shape, s.dtype) for k, s in product_schema.targets.items()}
     counts = dict(sm=0, et=0)
-    for _, row in table.iterrows():
+    if require_screened:
+        atomic_json(
+            root / "audit_progress.json", dict(status="running", checked=0, total=len(table))
+        )
+    for checked, (_, row) in enumerate(table.iterrows(), 1):
         commit = json.loads((root / "records" / f"{row.candidate_id}.json").read_text())
         if commit["sample_id"] != row.sample_id:
             raise ValueError("Manifest/commit identity mismatch")
@@ -128,8 +136,16 @@ def audit_production(root, plan, *, require_complete=False):
         for target in counts:
             if labels[f"site_{target}_native_valid"].sum() != indices[target]:
                 raise ValueError("Observation masks/provenance mismatch")
+        if require_screened and checked % 100 == 0:
+            atomic_json(
+                root / "audit_progress.json",
+                dict(status="running", checked=checked, total=len(table)),
+            )
     result = dict(
+        audit_version="site_full_array_audit_v2",
         status="passed",
+        screening_checked=require_screened,
+        collection_report_sha256=sha256(root / "collection_report.json"),
         complete=report["complete"],
         samples=len(table),
         observations=counts,
@@ -139,6 +155,11 @@ def audit_production(root, plan, *, require_complete=False):
         missing_quotas_are_explicit=True,
     )
     atomic_json(root / "acceptance.json", result)
+    if require_screened:
+        atomic_json(
+            root / "audit_progress.json",
+            dict(status="passed", checked=len(table), total=len(table)),
+        )
     return result
 
 
