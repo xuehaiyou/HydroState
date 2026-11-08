@@ -12,6 +12,10 @@ from .archives import extract, inventory
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     stages = parser.add_subparsers(dest="stage", required=True)
+    command = stages.add_parser("resplit", help="Frequency-stratify completed station cohorts")
+    command.add_argument("--roots", nargs="+", type=Path, required=True)
+    command.add_argument("--split-root", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
     command = stages.add_parser("produce", help="Resume the frozen joint draw and refill failures")
     for name in ("plan", "output", "config"):
         command.add_argument(f"--{name}", type=Path, required=True)
@@ -138,6 +142,24 @@ def main():
     command.add_argument("--config", type=Path, required=True)
     command.add_argument("--product-statistics", type=Path, required=True)
     args = parser.parse_args()
+    if args.stage == "resplit":
+        from .resplit import resplit_cohorts
+        from .statistics import cohort_statistics
+
+        report = resplit_cohorts(args.roots, args.split_root, args.output)
+        datasets = json.loads((args.output / "datasets.json").read_text())["datasets"]
+        from hydrostate.datasets.site_dataset import SiteDataset
+
+        for item in datasets:
+            for split in ("train", "validation", "test"):
+                dataset = SiteDataset(item["manifest"], split, data_root=item["data_root"])
+                dataset[0]  # Validate actual Zarr reads through the revised selection manifest.
+        statistics = cohort_statistics(datasets)
+        atomic_json(args.output / "site_target_stats.json", statistics)
+        report["statistics_status"] = "complete_train_only"
+        atomic_json(args.output / "split_report.json", report)
+        print(json.dumps(report), flush=True)
+        return
     if args.stage == "produce":
         from mmengine.config import Config
         from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.data.normalize import (

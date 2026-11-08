@@ -29,3 +29,26 @@ def station_statistics(manifest, data_root=None):
         data_contract=dataset.data_contract,
         observations=observations,
     )
+
+
+def cohort_statistics(datasets):
+    """Merge training moments while preserving each cohort's production contract."""
+    parts = [station_statistics(item["manifest"], item["data_root"]) for item in datasets]
+    observations = {}
+    for name in OBSERVATIONS:
+        values = [part["observations"][name] for part in parts if name in part["observations"]]
+        if not values:
+            continue
+        count = sum(v["count"] for v in values)
+        mean = sum(v["count"] * v["mean"] for v in values) / count
+        variance = (
+            sum(v["count"] * (v["std"] ** 2 + (v["mean"] - mean) ** 2) for v in values) / count
+        )
+        observations[name] = dict(count=count, mean=mean, std=variance**0.5)
+    return dict(
+        version="site_training_statistics_v2",
+        split="train",
+        ddof=0,
+        observations=observations,
+        cohorts=parts,
+    )
