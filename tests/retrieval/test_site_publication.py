@@ -258,3 +258,15 @@ def test_two_cohorts_keep_distinct_collection_hashes_and_v3_statistics(bundle, m
     assert sha256(args["output"] / "site_target_stats.json") == sha256(
         split / "site_target_stats.json"
     )
+
+
+def test_explicit_capacity_bypass_never_scans_sizes_and_still_audits(bundle, monkeypatch):
+    args, root, audits = bundle
+
+    def forbidden(*args):
+        raise AssertionError("Capacity scan must not run")
+
+    monkeypatch.setattr(publication, "capacity", forbidden)
+    result = publication.publish_joint(**args, skip_capacity_check=True)
+    assert result["space"]["status"] == "skipped_by_user"
+    assert result["status"] == "passed" and audits == [root]

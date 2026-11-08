@@ -40,6 +40,11 @@ def main():
     command.add_argument("--plans", nargs="+", type=Path, required=True)
     command.add_argument("--code-commit", required=True)
     command.add_argument("--reserve-gib", type=float, default=20)
+    command.add_argument(
+        "--skip-capacity-check",
+        action="store_true",
+        help="Skip payload sizing and disk-capacity scan when explicitly authorized",
+    )
     command.add_argument("--check-only", action="store_true")
     command = stages.add_parser("et-candidates", help="Full ONEFlux ET temporal quality screening")
     for name in ("index", "splits", "strata", "output"):
@@ -159,6 +164,7 @@ def main():
             args.preflight,
             code_commit=args.code_commit,
             reserve_gib=args.reserve_gib,
+            skip_capacity_check=args.skip_capacity_check,
             check_only=args.check_only,
         )
         print(json.dumps(result), flush=True)

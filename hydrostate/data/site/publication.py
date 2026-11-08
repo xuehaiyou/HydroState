@@ -216,7 +216,15 @@ def verify_relocated(output, product, stats):
 
 
 def publish_joint(
-    split_root, plans, output, preflight, *, code_commit, reserve_gib=20, check_only=False
+    split_root,
+    plans,
+    output,
+    preflight,
+    *,
+    code_commit,
+    reserve_gib=20,
+    check_only=False,
+    skip_capacity_check=False,
 ):
     output = Path(output).resolve()
     split_root, report, definitions, roots, product = selection_inputs(split_root, plans, preflight)
@@ -250,7 +258,11 @@ def publish_joint(
     elif output.exists() and any(p.name != ".publish.lock" for p in output.iterdir()):
         raise ValueError("Refusing to overwrite an unrelated destination")
     names = [cohort_files(root) for root in roots]
-    space = capacity(roots, names, output, reserve_gib)
+    space = (
+        dict(status="skipped_by_user", enough_space=None)
+        if skip_capacity_check
+        else capacity(roots, names, output, reserve_gib)
+    )
     pending = [str(r) for r in roots if not full_audit_current(r)]
     if check_only:
         return dict(
@@ -261,7 +273,7 @@ def publish_joint(
             output=str(output),
             published=False,
         )
-    if not space["enough_space"]:
+    if not skip_capacity_check and not space["enough_space"]:
         raise OSError(f"Insufficient destination capacity: {space}")
     output.mkdir(parents=True, exist_ok=True)
     with ExitStack() as stack:

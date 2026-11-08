@@ -438,3 +438,10 @@ python tools/data/prepare_sites.py publish-joint \
 去掉 `--check-only` 后依次执行全量验收、复制和发布验收。完成后将
 `HYDROSTATE_SITE_SPLIT_ROOT` 指向这个 SCR 发布根目录即可复用联合训练入口。
 数据发布本身不启动 GPU 训练，也不替代正式训练前的 GPU batch/显存验证。
+
+### 2026-11-09：本次发布跳过容量扫描（用户明确要求）
+
+用户已确认 SCR 空间足够，本次发布传入 `--skip-capacity-check`，不再递归统计
+载荷大小或查询剩余空间。结果记录 `space.status=skipped_by_user`。
+停止先前容量扫描及其等待程序，直接进入发布验收与复制；完整性、校验和、
+断点续传和最后写入发布标记的要求不变。实际写入异常仍会报错，不能标记成功。
