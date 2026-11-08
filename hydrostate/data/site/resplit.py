@@ -13,8 +13,36 @@ from .archives import sha256
 SPLITS = ("train", "validation", "test")
 
 
+def task_coverage(table, locked_train=()):
+    """Count independent supports, not sensors or dates; expose infeasible strata."""
+    locked = set(locked_train)
+    result = []
+    for frequency in range(7):
+        for task in ("sm", "et"):
+            subset = table[table.frequency_bin.eq(frequency) & table[f"valid_{task}"].gt(0)]
+            groups = set(subset.spatial_group_id)
+            free = groups - locked
+            feasible = len(groups) >= 3 and len(free) >= 2
+            # Preserve at least one training group; prefer two evaluation groups when possible.
+            evaluation = min(2, (len(groups) - 1) // 2, len(free) // 2) if feasible else 0
+            result.append(
+                dict(
+                    frequency_bin=frequency,
+                    task=task,
+                    groups=sorted(groups),
+                    spatial_groups=len(groups),
+                    evaluation_eligible_groups=len(free),
+                    three_way_feasible_by_count=feasible,
+                    minimum_groups=dict(
+                        train=1 if groups else 0, validation=evaluation, test=evaluation
+                    ),
+                )
+            )
+    return result
+
+
 def stratify_groups(table, locked_train=(), *, seed=43, ratios=(0.7, 0.15, 0.15)):
-    """Minimize per-frequency proportion error, then task/cover/climate/time imbalance.
+    """Require task coverage before optimizing frequency proportions and diversity.
 
     Whole spatial groups are indivisible. Ratios are soft targets, never permission
     to move overlapping product supports into evaluation or split a physical site.
@@ -25,6 +53,9 @@ def stratify_groups(table, locked_train=(), *, seed=43, ratios=(0.7, 0.15, 0.15)
     if table.groupby("physical_group_id").spatial_group_id.nunique().gt(1).any():
         raise ValueError("Physical station crosses spatial groups")
     keys = sorted(table.spatial_group_id.unique())
+    coverage = task_coverage(table, locked_train)
+    incidence = np.array([[int(key in item["groups"]) for item in coverage] for key in keys])
+    minimum = np.array([[item["minimum_groups"][s] for item in coverage] for s in SPLITS])
     primary = pd.crosstab(table.spatial_group_id, table.frequency_bin).reindex(keys).values
     secondary = []
     for target in ("valid_sm", "valid_et"):
@@ -41,14 +72,19 @@ def stratify_groups(table, locked_train=(), *, seed=43, ratios=(0.7, 0.15, 0.15)
     secondary = np.concatenate(secondary, axis=1)
     p = primary / primary.sum(axis=0).clip(1)
     s = secondary / secondary.sum(axis=0).clip(1)
-    features = np.concatenate([p, s], axis=1)
+    features = np.concatenate([p, s, incidence], axis=1)
     width = p.shape[1]
     target = ratios[:, None]
     fixed = np.array([key in set(locked_train) for key in keys])
 
     def score(counts):
-        errors = np.square(counts - target)
-        return (round(float(errors[:, :width].sum()), 12), float(errors[:, width:].mean()))
+        errors = np.square(counts[:, : -len(coverage)] - target)
+        missing = np.maximum(minimum - counts[:, -len(coverage) :], 0)
+        return (
+            int(missing.sum()),
+            round(float(errors[:, :width].sum()), 12),
+            float(errors[:, width:].mean()),
+        )
 
     rng = np.random.default_rng(seed)
     best = None
@@ -88,6 +124,10 @@ def stratify_groups(table, locked_train=(), *, seed=43, ratios=(0.7, 0.15, 0.15)
         value = score(counts)
         if best is None or value < best[0]:
             best = value, assignments.copy()
+    if best[0][0]:
+        raise ValueError(
+            "No jointly feasible task-covering assignment found; inspect spatial groups"
+        )
     return dict(zip(keys, (SPLITS[i] for i in best[1])))
 
 
@@ -121,6 +161,16 @@ def resplit_cohorts(roots, split_root, output):
     locked = set(known.loc[mandatory, "spatial_group_id"])
     assignment = stratify_groups(table, locked)
     table["split"] = table.spatial_group_id.map(assignment)
+    coverage = task_coverage(table, locked)
+    for item in coverage:
+        subset = table[
+            table.frequency_bin.eq(item["frequency_bin"]) & table[f"valid_{item['task']}"].gt(0)
+        ]
+        item["actual_groups"] = {
+            s: subset[subset.split.eq(s)].spatial_group_id.nunique() for s in SPLITS
+        }
+        if any(item["actual_groups"][s] < item["minimum_groups"][s] for s in SPLITS):
+            raise AssertionError("Task coverage requirement violated")
     if table.loc[table.spatial_group_id.isin(locked), "split"].ne("train").any():
         raise AssertionError("Product/development overlap leaked into evaluation")
     output.mkdir(parents=True)
@@ -155,7 +205,8 @@ def resplit_cohorts(roots, split_root, output):
             )
         )
     report = dict(
-        version="site_frequency_spatial_split_v2",
+        version="site_frequency_task_spatial_split_v3",
+        task_coverage=coverage,
         seed=43,
         target_ratios=dict(zip(SPLITS, [0.7, 0.15, 0.15])),
         distribution=rows,
