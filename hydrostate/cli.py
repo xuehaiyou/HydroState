@@ -74,6 +74,15 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
         manifest = cfg.train_dataloader.dataset.manifest
         source = str(Path(manifest).with_name("target_stats.json"))
     statistics = load_target_statistics(source, tasks)
+    joint = cfg.train_dataloader.dataset.type == "JointRetrievalDataset"
+    if joint:
+        from hydrostate.registry import DATASETS
+
+        loaded_joint = DATASETS.build(dict(cfg.train_dataloader.dataset))
+        site_config = cfg.model.get("site_supervision")
+        if not site_config:
+            raise ValueError("Joint data requires an enabled site supervision objective")
+        site_config.statistics = loaded_joint.validate_site_statistics(site_config.statistics)
     if training:
         import pandas as pd
 
@@ -86,7 +95,7 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
             dataset.get("output_scale", 3) != 3
         ):
             from hydrostate.registry import DATASETS
-            loaded = DATASETS.build(dict(dataset))
+            loaded = loaded_joint if joint else DATASETS.build(dict(dataset))
             contract = loaded.data_contract
             selected_inputs = {name for pack in loaded.input_packs for name in pack.variables}
             if loaded.input_profile == L2_PROFILE:
@@ -103,8 +112,10 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
         if evaluators is None:
             continue
         for evaluator in evaluators if isinstance(evaluators, list) else [evaluators]:
-            if evaluator["type"].split(".")[-1] == "HydroStateMetric":
+            if evaluator["type"].split(".")[-1] in ("HydroStateMetric", "JointHydroStateMetric"):
                 evaluator["target_statistics"] = statistics
+                if joint:
+                    evaluator["site_statistics"] = cfg.model.site_supervision.statistics
                 if tasks is not None:
                     evaluator["tasks"] = tasks
 

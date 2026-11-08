@@ -32,7 +32,7 @@ def require_current_config(cfg):
     if cfg.model.get("output_scale", OUTPUT_SCALE) != OUTPUT_SCALE:
         raise ValueError("Current retrieval requires 30 m outputs on the declared grid")
     for key in ("train_dataloader", "val_dataloader", "test_dataloader"):
-        if key in cfg and cfg[key].dataset.type != "RetrievalDataset":
+        if key in cfg and cfg[key].dataset.type not in ("RetrievalDataset", "JointRetrievalDataset"):
             raise ValueError(f"{key} must use RetrievalDataset for {VERSION}")
         if key in cfg:
             dataset = cfg[key].dataset

@@ -1,8 +1,6 @@
 """Separate station objectives on existing land-SM and derived total-ET fields."""
 
-import json
 import math
-from pathlib import Path
 
 import torch
 from torch import nn
@@ -49,20 +47,9 @@ class SiteObjective(nn.Module):
 
     def __init__(self, statistics, loss_weights=None):
         super().__init__()
-        report = (
-            json.loads(Path(statistics).read_text()) if isinstance(statistics, str) else statistics
-        )
-        if (
-            report.get("version") != "site_training_statistics_v1"
-            or report.get("split") != "train"
-            or report.get("ddof") != 0
-            or not report.get("observations")
-            or not set(report["observations"]).issubset(OBSERVATIONS)
-        ):
-            raise ValueError("Station loss requires frozen training-only observation statistics")
-        digest = report.get("training_fingerprint", "")
-        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
-            raise ValueError("Station training fingerprint must be SHA256")
+        from hydrostate.data.site.training_statistics import load_site_statistics
+
+        report, digest = load_site_statistics(statistics)
         self.names = tuple(report["observations"])
         self.statistics = report
         self.loss_weights = {

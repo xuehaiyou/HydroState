@@ -347,3 +347,41 @@ v3 (`site_frequency_task_spatial_split_v3`) 在优化频率组窗口比例之前
 
 v3 单独生成 cohort 清单、任务空间组可行性/实际覆盖报告和训练统计量；
 v2 清单及其统计、原始生产 Zarr 均保留。仍不自动发布或启动训练。
+
+## 2026-11-08：产品与站点联合训练入口
+
+入口配置 `configs/hydrostate_joint.py` 沿用 MTLoRA 七输出模型，使用
+`JointRetrievalDataset` 读取产品和 v3 两个站点批次，各批次继续校验自身 Zarr 配置。
+产品严格应用 `joint_product_selection.parquet`，保留全部产品训练记录，
+仅过滤被站点训练空间支持污染的产品评估样本。站点划分、空间锁定、来源清单、
+训练统计指纹和多批次统计合并一致性在启动前检查；v3 统计未完成时拒绝训练。
+
+抽样默认产品/站点各占 50% 的期望权重。产品内部按来源采样组均衡；
+站点内部依次按已有频率组、有效 SM/ET 任务、空间组和组内窗口分配权重。
+同窗口有多个任务时累加其抽样权重。使用有放回抽样，不称为新增独立样本；
+特别是稀缺频率组的重复日期不能解决独立站点不足。验证、测试完整遍历，不均衡重采样。
+
+按用户最新决定，站点 SM、ET 的标准化 MSE 损失系数均为 2（此前默认 1），
+产品既有任务权重保持不变。抽样占比不与损失系数混淆，也不宣称梯度占比固定。
+掩膜独立：产品样本的站点标签为空掩膜，站点样本的产品标签为空掩膜；
+中心点 SM 不缩放，ET 继续按原静态/足迹支持聚合总 ET。
+
+`JointHydroStateMetric` 分开报告 `product/` 与 `site/` 下的 RMSE、MAE、偏差、R²、
+相关系数、观测数及频率组 RMSE；站点另报频率组内每项任务的空间组数。
+检查点 `joint_score` 是产品与站点训练尺度归一化分数的等权平均，
+与增强站点训练损失的系数是两个独立设置。产品一致性不称为独立站点精度。
+
+预检（只读，不做优化器更新）：
+
+```bash
+export HYDROSTATE_DATA_ROOT=/scr/u/xiaoz/HydroState/samples/retrieval_eight_20000_06aba36
+export HYDROSTATE_TARGET_STATS=$HYDROSTATE_DATA_ROOT/target_stats.json
+export HYDROSTATE_SITE_SPLIT_ROOT=/fossfs/xiaozhen/HydroState/site/splits_frequency_task_v3_20261108
+python tools/data/verify_joint_training.py --config configs/hydrostate_joint.py \
+  --output /path/to/run/joint_preflight.json --check-batch
+```
+
+正式训练使用 `scripts/run_joint_training.sh`，在单卡 `c_foss_gpu` 分配内运行，
+需指定冻结代码、校验和、新输出目录以及 GPU 实测 micro-batch 和梯度累积。
+脚本先执行预检再调用原训练入口。当前默认有效 batch/轮数沿用主模型配置；
+GPU batch 探测、吞吐与资源时限核定属于正式提交前验证，不因本次接通配置自动启动训练。
