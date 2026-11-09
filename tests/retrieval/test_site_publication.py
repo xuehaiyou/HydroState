@@ -144,9 +144,9 @@ def test_dry_run_stale_audit_and_no_source_mutation(bundle):
         publication.require_publication_ready(args["output"])
 
 
-def test_interrupted_copy_is_not_published_and_resumes_with_checksum_repair(bundle, monkeypatch):
+def test_interrupted_copy_is_not_published_and_resumes_partial_copy(bundle, monkeypatch):
     args, root, audits = bundle
-    original = publication.copy_verified
+    original = publication.copy_files
     calls = []
 
     def interrupted(source, target, names):
@@ -155,7 +155,7 @@ def test_interrupted_copy_is_not_published_and_resumes_with_checksum_repair(bund
         if len(calls) == 1:
             raise OSError("Simulated interruption after cohort copy")
 
-    monkeypatch.setattr(publication, "copy_verified", interrupted)
+    monkeypatch.setattr(publication, "copy_files", interrupted)
     with pytest.raises(OSError, match="interruption"):
         publication.publish_joint(**args)
     assert not (args["output"] / "_PUBLISHED.json").exists()
@@ -163,7 +163,7 @@ def test_interrupted_copy_is_not_published_and_resumes_with_checksum_repair(bund
         publication.require_publication_ready(args["output"])
     copied = args["output"] / "cohorts/0/collection.json"
     copied.write_text("corrupt partial file")
-    monkeypatch.setattr(publication, "copy_verified", original)
+    monkeypatch.setattr(publication, "copy_files", original)
     publication.publish_joint(**args)
     assert sha256(copied) == sha256(root / "collection.json")
     assert audits == [root]  # Full receipt is reused, not the stale pilot receipt.
@@ -270,3 +270,14 @@ def test_explicit_capacity_bypass_never_scans_sizes_and_still_audits(bundle, mon
     result = publication.publish_joint(**args, skip_capacity_check=True)
     assert result["space"]["status"] == "skipped_by_user"
     assert result["status"] == "passed" and audits == [root]
+
+
+def test_copy_does_not_scan_checksums_or_run_post_copy_pass(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(publication.subprocess, "run", lambda cmd, **kw: calls.append((cmd, kw)))
+    publication.copy_files(tmp_path / "source", tmp_path / "target", ["zarr/"])
+    assert len(calls) == 1
+    command, options = calls[0]
+    assert command[:2] == ["rsync", "-rlt"]
+    assert "--dry-run" not in command
+    assert options["check"] is True

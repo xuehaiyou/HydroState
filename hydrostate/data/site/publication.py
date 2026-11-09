@@ -172,28 +172,21 @@ def capacity(roots, names, output, reserve_gib):
     )
 
 
-def copy_verified(source, target, names):
-    """Resume partial files, then compare every selected file's rsync checksum."""
+def copy_files(source, target, names):
+    """Resume using rsync size/mtime checks; require a successful copy exit status."""
     target.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(mode="w") as listing:
         listing.write("\n".join(names) + "\n")
         listing.flush()
         command = [
             "rsync",
-            "-rltc",
+            "-rlt",
             "--files-from=" + listing.name,
             str(source) + "/",
             str(target) + "/",
         ]
         subprocess.run(command, check=True)
-        result = subprocess.run(
-            command[:2] + ["--dry-run", "--itemize-changes", "--out-format=%i %n"] + command[2:],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        if result.stdout.strip():
-            raise ValueError("Publication checksum comparison found remaining differences")
+
 
 
 def verify_relocated(output, product, stats):
@@ -295,8 +288,8 @@ def publish_joint(
             if not full_audit_current(root):
                 raise ValueError("Full cohort audit is not current")
             atomic_json(output / "publication_progress.json", dict(stage="copying", cohort=i))
-            copy_verified(root, output / f"cohorts/{i}", files + ["acceptance.json"])
-            copy_verified(
+            copy_files(root, output / f"cohorts/{i}", files + ["acceptance.json"])
+            copy_files(
                 Path(plan),
                 output / f"plans/{i}",
                 list(read(root / "collection.json")["plan_sha256"]),
@@ -308,8 +301,8 @@ def publish_joint(
             for n in ("split_config.json", "product_overlaps.parquet")
             if (proof.parent / n).exists()
         ]
-        copy_verified(proof.parent, output / "proofs", proof_names)
-        copy_verified(split_root, output / "provenance", source_names)
+        copy_files(proof.parent, output / "proofs", proof_names)
+        copy_files(split_root, output / "provenance", source_names)
         shutil.copy2(preflight, output / "provenance/source_preflight.json")
         for name in source_names:
             if name not in ("split_report.json", "datasets.json"):
@@ -364,7 +357,7 @@ def publish_joint(
             by_split=counts,
             source=str(split_root),
             metadata_sha256={n: sha256(output / n) for n in metadata},
-            verification="full_source_array_audits+rsync_checksums+relocated_mixed_batches",
+            verification="full_source_array_audits+rsync_copy_exit_status+relocated_mixed_batches",
             model_training_validated=False,
             space=space,
         )
