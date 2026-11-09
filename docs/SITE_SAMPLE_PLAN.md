@@ -462,3 +462,9 @@ python tools/data/prepare_sites.py publish-joint \
 记录有限损失/梯度、任务头更新、实际显存峰值。短测 batch=2、累积=1，不用于正式
 batch 选择或精度结论，不修改生产样本及固定划分。SCR 尚未发布时读取已完成的
 FossFS 源样本与 v3 索引，不读取 SCR 半成品；站点损失权重仍为 SM=2、ET=2。
+
+Checkpoint 加载：正式 train/test/predict CLI 和 GPU 短测使用 `HydroStateRunner`，
+对明确指定的可信本地训练 checkpoint 设置 `weights_only=False`，保留 MMEngine
+HistoryBuffer、优化器及恢复训练元数据；自动 resume 同样经过该入口。
+远程权重加载策略和普通 `torch.load` 默认行为不变，不设置全局环境变量绕过限制。
+这一修复解决 PyTorch 2.6+ 默认仅权重加载与 MMEngine 训练元数据的兼容问题。

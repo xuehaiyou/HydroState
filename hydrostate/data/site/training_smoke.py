@@ -9,10 +9,10 @@ import torch
 from mmengine.config import Config
 from mmengine.hooks import Hook
 from mmengine.registry import init_default_scope
-from mmengine.runner import Runner
 
 from hydrostate.cli import configure_pretrained_encoder, configure_target_statistics
 from hydrostate.data.gee.contracts import atomic_json
+from hydrostate.engine.runner import HydroStateRunner as Runner
 from hydrostate.registry import DATASETS
 
 

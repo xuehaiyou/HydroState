@@ -6,10 +6,10 @@ import argparse
 from pathlib import Path
 
 from mmengine.config import Config, DictAction
-from mmengine.runner import Runner
 
 from hydrostate.data.input_products import L2_PROFILE, LEGACY_PROFILE
 from hydrostate.data.model_inputs import input_keys
+from hydrostate.engine.runner import HydroStateRunner as Runner
 from hydrostate.normalization import load_target_statistics, training_fingerprint
 from hydrostate.tasks import LEGACY_TASKS, task_config
 
