@@ -1,6 +1,21 @@
 # CoSA 产品＋站点联合训练 — 2026-11-09
 
-## 代码和数据
+## 当前提交：SCR 数据使用 L40S
+
+用户确认全部数据在 SCR，可改用 `l40s`。已核对产品、两个站点 cohort 的输入/标签及
+FM 权重的实际解析路径都在 SCR；无须复制或重新下载。
+旧控制器已停止，尚未启动的 `c_foss_gpu` 作业 **4414178 已取消**，旧运行目录保留。
+
+新模型/启动器提交：`8f987a91679770d4fecde3523a3f4e53104ae919`。
+新运行目录：`/scr/u/xiaoz/HydroState/experiments/cosa_joint_l40s_20261109`。
+debug 作业 **4414428**：`l40s` / debug，单 `nvidia_l40s`，4 CPU，48 GiB 主存，25 分钟。
+后续正式 B/C 也从运行记录读取相同分区、GPU 类型和 CPU/主存；时限仍按新 GPU 实测加 10%。
+新的自动控制器已经启动；是否进入迭代以该目录的日志和 `controller_status.json` 为准。
+
+本次只修改资源选择及校验，没有改变模型、采样、监督和 B/C 实验条件。
+9 项提交控制相关测试、Ruff、Shell 语法及差异检查通过。
+
+## 首次提交的代码和数据（已被上面的 L40S 提交替换）
 
 模型源码冻结为 `84afe1fded3e4e4db97d9ff7647b710f16c60092`，已推送 GitHub 并同步 HPC。
 发布目录为 `/scr/u/xiaoz/HydroState/releases/84afe1fded3e4e4db97d9ff7647b710f16c60092`。
@@ -22,7 +37,7 @@ B 为 `configs/hydrostate_joint_independent.py`，C 为 `configs/hydrostate_join
 覆盖通过条件、显存余量、训练配方一致性、去重、续跑和仅最终一次完整测试。
 Ruff、差异空白检查和 Shell 语法检查通过。
 
-## GPU 和提交状态
+## 首次排队记录
 
 debug 作业 **4414178** 已接受提交：`c_foss_gpu`、debug、单 L40、4 CPU、48 GiB 主存，
 25 分钟上限。提交时排队等待资源，不能称为 GPU 验证通过或正式训练已经启动。

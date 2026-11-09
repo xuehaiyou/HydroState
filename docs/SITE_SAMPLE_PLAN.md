@@ -503,7 +503,7 @@ hydro_score 为任务 RMSE/对应训练标准差的负均值。损失权重、�
 B/C 使用相同 seed、数据顺序、有效 batch、优化器和总训练步数；当前配置上限 50 个
 联合 epoch，每 epoch 为 43,266 次有放回抽样，比旧产品-only epoch 约大 3.1 倍。
 原 A 保持产品-only 历史参考，不能将新增站点监督收益归于架构。
-正式 batch 由 L40 debug 的代表性实测确定，选择保留稳定性余量的较大 batch，
+正式 batch 由目标 GPU debug 的代表性实测确定，选择保留稳定性余量的较大 batch，
 两模型对齐；walltime 包含训练、完整验证和保存开销，再加 10%，超过队列上限时续跑分段。
 
 `scripts/run_joint_training.sh` 允许通过 `HYDROSTATE_CONFIG` 选择上述两个配置，
