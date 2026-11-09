@@ -452,3 +452,13 @@ python tools/data/prepare_sites.py publish-joint \
 
 发布复制采用最多 4 路 rsync 并发，按互不重复的路径清单连续分块，重叠小文件 I/O 等待；
 小规模元数据清单仍单路复制。不新增全量扫描、checksum 或复制后二次校验。
+
+### 联合训练 GPU 短测
+
+`tools/experiments/verify_joint_gpu.py --config configs/hydrostate_joint.py --output <新目录>`
+在 `c_foss_gpu`、debug QoS、单 GPU 下运行完整 MTLoRA 模型。先按正式入口绑定
+训练统计及 v3 划分，再选取各产品来源组、两批站点的 SM/均质 ET/足迹 ET 代表样本，
+每批配对产品与站点各一个。运行一轮训练、验证、保存与重新加载 checkpoint、测试，
+记录有限损失/梯度、任务头更新、实际显存峰值。短测 batch=2、累积=1，不用于正式
+batch 选择或精度结论，不修改生产样本及固定划分。SCR 尚未发布时读取已完成的
+FossFS 源样本与 v3 索引，不读取 SCR 半成品；站点损失权重仍为 SM=2、ET=2。

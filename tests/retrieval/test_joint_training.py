@@ -235,3 +235,15 @@ def test_station_priority_scales_loss_without_changing_valid_count(joint):
     assert station_values(outputs, samples)["site_sm"][2].all()
     cfg = Config.fromfile("configs/hydrostate_joint.py")
     assert cfg.model.site_supervision.loss_weights == dict(site_sm=2, site_et=2)
+
+
+def test_gpu_smoke_selection_pairs_both_sources(joint):
+    from hydrostate.data.site.training_smoke import representative_indices
+
+    dataset, _, _ = joint
+    indices = representative_indices(dataset)
+    assert all(index < len(dataset.product) for index in indices[::2])
+    assert all(index >= len(dataset.product) for index in indices[1::2])
+    assert {dataset.product.table.iloc[i].sampling_group for i in indices[::2]} == set(
+        dataset.product.table.sampling_group
+    )
