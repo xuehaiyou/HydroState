@@ -124,6 +124,22 @@ def test_mixed_batch_masks_sampling_and_statistic_mismatch(joint):
         JointRetrievalDataset(dataset.manifest, dataset.site_root, "train", dataset.product.root)
 
 
+@pytest.mark.parametrize("workers", [0, 2])
+def test_mixed_loader_mask_dtypes_do_not_depend_on_first_source(joint, workers):
+    from torch.utils.data import DataLoader
+
+    dataset, _, _ = joint
+    loader = DataLoader(dataset, batch_size=2, sampler=[2, 0, 0, 2], num_workers=workers,
+                        collate_fn=hydro_collate)
+    for batch in loader:
+        masks = batch["data_samples"]
+        for name, values in masks.items():
+            if name.endswith("_valid"):
+                assert values.dtype == torch.bool, name
+        assert masks["site_sm_native_valid"].sum() == 1
+        assert masks["soil_moisture_valid"].sum() == 1
+
+
 def test_mixed_real_zarr_forward_backward_and_separate_metrics(joint):
     dataset, stats, _ = joint
     init_default_scope("hydrostate")

@@ -14,7 +14,7 @@ from hydrostate.data.site.training_statistics import load_site_statistics
 from hydrostate.normalization import training_fingerprint
 from hydrostate.registry import DATASETS
 
-from .retrieval_dataset import RetrievalDataset
+from .retrieval_dataset import RetrievalDataset, as_tensors
 from .site_dataset import SiteDataset
 
 
@@ -144,10 +144,10 @@ class JointRetrievalDataset(Dataset):
         item = dataset[local]
         targets = item["data_samples"]
         if component == 0:
-            for key, spec in SiteSchema().targets.items():
-                targets[key] = torch.zeros(
-                    spec.tail_shape, dtype=torch.from_numpy(np.empty((), dtype=spec.dtype)).dtype
-                )
+            # Use the same in-memory mask dtype as observed station labels. Worker
+            # collation preallocates from the first sample and cannot mix bool/u8.
+            targets.update(as_tensors({key: np.zeros(spec.tail_shape, dtype=spec.dtype)
+                                       for key, spec in SiteSchema().targets.items()}))
         info = targets["metainfo"]
         info["supervision_source"] = "product" if component == 0 else "site"
         info["spatial_group_id"] = (
