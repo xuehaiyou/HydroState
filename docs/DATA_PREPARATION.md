@@ -142,6 +142,10 @@ U-Net 从随机权重开始，不需要 `HYDROSTATE_MODEL_PATH`，详见 [U-Net 
 debug 使用 `tools/experiments/verify_joint_gpu.py` 做完整训练/验证/保存/重载短测，
 `tools/benchmarks/joint_training.py --batch-size N --output REPORT.json` 测量输入读取、
 训练和验证吞吐及峰值显存。短测权重不用于正式实验初始化。
+`tools/experiments/launch_joint.py --run-root RUN --watch` 是显式启动的 IO 节点轻量控制器，
+等待已记录 debug 作业成功后检查两模型的短测/显存/配方，按实测估计和 10% 余量提交 B/C。
+提交意图和回执用于去重；检查失败停止，最后一段才对最佳验证 checkpoint 做完整测试。
+模型源码版本与控制器版本分别记录，控制器升级不会修改已经冻结的训练源码。
 
 `tools/watch_mtlora_collection.py` 是显式启动的调度器，等待完成标记后提交准备和成对训练，
 保留提交意图以防重复。采样入口不会自动启动它。
