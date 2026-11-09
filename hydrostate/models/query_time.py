@@ -12,6 +12,30 @@ from torch import nn
 from hydrostate.registry import MODELS
 
 
+def query_time_features(bounds, times, batch_size):
+    """Shared absolute/relative interval encodings; retain sub-day precision."""
+    if bounds.shape != (batch_size, 2):
+        raise ValueError("Target times must be B,2 UTC epoch-second bounds")
+    if bounds.dtype != torch.int64:
+        raise ValueError("Target times must use int64 UTC epoch seconds")
+    torch._assert_async(((bounds[:, 0] > 0) & (bounds[:, 1] >= bounds[:, 0])).all(),
+                        "Invalid target time bounds")
+    bounds = bounds.to(device=times.device, dtype=torch.float64)
+    center = bounds.mean(1)
+    # Annual season and UTC time-of-day are independent of relative image age.
+    annual = center / (86400 * 365.2425) * (2 * math.pi)
+    daily = center / 86400 * (2 * math.pi)
+    duration = (bounds[:, 1] - bounds[:, 0]) / 86400
+    absolute = torch.stack((annual.sin(), annual.cos(), daily.sin(), daily.cos(),
+                            duration.log1p() / math.log(65)), dim=-1).float()
+    # Use seconds until after subtraction to retain sub-day acquisition offsets.
+    times = times.to(dtype=torch.float64)
+    relative = torch.stack(((times - bounds[:, :1]) / (64 * 86400),
+                            (times - bounds[:, 1:]) / (64 * 86400),
+                            (times - center[:, None]).abs() / (64 * 86400)), dim=-1)
+    return absolute, relative.clamp(-4, 4).float()
+
+
 @MODELS.register_module()
 class TargetTimeQuery(nn.Module):
     """A task/time query selects valid observations independently at each patch."""
@@ -30,30 +54,12 @@ class TargetTimeQuery(nn.Module):
 
     def forward(self, sequence, bounds, task, keys=None):
         values, valid, times = sequence["features"], sequence["valid"], sequence["time"]
-        if bounds.shape != (values.shape[0], 2):
-            raise ValueError("Target times must be B,2 UTC epoch-second bounds")
-        if bounds.dtype != torch.int64:
-            raise ValueError("Target times must use int64 UTC epoch seconds")
-        torch._assert_async(((bounds[:, 0] > 0) & (bounds[:, 1] >= bounds[:, 0])).all(),
-                            "Invalid target time bounds")
-        bounds = bounds.to(device=values.device, dtype=torch.float64)
-        center = bounds.mean(1)
-        # Annual season and UTC time-of-day are independent of relative image age.
-        annual = center / (86400 * 365.2425) * (2 * math.pi)
-        daily = center / 86400 * (2 * math.pi)
-        duration = (bounds[:, 1] - bounds[:, 0]) / 86400
-        absolute = torch.stack((annual.sin(), annual.cos(), daily.sin(), daily.cos(),
-                                duration.log1p() / math.log(65)), dim=-1).float()
+        absolute, relative = query_time_features(bounds, times.to(values.device), values.shape[0])
         query = self.task_embedding.weight[self.tasks.index(task)] + self.time_query(absolute)
         if keys is None:
             keys = self.keys(values.permute(0, 1, 3, 4, 2))
         logits = (keys * query[:, None, None, None, :]).sum(-1).float() * self.scale
-        # Use seconds until after subtraction to retain sub-day acquisition offsets.
-        times = times.to(device=values.device, dtype=torch.float64)
-        relative = torch.stack(((times - bounds[:, :1]) / (64 * 86400),
-                                (times - bounds[:, 1:]) / (64 * 86400),
-                                (times - center[:, None]).abs() / (64 * 86400)), dim=-1)
-        relative_logits = self.relative_score(relative.clamp(-4, 4).float())[..., 0]
+        relative_logits = self.relative_score(relative)[..., 0]
         logits = logits + relative_logits[:, :, None, None].float()
         weights = logits.masked_fill(~valid, -torch.finfo(logits.dtype).max).softmax(dim=1)
         weights = weights * valid

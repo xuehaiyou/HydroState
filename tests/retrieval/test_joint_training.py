@@ -180,6 +180,16 @@ def test_joint_config_binds_statistics_and_checkpoint_score(joint):
     configure_target_statistics(cfg, training=True)
     assert cfg.val_evaluator.site_statistics == stats
     assert cfg.default_hooks.checkpoint.save_best == "joint_score"
+    assert cfg.val_evaluator.site_score_weight == pytest.approx(2 / 3)
+    assert cfg.test_evaluator.site_score_weight == pytest.approx(2 / 3)
+    assert cfg.model.type == "CoSAHydroStateModel"
+    independent = Config.fromfile("configs/hydrostate_joint_independent.py")
+    conditional = Config.fromfile("configs/hydrostate_joint.py")
+    independent.model.router.enabled = True
+    for key in ("model", "train_dataloader", "val_dataloader", "test_dataloader",
+                "optim_wrapper", "param_scheduler", "train_cfg", "val_evaluator",
+                "test_evaluator", "randomness"):
+        assert independent[key] == conditional[key]
 
 
 def test_long_station_series_does_not_gain_sampling_mass():
@@ -235,6 +245,53 @@ def test_station_priority_scales_loss_without_changing_valid_count(joint):
     assert station_values(outputs, samples)["site_sm"][2].all()
     cfg = Config.fromfile("configs/hydrostate_joint.py")
     assert cfg.model.site_supervision.loss_weights == dict(site_sm=2, site_et=2)
+
+
+def test_rare_frequency_and_extra_dates_do_not_amplify_spatial_group_mass():
+    from types import SimpleNamespace
+
+    dataset = object.__new__(JointRetrievalDataset)
+    dataset.site_fraction = 0.5
+    dataset.product = type("Products", (), {
+        "table": pd.DataFrame(dict(sampling_group=[0, 1])), "__len__": lambda self: 2,
+    })()
+    rows = [dict(frequency_bin=frequency, spatial_group_id=group, valid_sm=1, valid_et=1)
+            for group, frequency, dates in (("a", 0, 1), ("b", 0, 5), ("rare", 1, 8))
+            for _ in range(dates)]
+    dataset.sites = [SimpleNamespace(table=pd.DataFrame(rows))]
+    dataset.offsets = [0, 2, 16]
+    weights = dataset.sampling_weights()
+    assert weights.sum() == pytest.approx(1)
+    assert weights[2] == pytest.approx(1 / 6)
+    assert weights[3:8].sum() == pytest.approx(1 / 6)
+    assert weights[8:].sum() == pytest.approx(1 / 6)
+
+
+def test_station_priority_score_and_equal_group_report(joint):
+    _, stats, _ = joint
+    tasks = Config.fromfile("configs/hydrostate_joint.py").tasks
+    metric = JointHydroStateMetric(statistics(), stats, tasks,
+                                  comparison_years=(2017, 2024))
+
+    def row(source, task, error, group, year):
+        return dict(source=source, spatial_group_id=group, frequency_bin="0", year=year,
+                    **{f"{task}/count": 1, f"{task}/sum_abs": abs(error),
+                       f"{task}/sum_sq": error**2, f"{task}/sum_err": error,
+                       f"{task}/sum_y": 1, f"{task}/sum_y2": 1,
+                       f"{task}/sum_x": 1 + error, f"{task}/sum_x2": (1 + error)**2,
+                       f"{task}/sum_xy": 1 + error})
+
+    rows = [row("product", "soil_moisture", 1, "", 2020),
+            row("site", "site_sm", 1, "long", 2020),
+            row("site", "site_sm", 1, "long", 2020),
+            row("site", "site_sm", 3, "short", 2015)]
+    values = metric.compute_metrics(rows)
+    assert values["site/site_sm_rmse"] == pytest.approx((11 / 3)**0.5)
+    assert values["site/group_macro/site_sm_rmse"] == 2
+    assert values["site/group_macro/site_sm_groups"] == 2
+    assert values["site/years_2017_2024/site_sm_rmse"] == 1
+    assert values["joint_score"] == pytest.approx(
+        values["product/hydro_score"] / 3 + 2 * values["site/hydro_score"] / 3)
 
 
 def test_gpu_smoke_selection_pairs_both_sources(joint):

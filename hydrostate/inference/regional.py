@@ -40,7 +40,9 @@ def load_model(config, checkpoint, pretrained, statistics, device):
     configure_data_contract(cfg)
     if cfg.data_contract != VERSION or cfg.model.encoder.input_profile != PROFILE:
         raise ValueError("Regional inference requires the current retrieval input contract")
-    if cfg.model.type not in ("MTLoRAHydroStateModel", "UNetHydroStateModel"):
+    if cfg.model.type not in (
+        "MTLoRAHydroStateModel", "UNetHydroStateModel", "CoSAHydroStateModel"
+    ):
         raise ValueError("Regional export requires a current retrieval model")
     configure_pretrained_encoder(cfg, pretrained)
     stats = json.loads(Path(statistics).read_text())

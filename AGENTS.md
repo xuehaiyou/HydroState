@@ -12,7 +12,7 @@
 - [README](README.md)：当前入口；[仓库结构](docs/REPOSITORY_STRUCTURE.md)：模块职责和历史边界。
 - [流程规范](docs/RETRIEVAL_PIPELINE.md)：科学定义、采样和监督；[执行指南](docs/DATA_PREPARATION.md)：实际命令。
 - [数据契约](hydrostate/data/retrieval/contract.py) 与 [产品规格](hydrostate/data/retrieval/specs.py)：版本、输入、标签、单位和形状的代码来源。
-- [模型说明](docs/MTLORA.md)、[公共训练配置](configs/hydrostate_retrieval.py)、[采样配置](configs/data/collection/retrieval.py)：当前实现与默认参数。
+- [模型说明](docs/MTLORA.md)、[公共训练配置](configs/_base_/retrieval.py)、[采样配置](configs/data/collection/retrieval.py)：当前实现与默认参数。
 - [实现状态](docs/IMPLEMENTATION_STATUS.md) 和 `docs/validation/`：已完成的验证及已知限制；运行状态需查实时日志。
 - [PML 调查](docs/PML_SUPERVISION_AUDIT_20261022.md)、[站点调查](docs/SOIL_MOISTURE_SITE_AUDIT_20261022.md)：证据、适用范围和尚未确定的问题。
 
@@ -48,8 +48,9 @@
   这是模型预测的聚合，SMAP 标签值保持不变，不对标签除以 LF 或再乘 LF。
   当前训练采用同窗观测覆盖且权重不传梯度，推理采用预测覆盖确定有效域；
   单像元导出的 SM 不乘 LF。像元有效门槛与图块/产品支持区的纯度门槛含义不同。
-- 各变量有独立监督掩膜；某项标签缺失只影响对应监督。产品一致性不能冒充独立真值精度，
-  站点验证当前尚未接入正式产品流程。新产品需核实单位、掩膜、时间和面积定义。
+- 各变量有独立监督掩膜；某项标签缺失只影响对应监督。产品一致性不能冒充独立真值精度。
+  站点联合监督已接入：点位 SM 不作 LF 缩放，站点 ET 监督其空间支持上的总 ET。
+  新产品需核实单位、掩膜、时间和面积定义。
 
 ## 模型与对照实验
 
@@ -62,9 +63,17 @@
 - [MTLoRA 原文](https://arxiv.org/html/2403.20320v1) 的图 3、§3.3 和 §4.1 描述了
   Swin 四个空间尺度的任务专属残差融合及独立轻量解码器。
   我们使用三个同网格编码深度并增加时序处理，属于基于其思路的适配，不称为逐项严格复现。
+- CoSA 候选架构见 [COSA](docs/COSA.md)：复用 shared-LoRA 参数策略，三深度共享目标时间状态、
+  Coverage/SM/ET 三个专属分支和可关闭 Q–K Router。新 B/C 不加载旧任务 checkpoint，
+  两者仅切换交互；A 使用原 shared-LoRA 作为完整方案参考。CoSA 不安装额外 TOA 卷积，
+  旧模型保持原行为。2026-11-09 实际样本元数据仍为 L1 TOA，不能按此前 SR 推测改写数据契约。
 - 模型架构通过 config 选择。shared-LoRA 对照设置 `private_rank=0`，保留相同任务查询和解码器。
   架构比较尽量统一数据划分、监督支持、统计量、有效 batch 和训练预算；
   无法统一的差异要写明。历史架构可继续用于有明确数据定义的对照。
+- 当前 CoSA B/C 使用产品与站点联合监督，站点 SM/ET 标准化损失系数均为 2，
+  验证选模分数中站点占 2/3、产品占 1/3。采样来源各占一半期望权重，站点按任务、
+  空间组、日期分配；不因稀缺频率组只有一个站点而大量重复它。比例与损失系数不是梯度占比。
+  原产品-only A 是历史参考；把架构收益与新增站点监督收益分开解释。
 
 ## 编码与文件组织
 

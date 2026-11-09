@@ -105,6 +105,9 @@ CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/hydrostate_mtlora.py
 CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/hydrostate_mtlora_shared.py
 CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/hydrostate_full.py
 CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/hydrostate_unet.py
+# CoSA B/C: fresh FM initialization, same inputs and training budget.
+CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/hydrostate_cosa_independent.py
+CUDA_VISIBLE_DEVICES=0 python tools/train.py configs/hydrostate_cosa.py
 CUDA_VISIBLE_DEVICES=0 python tools/test.py configs/hydrostate_mtlora.py CHECKPOINT.pth
 ```
 
@@ -120,7 +123,7 @@ U-Net 从随机权重开始，不需要 `HYDROSTATE_MODEL_PATH`，详见 [U-Net 
 当前 Slurm 文件只有：
 
 - `scripts/slurm/prepare_retrieval.sh`：6 CPU，执行同一个 Python 准备入口。
-- `scripts/slurm/train_retrieval.sh mtlora|lora|full|unet`：1 GPU、6 CPU，验证数据后调用 `scripts/train.sh`。
+- `scripts/slurm/train_retrieval.sh mtlora|lora|full|unet|cosa|cosa_independent`：1 GPU、6 CPU，验证数据后调用 `scripts/train.sh`。
   架构后的参数作为配置覆盖传入，例如 `full resume=True`；续训使用原工作目录。
 
 冻结发布设置：`HYDROSTATE_CODE_ROOT`、`HYDROSTATE_CODE_COMMIT`、
@@ -128,8 +131,17 @@ U-Net 从随机权重开始，不需要 `HYDROSTATE_MODEL_PATH`，详见 [U-Net 
 `HYDROSTATE_TARGET_STATS`、`HYDROSTATE_MODEL_PATH`、`HYDROSTATE_RUN_ROOT`、
 `HYDROSTATE_WORK_DIR`。Conda 路径可通过 `HYDROSTATE_CONDA_BASE` 和
 `HYDROSTATE_CONDA_ENV` 指定。分区与数据路径按所在集群选择。
-脚本默认时限为 96 小时；较长实验提交时可用 `sbatch --time=7-00:00:00` 覆盖，
-先核实当前 partition/QoS 允许的上限。
+旧包装含 96 小时默认值；正式提交必须用实测端到端耗时加 10% 覆盖，
+超过 partition/QoS 上限时按可恢复的工作量分段，不直接申请最长时限。
+
+产品＋站点使用 `scripts/run_joint_training.sh`，通过 `HYDROSTATE_CONFIG` 选择
+`configs/hydrostate_joint.py`（CoSA Router）或 `configs/hydrostate_joint_independent.py`。
+额外设置 `HYDROSTATE_SITE_SPLIT_ROOT` 指向带 `_PUBLISHED.json` 的 v3 SCR 包，
+以及已实测的 `HYDROSTATE_MICRO_BATCH` / `HYDROSTATE_ACCUMULATIVE_COUNTS`。
+运行前自动核验两类数据的划分、指纹和真实混合批次；所有数据只读。
+debug 使用 `tools/experiments/verify_joint_gpu.py` 做完整训练/验证/保存/重载短测，
+`tools/benchmarks/joint_training.py --batch-size N --output REPORT.json` 测量输入读取、
+训练和验证吞吐及峰值显存。短测权重不用于正式实验初始化。
 
 `tools/watch_mtlora_collection.py` 是显式启动的调度器，等待完成标记后提交准备和成对训练，
 保留提交意图以防重复。采样入口不会自动启动它。

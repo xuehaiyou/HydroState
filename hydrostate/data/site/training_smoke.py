@@ -1,6 +1,7 @@
 """Small real-data GPU test of the unchanged joint model and MMEngine training loops."""
 
 import argparse
+import json
 import math
 import time
 from pathlib import Path
@@ -19,6 +20,14 @@ from hydrostate.registry import DATASETS
 def representative_indices(dataset):
     """Pair product groups with site tasks/supports from each available source cohort."""
     products = [int(group.index[0]) for _, group in dataset.product.table.groupby("sampling_group")]
+    if "valid_label_counts" in dataset.product.table:
+        counts = dataset.product.table.valid_label_counts.map(
+            lambda value: json.loads(value) if isinstance(value, str) else value)
+        for task in dataset.product.tasks:
+            values = counts.map(lambda row, name=task: row.get(name, 0))
+            if values.max() > 0:
+                products.append(int(values.idxmax()))
+        products = list(dict.fromkeys(products))
     sites = []
     for component, site in enumerate(dataset.sites, start=1):
         for mask in (
@@ -40,6 +49,8 @@ def representative_indices(dataset):
 class FiniteLossHook(Hook):
     def __init__(self):
         self.steps = 0
+        self.peak_allocated = 0
+        self.peak_reserved = 0
 
     def after_train_iter(self, runner, batch_idx, data_batch=None, outputs=None):
         if not outputs or "loss" not in outputs:
@@ -47,10 +58,15 @@ class FiniteLossHook(Hook):
         if any(not math.isfinite(float(value)) for value in outputs.values()):
             raise ValueError("Nonfinite training loss or diagnostic")
         self.steps += 1
+        # Read before LoggerHook resets its memory counters.
+        self.peak_allocated = max(self.peak_allocated, torch.cuda.max_memory_allocated())
+        self.peak_reserved = max(self.peak_reserved, torch.cuda.max_memory_reserved())
 
 
-def run(config, output):
+def run(config, output, *, batch_size=2, workers=0, train_steps=8):
     output = Path(output)
+    if min(batch_size, train_steps) < 1 or workers < 0:
+        raise ValueError("Positive batch/steps and nonnegative worker count required")
     if (output / "result.json").exists():
         raise FileExistsError("Use a new smoke output directory")
     output.mkdir(parents=True, exist_ok=True)
@@ -66,8 +82,12 @@ def run(config, output):
         loader = cfg[f"{split}_dataloader"]
         dataset = DATASETS.build(dict(loader.dataset))
         indices = representative_indices(dataset)
+        if split == "train":
+            count = max(len(indices), train_steps * batch_size)
+            indices = [indices[i % len(indices)] for i in range(count)]
         selection[split] = dict(indices=indices, samples=len(indices))
-        loader.update(sampler=indices, batch_size=2, num_workers=0, persistent_workers=False)
+        loader.update(sampler=indices, batch_size=batch_size, num_workers=workers,
+                      persistent_workers=False)
     cfg.work_dir = str(output)
     cfg.train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=1, val_interval=1)
     cfg.optim_wrapper.accumulative_counts = 1
@@ -80,7 +100,7 @@ def run(config, output):
     atomic_json(output / "selection.json", selection)
     runner = Runner.from_cfg(cfg)
     hook = FiniteLossHook()
-    runner.register_hook(hook)
+    runner.register_hook(hook, priority="ABOVE_NORMAL")
     tracked = {
         name: p.detach().cpu().clone()
         for name, p in runner.model.named_parameters()
@@ -123,9 +143,10 @@ def run(config, output):
     result = dict(
         status="passed", scope="GPU joint training/validation/checkpoint reload/test smoke only",
         gpu=torch.cuda.get_device_name(), model=cfg.model.type,
-        micro_batch=2, accumulation=1, train_steps=hook.steps,
+        micro_batch=batch_size, accumulation=1, train_steps=hook.steps,
         changed_task_head_parameters=len(changed), finite_gradient_checks=len(gradient_checks),
-        peak_allocated_gib=torch.cuda.max_memory_allocated() / 1024**3,
+        peak_allocated_gib=hook.peak_allocated / 1024**3,
+        peak_reserved_gib=hook.peak_reserved / 1024**3,
         elapsed_seconds=time.monotonic() - started,
         test_joint_score=metrics["joint_score"],
         site_loss_weights=dict(cfg.model.site_supervision.loss_weights),
@@ -141,9 +162,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="configs/hydrostate_joint.py")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--train-steps", type=int, default=8)
     args = parser.parse_args()
     try:
-        run(args.config, args.output)
+        run(args.config, args.output, batch_size=args.batch_size, workers=args.workers,
+            train_steps=args.train_steps)
     except Exception as error:
         atomic_json(Path(args.output) / "failure.json", dict(error=repr(error)))
         raise

@@ -6,10 +6,11 @@
 |---|---|
 | [RETRIEVAL_PIPELINE](RETRIEVAL_PIPELINE.md) | 科学定义、采样、时间匹配、质量控制及监督尺度 |
 | [DATA_PREPARATION](DATA_PREPARATION.md) | 本地/HPC 的正式执行入口和环境参数 |
-| [站点样本与联合训练方案](SITE_SAMPLE_PLAN.md) | 原始资料、独立 Zarr、分层抽样、划分隔离及产品一致性；首轮小试已运行，正式联合训练待接入 |
+| [站点样本与联合训练方案](SITE_SAMPLE_PLAN.md) | 独立 Zarr、划分隔离、SCR 发布、CoSA 联合监督与站点优先权重 |
 | [REGIONAL_INFERENCE](REGIONAL_INFERENCE.md) | 区域 Drive 准备、断点恢复和当前模型推理 |
 | [DATA_SCHEMA](DATA_SCHEMA.md) | 数据契约、分片和数据发布约定 |
 | [MTLORA](MTLORA.md) | MTLoRA、shared-LoRA、全量微调及冻结策略 |
+| [COSA](COSA.md) | shared-LoRA 前端、共享状态、Q–K Router 及 B/C 消融 |
 | [UNET](UNET.md) | 随机初始化 U-Net 对照、输入、监督与运行入口 |
 | [REPOSITORY_STRUCTURE](REPOSITORY_STRUCTURE.md) | 目录职责、依赖方向和历史代码边界 |
 | [IMPLEMENTATION_STATUS](IMPLEMENTATION_STATUS.md) | 已验证内容和未完成事项 |

@@ -14,6 +14,7 @@ Outputs are 30 m; product losses respect each label's observation support.
 - [Regional input preparation and model inference](docs/REGIONAL_INFERENCE.md)
 - [Input specifications and independent label packs](docs/EXTENDING_VARIABLES.md)
 - [MTLoRA and shared-LoRA architectures](docs/MTLORA.md)
+- [CoSA shared state and conditional routing](docs/COSA.md)
 - [Random-initialized U-Net control](docs/UNET.md)
 - [Repository responsibilities](docs/REPOSITORY_STRUCTURE.md)
 - [Implementation and validation status](docs/IMPLEMENTATION_STATUS.md)

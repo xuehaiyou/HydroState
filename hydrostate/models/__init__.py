@@ -1,6 +1,7 @@
 """Model components."""
 
 from .composite_quality import CompositeQualityFusion
+from .cosa import CoSAHydroStateModel, CoSASharedLoRAEncoder, CoSAStateFusion
 from .data_preprocessor import HydroDataPreprocessor
 from .decoder import SharedUNetDecoder
 from .heads import RegressionHead
@@ -25,6 +26,9 @@ from .unet import UNetDecoder, UNetEncoder, UNetHydroStateModel
 __all__ = [
     "AuxiliaryInputFusion",
     "CompositeQualityFusion",
+    "CoSAHydroStateModel",
+    "CoSASharedLoRAEncoder",
+    "CoSAStateFusion",
     "HydroDataPreprocessor",
     "HydroStateModel",
     "MultiLevelFusionDecoder",

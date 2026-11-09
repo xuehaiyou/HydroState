@@ -51,6 +51,7 @@ class OlmoEarthEncoder(nn.Module):
         gradient_checkpointing: bool = False,
         broadcast_attention_mask: bool = True,
         input_profile: str = LEGACY_PROFILE,
+        use_landsat_toa_adapter: bool = True,
     ) -> None:
         super().__init__()
         self.input_profile = input_profile
@@ -62,9 +63,10 @@ class OlmoEarthEncoder(nn.Module):
             from hydrostate.data.retrieval.contract import SENSORS
             if not inputs_are_normalized:
                 raise ValueError("TOA composites require explicit physical normalization")
-            self.landsat_toa_adapter = nn.Conv2d(SENSORS["landsat"], SENSORS["landsat"], 1)
-            nn.init.eye_(self.landsat_toa_adapter.weight[:, :, 0, 0])
-            nn.init.zeros_(self.landsat_toa_adapter.bias)
+            if use_landsat_toa_adapter:
+                self.landsat_toa_adapter = nn.Conv2d(SENSORS["landsat"], SENSORS["landsat"], 1)
+                nn.init.eye_(self.landsat_toa_adapter.weight[:, :, 0, 0])
+                nn.init.zeros_(self.landsat_toa_adapter.bias)
         if input_profile == L2_PROFILE:
             if not inputs_are_normalized:
                 raise ValueError("L2 adapter requires already-normalized S1/S2 inputs")

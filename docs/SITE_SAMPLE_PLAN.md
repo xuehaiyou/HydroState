@@ -1,5 +1,8 @@
 # 站点 SM / ET 样本与联合训练方案
 
+当前正式训练设置见文末 [CoSA 联合训练](#2026-11-09cosa-联合训练)；前面按日期保存的
+采样、生产、划分和 MTLoRA 短测记录不覆盖最新训练决定。
+
 更新：2026-11-04。**SM 只使用 ISMN；已完成浅层晨间质量整理及全量 FLUXNET／ICOS
 标准 ET 时间质控，不要求 ET 先通过足迹筛选。联合实际分层随机抽取 78,658 个
 满足同物理站点 30 天间隔的候选窗口，涉及 1,558 个站点组。
@@ -468,3 +471,42 @@ Checkpoint 加载：正式 train/test/predict CLI 和 GPU 短测使用 `HydroSta
 HistoryBuffer、优化器及恢复训练元数据；自动 resume 同样经过该入口。
 远程权重加载策略和普通 `torch.load` 默认行为不变，不设置全局环境变量绕过限制。
 这一修复解决 PyTorch 2.6+ 默认仅权重加载与 MMEngine 训练元数据的兼容问题。
+
+## 2026-11-09：CoSA 联合训练
+
+用户确认采用产品＋站点一次混合训练，不加载旧 shared-LoRA 任务权重。
+`configs/hydrostate_joint.py` 现在以 CoSA 为基础；
+`configs/hydrostate_joint_independent.py` 仅关闭 Router，作为 B，对应开启 Router 的 C。
+此前 MTLoRA 短测仍以当时冻结 commit/config 为准，不把其结果当作 CoSA GPU 验证。
+
+已发布 SCR 包：产品 `samples/retrieval_eight_20000_06aba36`，
+站点 `samples/site_joint_v3_20261108`（均位于 `/scr/u/xiaoz/HydroState` 下）。
+产品 train/validation/test 为 13,906/2,718/3,376；站点窗口为 29,360/6,334/6,327，
+独立空间组为 410/206/206。产品 2017–2024，站点 2013–2026；不重新截断合格站点数据。
+两个站点生产批次、v3 空间隔离、产品选择证明和训练统计均保持不变。
+
+产品/站点各占 50% 期望抽样权重。产品八来源组均衡；站点改为任务→空间组→组内日期，
+不再按频率组等权。训练集中非零频率只有一个空间组、202 个窗口，旧频率优先权重会让
+它占全部抽样的 25%，因此取消该放大因素。同窗口多任务权重相加；频率仍用于报告。
+当前训练 SM 28,500 个窗口，ET 860 个窗口；更多同站日期不能视为新增空间独立信息。
+
+产品损失不变，站点 SM/ET 标准化 MSE 系数均为 2。
+`joint_score = (1/3)*product_hydro_score + (2/3)*site_hydro_score`，每个来源的
+hydro_score 为任务 RMSE/对应训练标准差的负均值。损失权重、抽样权重、选模权重分别记录。
+验证和测试完整遍历；另报站点等空间组平均 RMSE/MAE/Bias/R² 和共同 2017–2024 年子集。
+无定义的组内 R² 不纳入平均，并报告实际组数；附加指标不改变选模公式。
+
+站点 SM 对应位置的陆地条件 SM 不乘除 LF；ET 约束空间支持上的派生总 ET。
+当前训练 ET 全为 static_210m，验证/测试各有 3/5 个 footprint 窗口；近似支持和稀缺
+非零频率空间组必须随精度一起报告，不能用总 ET 精度证明三个 ET 分支分别正确。
+
+B/C 使用相同 seed、数据顺序、有效 batch、优化器和总训练步数；当前配置上限 50 个
+联合 epoch，每 epoch 为 43,266 次有放回抽样，比旧产品-only epoch 约大 3.1 倍。
+原 A 保持产品-only 历史参考，不能将新增站点监督收益归于架构。
+正式 batch 由 L40 debug 的代表性实测确定，选择保留稳定性余量的较大 batch，
+两模型对齐；walltime 包含训练、完整验证和保存开销，再加 10%，超过队列上限时续跑分段。
+
+`scripts/run_joint_training.sh` 允许通过 `HYDROSTATE_CONFIG` 选择上述两个配置，
+运行前保留发布、指纹及真实批次预检。`tools/benchmarks/joint_training.py` 使用独立
+临时模型测输入读取/训练/验证和显存；`verify_joint_gpu.py` 可设置 batch、worker 与步数，
+检查保存/重载及任务头更新。两者都不提供正式训练初始化或泛化精度。

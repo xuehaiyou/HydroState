@@ -153,6 +153,7 @@ class JointRetrievalDataset(Dataset):
         info["spatial_group_id"] = (
             "" if component == 0 else str(dataset.table.iloc[local].spatial_group_id)
         )
+        info["year"] = pd.Timestamp(dataset.table.iloc[local].target_time).year
         return item
 
     def validate_site_statistics(self, source):
@@ -180,15 +181,16 @@ class JointRetrievalDataset(Dataset):
         for _, indices in groups.groupby(groups).groups.items():
             weights[list(indices)] = (1 - self.site_fraction) / groups.nunique() / len(indices)
         sites = pd.concat([d.table for d in self.sites], ignore_index=True)
-        # Frequency first, then task and spatial group; extra dates never increase group mass.
-        for _, group in sites.groupby("frequency_bin"):
-            tasks = [name for name in ("sm", "et") if group[f"valid_{name}"].gt(0).any()]
-            for name in tasks:
-                rows = group[group[f"valid_{name}"].gt(0)]
-                for _, station in rows.groupby("spatial_group_id"):
-                    mass = self.site_fraction / sites.frequency_bin.nunique() / len(tasks)
-                    mass /= rows.spatial_group_id.nunique() * len(station)
-                    weights[torch.tensor(station.index.to_numpy()) + len(self.product)] += mass
+        # Balance tasks, then spatial groups, then dates. A frequency bin represented
+        # by one group must not gain the mass of hundreds of independent groups.
+        tasks = [name for name in ("sm", "et") if sites[f"valid_{name}"].gt(0).any()]
+        for name in tasks:
+            rows = sites[sites[f"valid_{name}"].gt(0)]
+            counts = rows.groupby("spatial_group_id").spatial_group_id.transform("size")
+            mass = self.site_fraction / len(tasks) / rows.spatial_group_id.nunique()
+            weights[torch.tensor(rows.index.to_numpy()) + len(self.product)] += torch.tensor(
+                (mass / counts).to_numpy(), dtype=torch.double
+            )
         if not torch.isfinite(weights).all() or (weights <= 0).any():
             raise ValueError("Invalid joint sampling mass")
         return weights

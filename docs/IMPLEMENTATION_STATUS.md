@@ -1,9 +1,28 @@
-# 当前实现状态（2026-11-04）
+# 当前实现状态（2026-11-09）
 
 本页记录当前快照；此前逐次追加的记录完整保留在
 [历史实现记录](history/IMPLEMENTATION_STATUS_BEFORE_RETRIEVAL.md)。
 科学与监督规范见 [RETRIEVAL_PIPELINE](RETRIEVAL_PIPELINE.md)，
 执行方式见 [DATA_PREPARATION](DATA_PREPARATION.md)。
+
+## 2026-11-09 CoSA 产品＋站点联合训练接入
+
+SCR v3 站点包已发布，共 42,021 个窗口。当前联合入口使用 CoSA，并提供只关闭
+Router 的对照；保持站点损失系数 2，选模站点权重更新为 2/3。
+站点按任务→空间组→日期抽样，增加等空间组和共同年份评估；数据、划分、统计量不变。
+38 项本地相关测试通过。CoSA 联合 GPU 和正式提交结果待本次 debug 验证后记录，
+此前 MTLoRA GPU 短测不代表新模型已完成真实联合验证。见 [联合方案](SITE_SAMPLE_PLAN.md)。
+
+## 2026-11-09 CoSA 配置与真实样本短测完成
+
+新增共享状态、三组空间专家和 Q–K Router，B/C 配置仅切换交互。
+保留 shared-LoRA 参数策略和旧 checkpoint 行为，复用当前七输出监督及区域推理入口。
+96 项相关测试通过；完整 OlmoEarth Base 在 RTX 4060 上以四个真实训练样本分别完成
+B/C 的 BF16 前向、反向和参数更新。尚未提交正式 B/C 训练，没有新精度结论。
+
+输入审计确认原 2 万样本的 Landsat 是 L1→TOA，并非此前讨论假定的 SR；
+CoSA 去掉额外适配卷积，但不重标已发布数据或改变归一化。
+见 [模型与实验说明](COSA.md)、[验收记录](validation/COSA_20261109.md)。
 
 ## 2026-11-04 配额决定更新
 

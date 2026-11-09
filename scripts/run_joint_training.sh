@@ -24,7 +24,8 @@ source "${HYDROSTATE_CONDA_BASE:-/home/xiaoz/miniconda}/etc/profile.d/conda.sh"
 conda activate "${HYDROSTATE_CONDA_ENV:-hydrostate}"
 export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
-export HYDROSTATE_CONFIG=configs/hydrostate_joint.py HYDROSTATE_GPUS_PER_NODE=1
+export HYDROSTATE_CONFIG="${HYDROSTATE_CONFIG:-configs/hydrostate_joint.py}"
+export HYDROSTATE_GPUS_PER_NODE=1
 export HYDROSTATE_MANIFEST="${HYDROSTATE_MANIFEST:-$HYDROSTATE_DATA_ROOT/samples.parquet}"
 mkdir -p "$HYDROSTATE_WORK_DIR/provenance"
 python tools/data/verify_joint_training.py --config "$HYDROSTATE_CONFIG" \
@@ -34,5 +35,7 @@ cp "$HYDROSTATE_SITE_SPLIT_ROOT/datasets.json" "$HYDROSTATE_SITE_SPLIT_ROOT/spli
    "$HYDROSTATE_SITE_SPLIT_ROOT/site_target_stats.json" "$HYDROSTATE_WORK_DIR/provenance/"
 exec bash scripts/train.sh \
     "train_dataloader.batch_size=$HYDROSTATE_MICRO_BATCH" \
+    "val_dataloader.batch_size=$HYDROSTATE_MICRO_BATCH" \
+    "test_dataloader.batch_size=$HYDROSTATE_MICRO_BATCH" \
     "optim_wrapper.accumulative_counts=$HYDROSTATE_ACCUMULATIVE_COUNTS" \
     train_dataloader.num_workers=2 val_dataloader.num_workers=2 test_dataloader.num_workers=2 "$@"

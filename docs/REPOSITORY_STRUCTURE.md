@@ -6,7 +6,9 @@
 ```text
 configs/
   data/collection/retrieval.py   当前采样参数
-  hydrostate_retrieval.py        公共训练配置，从数据契约导入任务和输入定义
+  _base_/retrieval.py            公共数据、监督和训练配置，从数据契约导入规格
+  hydrostate_retrieval.py        MTLoRA 架构配置
+  hydrostate_cosa*.py            CoSA 有/无交互配置，共用上述数据和监督
   hydrostate_mtlora*.py          模型选择及消融
   hydrostate_unet.py             随机初始化 U-Net，共用当前七任务监督
   _base_/runtime.py              MMEngine 通用运行设置
@@ -19,6 +21,7 @@ hydrostate/
   storage/                      与任务无关的数组描述、Zarr 读写和缓存
   tasks.py                      任务支持范围校验；默认解析当前七任务
   statistics.py                 通用流式统计
+  models/cosa/                  共享时序状态、三个空间专家和可关闭 Q–K Router
   models/, losses/, evaluation/ 模型、损失及指标；架构仍由 config 选择
   legacy/                       历史采样器、读取器、schema 和统计
   data/regional/                正式区域合成规划、直接像素/Drive 准备；原单景实现保留原位

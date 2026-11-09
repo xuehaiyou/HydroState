@@ -1,6 +1,6 @@
 #!/bin/bash
 # Submit only after collection audit and training-only statistics have completed.
-# Pass mtlora, lora, full or unet; keep data/statistics fixed across controls.
+# Pass a configured architecture; keep data/statistics fixed across controls.
 #SBATCH --job-name=hs_mtlora
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -20,7 +20,9 @@ case "${1:-}" in
     lora) export HYDROSTATE_CONFIG=configs/hydrostate_mtlora_shared.py ;;
     full) export HYDROSTATE_CONFIG=configs/hydrostate_full.py ;;
     unet) export HYDROSTATE_CONFIG=configs/hydrostate_unet.py ;;
-    *) echo 'Expected architecture: mtlora, lora, full or unet' >&2; exit 2 ;;
+    cosa) export HYDROSTATE_CONFIG=configs/hydrostate_cosa.py ;;
+    cosa_independent) export HYDROSTATE_CONFIG=configs/hydrostate_cosa_independent.py ;;
+    *) echo 'Expected architecture: mtlora, lora, full, unet, cosa or cosa_independent' >&2; exit 2 ;;
 esac
 shift
 : "${HYDROSTATE_CODE_ROOT:?Set an immutable source release}"
