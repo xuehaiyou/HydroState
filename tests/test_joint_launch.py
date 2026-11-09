@@ -28,8 +28,14 @@ def run(tmp_path):
             selection={name: dict(samples=16) for name in ("train", "val", "test")}))
     write(tmp_path / "submission.json", dict(
         source_release=str(tmp_path / "release"),
-        environment=dict(HYDROSTATE_SOURCE_HASHES=str(tmp_path / "source.sha256")),
-        jobs=[dict(stage="debug", job_id="123")]))
+        resources=dict(account="geog_geors", partition="l40s", gres="gpu:nvidia_l40s:1",
+                       regular_qos="gpu", regular_max_seconds=7 * 86400,
+                       cpus_per_task=4, memory="48G"),
+        environment=dict(HYDROSTATE_SOURCE_HASHES=str(tmp_path / "source.sha256"),
+                         HYDROSTATE_SLURM_PARTITION="l40s"),
+        jobs=[dict(stage="debug", job_id="123", command=[
+            "sbatch", "--partition=l40s", "--gres=gpu:nvidia_l40s:1",
+            "--cpus-per-task=4", "--mem=48G"])]))
     return tmp_path
 
 
@@ -64,6 +70,9 @@ def test_submission_is_paired_fresh_guarded_and_idempotent(run, monkeypatch):
     result = launch.submit_after_debug(run)
     assert result["status"] == "formal_submitted"
     assert len(calls) == 3  # One checksum, exactly two submissions.
+    assert "--partition=l40s" in calls[1][0]
+    assert "--gres=gpu:nvidia_l40s:1" in calls[1][0]
+    assert "--cpus-per-task=4" in calls[1][0]
     for variant, (_, args) in zip(("b", "c"), calls[1:]):
         env = args["env"]
         assert env["HYDROSTATE_MICRO_BATCH"] == "16"
@@ -83,6 +92,21 @@ def test_failed_debug_never_submits(run, monkeypatch):
     with pytest.raises(ValueError, match="not completed"):
         launch.submit_after_debug(run)
     assert not (run / "formal.launch.lock").exists()
+
+
+def test_resource_mismatch_never_submits(run, monkeypatch):
+    path = run / "submission.json"
+    record = json.loads(path.read_text())
+    record["resources"]["partition"] = "c_foss_gpu"
+    path.write_text(json.dumps(record))
+    monkeypatch.setattr(launch.subprocess, "run", lambda *a, **kw: pytest.fail("unexpected submit"))
+    with pytest.raises(ValueError, match="disagree"):
+        launch.submit_after_debug(run)
+    record["resources"]["partition"] = "l40s"
+    record["resources"]["gres"] = "gpu:nvidia_l40:1"
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="debug allocation: gres"):
+        launch.submit_after_debug(run)
 
 
 def test_only_last_segment_runs_test_and_later_segments_resume():

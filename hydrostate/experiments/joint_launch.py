@@ -76,13 +76,29 @@ def job_script(release, config, work, end_epoch, *, resume, final, batch):
     return "\n".join(lines) + "\n"
 
 
-def submit_after_debug(run, *, epochs=50, max_seconds=7 * 86400):
+def submit_after_debug(run, *, epochs=50, max_seconds=None):
     run = Path(run).resolve()
     path = run / "submission.json"
     record = json.loads(path.read_text())
     if record.get("status") == "formal_submitted":
         return record
+    resources = record["resources"]
+    if (not 1 <= resources["cpus_per_task"] <= 6
+            or not resources["gres"].startswith("gpu:")
+            or resources["gres"].rsplit(":", 1)[-1] != "1"):
+        raise ValueError("Joint training requires one GPU and at most six CPU cores")
+    if record["environment"]["HYDROSTATE_SLURM_PARTITION"] != resources["partition"]:
+        raise ValueError("Recorded resource partition and execution environment disagree")
+    limit = resources["regular_max_seconds"]
+    if max_seconds is not None:
+        limit = min(limit, max_seconds)
     debug = next(job for job in record["jobs"] if job["stage"] == "debug")
+    requested = dict(arg[2:].split("=", 1) for arg in debug["command"]
+                     if arg.startswith("--") and "=" in arg)
+    for option, key in (("partition", "partition"), ("gres", "gres"),
+                        ("cpus-per-task", "cpus_per_task"), ("mem", "memory")):
+        if requested.get(option) != str(resources[key]):
+            raise ValueError(f"Formal resources differ from the debug allocation: {option}")
     accounting = subprocess.check_output([
         "sacct", "-n", "-P", "-j", debug["job_id"], "--format=JobIDRaw,State,ExitCode",
     ], text=True)
@@ -106,7 +122,7 @@ def submit_after_debug(run, *, epochs=50, max_seconds=7 * 86400):
     for variant, config in (("b", "configs/hydrostate_joint_independent.py"),
                             ("c", "configs/hydrostate_joint.py")):
         work = run / f"work_{variant}"
-        segments = training_segments(reports[variant]["budget_epoch_seconds"], epochs, max_seconds)
+        segments = training_segments(reports[variant]["budget_epoch_seconds"], epochs, limit)
         previous = debug["job_id"]
         for index, segment in enumerate(segments):
             script = run / f"formal_{variant}_{index + 1}.sh"
@@ -119,9 +135,12 @@ def submit_after_debug(run, *, epochs=50, max_seconds=7 * 86400):
                                HYDROSTATE_MICRO_BATCH=str(passed["micro_batch"]),
                                HYDROSTATE_ACCUMULATIVE_COUNTS="1")
             command = ["sbatch", "--parsable", f"--job-name=hs_cosa_joint_{variant}_{index + 1}",
-                       "--account=geog_geors", "--partition=c_foss_gpu", "--qos=gpu",
-                       "--nodes=1", "--ntasks=1", "--gres=gpu:nvidia_l40:1",
-                       "--cpus-per-task=4", "--mem=48G", f"--time={segment['walltime']}",
+                       f"--account={resources['account']}",
+                       f"--partition={resources['partition']}",
+                       f"--qos={resources['regular_qos']}",
+                       "--nodes=1", "--ntasks=1", f"--gres={resources['gres']}",
+                       f"--cpus-per-task={resources['cpus_per_task']}",
+                       f"--mem={resources['memory']}", f"--time={segment['walltime']}",
                        f"--dependency=afterok:{previous}", "--kill-on-invalid-dep=yes",
                        f"--output={run}/logs/formal_{variant}_%j.out",
                        f"--error={run}/logs/formal_{variant}_%j.err", str(script)]

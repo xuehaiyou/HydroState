@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run inside a single-GPU c_foss_gpu allocation after a representative GPU batch probe.
+# Run on the single-GPU partition validated by the representative data/batch probe.
 set -euo pipefail
 : "${HYDROSTATE_CODE_ROOT:?Set frozen code release}"
 : "${HYDROSTATE_CODE_COMMIT:?Set release commit}"
@@ -10,8 +10,9 @@ set -euo pipefail
 : "${HYDROSTATE_WORK_DIR:?Set new joint experiment directory}"
 : "${HYDROSTATE_MICRO_BATCH:?Set GPU-validated batch size}"
 : "${HYDROSTATE_ACCUMULATIVE_COUNTS:?Set gradient accumulation to preserve effective batch}"
-if [[ "${SLURM_JOB_PARTITION:-}" != c_foss_gpu ]]; then
-    echo 'FossFS joint training requires a c_foss_gpu allocation.' >&2
+: "${HYDROSTATE_SLURM_PARTITION:?Set the partition validated by the GPU probe}"
+if [[ "${SLURM_JOB_PARTITION:-}" != "$HYDROSTATE_SLURM_PARTITION" ]]; then
+    echo 'Joint training must use the partition validated by its GPU probe.' >&2
     exit 2
 fi
 if [[ "${SLURM_CPUS_PER_TASK:-1}" -gt 6 ]]; then

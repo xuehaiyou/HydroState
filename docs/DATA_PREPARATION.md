@@ -138,6 +138,8 @@ U-Net 从随机权重开始，不需要 `HYDROSTATE_MODEL_PATH`，详见 [U-Net 
 `configs/hydrostate_joint.py`（CoSA Router）或 `configs/hydrostate_joint_independent.py`。
 额外设置 `HYDROSTATE_SITE_SPLIT_ROOT` 指向带 `_PUBLISHED.json` 的 v3 SCR 包，
 以及已实测的 `HYDROSTATE_MICRO_BATCH` / `HYDROSTATE_ACCUMULATIVE_COUNTS`。
+`HYDROSTATE_SLURM_PARTITION` 指定实测分区，启动器核对实际分配一致。
+全部输入、权重和统计量在 SCR 时可用 `l40s`；使用 FossFS 时仍需对应可访问分区。
 运行前自动核验两类数据的划分、指纹和真实混合批次；所有数据只读。
 debug 使用 `tools/experiments/verify_joint_gpu.py` 做完整训练/验证/保存/重载短测，
 `tools/benchmarks/joint_training.py --batch-size N --output REPORT.json` 测量输入读取、
@@ -146,6 +148,8 @@ debug 使用 `tools/experiments/verify_joint_gpu.py` 做完整训练/验证/保�
 等待已记录 debug 作业成功后检查两模型的短测/显存/配方，按实测估计和 10% 余量提交 B/C。
 提交意图和回执用于去重；检查失败停止，最后一段才对最佳验证 checkpoint 做完整测试。
 模型源码版本与控制器版本分别记录，控制器升级不会修改已经冻结的训练源码。
+正式分区、GPU 类型、CPU、主存和队列时限从 `submission.json` 的 `resources` 读取，
+与 debug 的实际资源共同记录；切换 GPU 类型需在新设备上完成 batch/吞吐测量。
 
 `tools/watch_mtlora_collection.py` 是显式启动的调度器，等待完成标记后提交准备和成对训练，
 保留提交意图以防重复。采样入口不会自动启动它。
