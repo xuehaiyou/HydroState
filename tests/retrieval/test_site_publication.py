@@ -281,3 +281,23 @@ def test_copy_does_not_scan_checksums_or_run_post_copy_pass(tmp_path, monkeypatc
     assert command[:2] == ["rsync", "-rlt"]
     assert "--dry-run" not in command
     assert options["check"] is True
+
+
+def test_parallel_copy_uses_disjoint_bounded_batches(tmp_path, monkeypatch):
+    from threading import Barrier
+
+    barrier = Barrier(4)
+    batches = []
+
+    def copy(command, **kwargs):
+        listing = command[2].split("=", 1)[1]
+        batches.append(Path(listing).read_text().splitlines())
+        barrier.wait(timeout=5)
+        assert command[:2] == ["rsync", "-rlt"]
+        assert kwargs["check"] is True
+
+    monkeypatch.setattr(publication.subprocess, "run", copy)
+    names = [f"zarr/{i:05d}/" for i in range(101)]
+    publication.copy_files(tmp_path / "source", tmp_path / "target", names)
+    assert len(batches) == 4
+    assert sorted(item for batch in batches for item in batch) == names

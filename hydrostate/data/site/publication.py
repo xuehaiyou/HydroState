@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -172,9 +173,8 @@ def capacity(roots, names, output, reserve_gib):
     )
 
 
-def copy_files(source, target, names):
-    """Resume using rsync size/mtime checks; require a successful copy exit status."""
-    target.mkdir(parents=True, exist_ok=True)
+def _copy_batch(source, target, names):
+    """Copy one disjoint path list without a content scan or post-copy pass."""
     with tempfile.NamedTemporaryFile(mode="w") as listing:
         listing.write("\n".join(names) + "\n")
         listing.flush()
@@ -187,6 +187,23 @@ def copy_files(source, target, names):
         ]
         subprocess.run(command, check=True)
 
+
+def copy_files(source, target, names):
+    """Use up to four rsync streams to overlap small-file metadata and I/O latency."""
+    target.mkdir(parents=True, exist_ok=True)
+    if not names:
+        return
+    # Contiguous sorted batches preserve rsync traversal locality and never copy a path twice.
+    workers = min(4, len(names)) if len(names) >= 64 else 1
+    size = (len(names) + workers - 1) // workers
+    batches = [names[start : start + size] for start in range(0, len(names), size)]
+    if workers == 1:
+        _copy_batch(source, target, batches[0])
+        return
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_copy_batch, source, target, batch) for batch in batches]
+        for future in futures:
+            future.result()
 
 
 def verify_relocated(output, product, stats):
