@@ -69,10 +69,11 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2):
                    if torch.is_tensor(value)):
                 raise RuntimeError("Nonfinite joint training loss")
             torch.cuda.synchronize()
-            report["steps"].append(dict(seconds=time.monotonic() - began,
-                                        data_wait_seconds=loaded - began,
-                                        peak_allocated_gib=torch.cuda.max_memory_allocated() / 2**30,
-                                        peak_reserved_gib=torch.cuda.max_memory_reserved() / 2**30))
+            report["steps"].append(dict(
+                seconds=time.monotonic() - began,
+                data_wait_seconds=loaded - began,
+                peak_allocated_gib=torch.cuda.max_memory_allocated() / 2**30,
+                peak_reserved_gib=torch.cuda.max_memory_reserved() / 2**30))
             print(json.dumps(dict(batch=batch_size, step=step, **report["steps"][-1])), flush=True)
         train_times = [row["seconds"] for row in report["steps"][2:]]
         report["train_seconds_per_sample"] = sum(train_times) / len(train_times) / batch_size
