@@ -11,16 +11,19 @@ from pathlib import Path
 CODE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CODE))
 from hydrostate.data.gee.contracts import atomic_json, locked  # noqa: E402
-from hydrostate.data.site.et_bowen import run  # noqa: E402
+from hydrostate.data.site.et_bowen import run, seed_expansion  # noqa: E402
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--base", required=True)
 p.add_argument("--output", required=True)
 p.add_argument("--scr", required=True)
+p.add_argument("--resume-from", help="Seed an expanded release from an already published run")
 a = p.parse_args()
 root = Path(a.output)
 root.mkdir(parents=True, exist_ok=True)
 with locked(root / ".launcher.lock", blocking=False):
+    if a.resume_from:
+        seed_expansion(a.resume_from, root, a.scr)
     commit = subprocess.check_output(
         ["git", "-C", str(CODE), "rev-parse", "HEAD"], text=True
     ).strip()

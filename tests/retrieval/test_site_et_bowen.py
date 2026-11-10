@@ -18,6 +18,74 @@ from hydrostate.datasets.site_dataset import SiteDataset
 from hydrostate.storage import SampleShardWriter
 
 
+def test_expansion_reuses_shards_and_preserves_existing_release(tmp_path):
+    from hydrostate.data.site.et_bowen import seed_expansion
+
+    source, target, scr = [tmp_path / name for name in ("old", "expanded", "scr")]
+    (source / "plan").mkdir(parents=True)
+    (source / "records").mkdir()
+    scr.mkdir()
+    (source / "publication_result.json").write_text("{}")
+    (source / "collection.json").write_text('{"unchanged": true}')
+    (source / "plan/previous_et_training.json").write_text('["old-train"]')
+    pd.DataFrame({"candidate_id": ["a"]}).to_parquet(source / "plan/reusable.parquet")
+    record = dict(candidate_id="a", input_path="zarr/a/input", label_path="zarr/a/label")
+    (source / "records/a.json").write_text(json.dumps(record))
+    ledger = '{"candidate_id":"a","status":"success"}\n'
+    (source / "attempts.jsonl").write_text(ledger)
+    pd.DataFrame([dict(valid_et=1, split="train", physical_group_id="new-train")]).to_parquet(
+        scr / "inventory.parquet"
+    )
+    seed_expansion(source, target, scr)
+    copied = json.loads((target / "records/a.json").read_text())
+    assert copied["input_path"] == str(source / record["input_path"])
+    assert json.loads((source / "records/a.json").read_text()) == record
+    assert json.loads((target / "plan/previous_et_training.json").read_text()) == [
+        "new-train",
+        "old-train",
+    ]
+    (target / "attempts.jsonl").write_text(ledger + '{"candidate_id":"b","status":"rejected"}\n')
+    seed_expansion(source, target, scr)
+    assert '"candidate_id":"b"' in (target / "attempts.jsonl").read_text()
+
+
+@pytest.mark.parametrize("wet_count", [0, 1])
+def test_collect_keeps_all_dry_successes_even_when_wet_group_is_scarce(
+    tmp_path, monkeypatch, wet_count
+):
+    from hydrostate.data.site import et_bowen as module
+
+    (tmp_path / "plan").mkdir()
+    (tmp_path / "plan/footprints.json").write_text('{"rows": []}')
+    (tmp_path / "smoke.json").write_text('{"status": "passed"}')
+    rows = [
+        dict(
+            candidate_id=str(i),
+            frequency_bin=int(i >= 5),
+            landcover=10,
+            climate_class=1,
+            year=2020,
+            month=1,
+            physical_group_id=f"s{i}",
+            target_time=f"2020-01-{i + 1:02}",
+        )
+        for i in range(5 + wet_count)
+    ]
+    monkeypatch.setattr(module, "InputReuse", lambda *args: None)
+    monkeypatch.setattr(module, "observation", lambda *args: ({"member": {}}, None))
+    monkeypatch.setattr(
+        module,
+        "candidate_sample",
+        lambda ee, row, *args, **kwargs: dict(
+            row, status="success", label_version=module.ET_VERSION
+        ),
+    )
+    selected = module.collect(None, pd.DataFrame(rows), tmp_path, {"seed": 1}, {}, workers=2)
+    assert len(selected) == 5 + wet_count
+    assert selected.frequency_bin.eq(0).sum() == 5
+    assert selected.candidate_id.is_unique
+
+
 def test_landcover_precedes_climate_and_failure_does_not_fill_quota():
     rows = []
     for land, climates in [(10, [1, 2, 3]), (20, [4])]:
@@ -172,3 +240,41 @@ def test_spatial_90_counts_missing_in_full_area_denominator():
     assert not static_quality(
         labels.reshape(21, 21), probability.reshape(21, 21), observed.reshape(21, 21), "GRA", config
     )["accepted"]
+
+
+def test_strict_draw_hierarchy_and_frequency_independence():
+    from hydrostate.data.site.strict_sampling import balanced_draw
+
+    rows = []
+    for frequency, lands in [(0, {10: 12, 20: 8}), (1, {10: 1})]:
+        for land, count in lands.items():
+            for i in range(count):
+                rows.append(
+                    dict(
+                        candidate_id=f"{frequency}-{land}-{i}",
+                        frequency_bin=frequency,
+                        landcover=land,
+                        climate_class=1 + i % 2,
+                        year=2020,
+                        month=1 + (i // 2) % 2,
+                        physical_group_id=str(i % 3),
+                    )
+                )
+    chosen, audit = balanced_draw(rows, seed=7)
+    assert len(chosen) == len(set(chosen))
+    assert audit["by_frequency"] == {0: 17, 1: 1}
+    assert audit["max_sibling_difference"] <= 1
+    # Check the actual selected IDs at every level, including unselected siblings.
+    selected = pd.DataFrame(rows).set_index("candidate_id").loc[chosen].reset_index()
+    reference = pd.DataFrame(rows)
+    prefix = ["frequency_bin"]
+    for level in ["landcover", "climate_class", "year", "month"]:
+        for keys, original in reference.groupby(prefix):
+            keys = keys if isinstance(keys, tuple) else (keys,)
+            subset = selected
+            for key, value in zip(prefix, keys):
+                subset = subset[subset[key].eq(value)]
+            counts = subset[level].value_counts().reindex(original[level].unique(), fill_value=0)
+            assert counts.max() - counts.min() <= 1
+        prefix.append(level)
+    assert chosen == balanced_draw(list(reversed(rows)), seed=7)[0]

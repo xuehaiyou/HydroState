@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import shutil
 import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
@@ -25,6 +26,53 @@ from .production import candidate_sample, table_records
 
 ET_VERSION = "site_et_bowen_75_50_spatial90_v1"
 KEYS = ["physical_group_id", "target_time", "target_end"]
+
+
+def seed_expansion(source, root, scr):
+    """Reuse immutable success shards and the attempt ledger, without a bulk data copy."""
+    from .active import active_release
+
+    source, root, scr = map(Path, (source, root, scr))
+    marker = root / "expansion.json"
+    if marker.exists():
+        if json.loads(marker.read_text())["source"] != str(source):
+            raise ValueError("Expansion source changed")
+        return
+    if not (source / "publication_result.json").exists():
+        raise ValueError("Expansion requires a completed source release")
+    if (root / "attempts.jsonl").exists():
+        raise ValueError("Refuse to reseed an existing attempt ledger")
+    root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source / "plan", root / "plan", dirs_exist_ok=True)
+    shutil.copy2(source / "collection.json", root / "collection.json")
+    (root / "records").mkdir(exist_ok=True)
+    events = [json.loads(line) for line in (source / "attempts.jsonl").read_text().splitlines()]
+    for event in events:
+        if event["status"] != "success":
+            continue
+        name = event["candidate_id"] + ".json"
+        record = json.loads((source / "records" / name).read_text())
+        for key in ("input_path", "label_path"):
+            record[key] = str((source / record[key]).resolve())
+        atomic_json(root / "records" / name, record)
+    # Refresh the old supplement's input snapshot after it has finished.
+    reused = pd.read_parquet(root / "plan/reusable.parquet")
+    supplement = source.parent / "site_et_additive_20261110"
+    if (supplement / "samples.parquet").exists():
+        extra = pd.read_parquet(supplement / "samples.parquet")
+        extra["reuse_root"] = str(supplement)
+        reused = pd.concat([reused, extra], ignore_index=True).drop_duplicates(
+            "candidate_id", keep="last"
+        )
+        reused.to_parquet(root / "plan/reusable.parquet", index=False)
+    current = active_release(scr)
+    table = pd.read_parquet(current / "inventory.parquet")
+    previous = set(json.loads((root / "plan/previous_et_training.json").read_text()))
+    previous.update(table.loc[table.valid_et.gt(0) & table.split.eq("train"), "physical_group_id"])
+    atomic_json(root / "plan/previous_et_training.json", sorted(previous))
+    atomic_json(root / "plan/previous_active_release.json", str(current))
+    shutil.copy2(source / "attempts.jsonl", root / "attempts.jsonl")
+    atomic_json(marker, dict(source=str(source), policy="frequency_priority_without_downsampling"))
 
 
 class PriorityPicker:
@@ -300,9 +348,13 @@ def collect(ee, table, root, config, norm, workers=4):
         )
         return enrich_record(result, root)
 
-    def save(stage, quotas):
-        if completed:
+    last_manifest_count = -64
+
+    def save(stage, quotas, *, force=False):
+        nonlocal last_manifest_count
+        if completed and (force or len(completed) - last_manifest_count >= 64):
             pd.DataFrame(completed).to_parquet(root / "samples.parquet", index=False)
+            last_manifest_count = len(completed)
             if not (root / "smoke.json").exists():
                 from hydrostate.datasets.site_dataset import SiteDataset
 
@@ -329,35 +381,33 @@ def collect(ee, table, root, config, norm, workers=4):
             ),
         )
 
-    nonzero = {int(b): int(n) for b, n in table.frequency_bin.value_counts().items() if b > 0}
+    from .strict_sampling import POLICY, balanced_draw
+
+    capacities = {int(b): int(n) for b, n in table.frequency_bin.value_counts().items()}
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for stage in ["nonzero", "zero"]:
-            # Do not let a group with only a few windows cap all other groups.
-            quotas = (
-                nonzero
-                if stage == "nonzero"
-                else {0: max((picker.counts[b] for b in nonzero), default=0)}
+        round_number = 0
+        while True:
+            succeeded = {r["candidate_id"] for r in completed}
+            failures = recorded - succeeded
+            desired, balance = balanced_draw(
+                [r for r in rows if r["candidate_id"] not in failures], seed=config["seed"]
             )
-            if stage == "zero" and quotas[0] == 0:
-                raise ValueError(
-                    "No usable nonzero-frequency ET; cannot silently publish a zero-only draw"
-                )
-            save(stage, quotas)
-            while True:
-                batch = []
-                for _ in range(workers):
-                    row = picker.next(quotas)
-                    if row is None:
-                        break
-                    # Reserve without counting a success; deterministic completion order below.
-                    picker.record(row, False)
-                    batch.append(row)
-                if not batch:
-                    break
+            pending = [cid for cid in desired if cid not in recorded]
+            atomic_json(
+                root / "draw.json",
+                dict(
+                    round=round_number, pending=len(pending), candidate_ids=desired, balance=balance
+                ),
+            )
+            save("strict_balanced_sampling", balance["by_frequency"])
+            if not pending:
+                break
+            for begin in range(0, len(pending), workers):
+                batch = [lookup[cid] for cid in pending[begin : begin + workers]]
                 for row, result in zip(batch, pool.map(work, batch), strict=True):
                     success = result["status"] == "success"
+                    picker.record(row, success)
                     if success:
-                        picker.record(row, True)
                         completed.append(result)
                     recorded.add(row["candidate_id"])
                     with ledger.open("a") as f:
@@ -367,26 +417,32 @@ def collect(ee, table, root, config, norm, workers=4):
                             )
                             + "\n"
                         )
-                save(stage, quotas)
+                save("strict_balanced_sampling", balance["by_frequency"])
                 print(
-                    json.dumps(dict(stage=stage, attempted=len(recorded), success=len(completed))),
+                    json.dumps(
+                        dict(round=round_number, attempted=len(recorded), success=len(completed))
+                    ),
                     flush=True,
                 )
-    # A final parallel batch can exceed a quota by at most workers-1; retain cached surplus only.
-    result = pd.DataFrame(completed)
-    zero_limit = max(picker.counts[b] for b in nonzero)
-    selected = result[
-        ~result.frequency_bin.eq(0) | (result.frequency_bin.eq(0).cumsum() <= zero_limit)
-    ]
+            round_number += 1
+    save("collected", capacities, force=True)
+    if not desired:
+        raise ValueError("No quality-qualified balanced ET draw")
+    selected = pd.DataFrame(completed).set_index("candidate_id").loc[desired].reset_index()
+    atomic_json(
+        root / "balance_audit.json",
+        dict(balance, status="passed", all_selected_quality_passed=True, failures=len(failures)),
+    )
     selected.to_parquet(root / "selected.parquet", index=False)
     atomic_json(
         root / "collection_report.json",
         dict(
             complete=True,
             successful=len(selected),
-            cached_surplus=len(result) - len(selected),
+            cached_surplus=len(completed) - len(selected),
             by_bin=selected.frequency_bin.value_counts().to_dict(),
-            zero_target=zero_limit,
+            sampling_policy=POLICY,
+            candidate_capacity=capacities,
             attempted=len(recorded),
             minimum_date_gap_days=0,
         ),

@@ -162,8 +162,9 @@ def combine_statistics(parts):
 def stage_release(base, root, scr, et_root, locked):
     """SM source data and split assignments stay intact; only ET is replaced."""
     old = active_release(scr)
-    if old != scr:
-        # Resume after activation is handled by finalize_and_publish before staging.
+    previous = root / "plan/previous_active_release.json"
+    expected = Path(json.loads(previous.read_text())) if previous.exists() else scr
+    if old.resolve() != expected.resolve():
         raise ValueError("An unexpected newer release is already active")
     dest = scr / "releases" / root.name
     dest.mkdir(parents=True, exist_ok=True)
@@ -282,6 +283,7 @@ def stage_release(base, root, scr, et_root, locked):
         sm_unchanged=True,
         et_samples=len(et),
         single_et_zarr=str(et_root / "et.zarr"),
+        previous_release=str(old),
         training_path=checks,
     )
     atomic_json(dest / "_PUBLISHED.json", marker)
@@ -314,6 +316,8 @@ def finalize_and_publish(base, root, scr):
     # No all-file checksum or capacity pass. Real reader checks are part of staging below.
     dest, result = stage_release(base, root, scr, et_root, locked)
     with locked_publication(scr):
+        if active_release(scr).resolve() != Path(result["previous_release"]).resolve():
+            raise ValueError("Active station release changed while staging")
         atomic_json(
             scr / "ACTIVE.json",
             dict(
