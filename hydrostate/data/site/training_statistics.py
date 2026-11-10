@@ -6,10 +6,14 @@ from pathlib import Path
 
 from hydrostate.data.gee.contracts import fingerprint
 
+from .active import active_release
 from .contract import OBSERVATIONS
 
 
 def load_site_statistics(source):
+    if isinstance(source, (str, Path)):
+        path = Path(source)
+        source = active_release(path.parent) / path.name
     report = json.loads(Path(source).read_text()) if isinstance(source, (str, Path)) else source
     if report.get("split") != "train" or report.get("ddof") != 0:
         raise ValueError("Station statistics must be training-only population moments")

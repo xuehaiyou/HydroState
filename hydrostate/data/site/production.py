@@ -123,7 +123,7 @@ def prepare_operators(observations, support, spatial, config):
     return accepted, rejected
 
 
-def candidate_sample(ee, row, members, root, config, norm):
+def candidate_sample(ee, row, members, root, config, norm, *, observations=None, reuse_inputs=None):
     root = Path(root)
     cid = row["candidate_id"]
     for folder in ("records", "rejected"):
@@ -132,9 +132,12 @@ def candidate_sample(ee, row, members, root, config, norm):
             return json.loads(path.read_text())
     began = monotonic()
     sample = dict(row, **site_grid(row["lon"], row["lat"]))
-    if shutil.disk_usage(root).free < config["min_free_gib"] * 1024**3:
+    if (
+        config["min_free_gib"] > 0
+        and shutil.disk_usage(root).free < config["min_free_gib"] * 1024**3
+    ):
         raise OSError("Insufficient free space for station production")
-    observations = load_observations(members)
+    observations = load_observations(members) if observations is None else observations
     spatial = {}
     for item in observations:
         m = item["member"]
@@ -178,7 +181,10 @@ def candidate_sample(ee, row, members, root, config, norm):
     config_hash = fingerprint(
         {k: v for k, v in config.items() if k not in ("version", "input_profile")}
     )
-    if checkpoint.exists():
+    reusable = reuse_inputs(row) if reuse_inputs is not None else None
+    if reusable is not None:
+        inputs, scenes, eligible = reusable
+    elif checkpoint.exists():
         with np.load(checkpoint, allow_pickle=False) as saved:
             if str(saved["config_hash"]) != config_hash:
                 raise ValueError("Input checkpoint configuration mismatch")

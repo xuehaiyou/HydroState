@@ -1,5 +1,6 @@
 import copy
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -129,8 +130,9 @@ def test_mixed_loader_mask_dtypes_do_not_depend_on_first_source(joint, workers):
     from torch.utils.data import DataLoader
 
     dataset, _, _ = joint
-    loader = DataLoader(dataset, batch_size=2, sampler=[2, 0, 0, 2], num_workers=workers,
-                        collate_fn=hydro_collate)
+    loader = DataLoader(
+        dataset, batch_size=2, sampler=[2, 0, 0, 2], num_workers=workers, collate_fn=hydro_collate
+    )
     for batch in loader:
         masks = batch["data_samples"]
         for name, values in masks.items():
@@ -169,8 +171,9 @@ def test_mixed_real_zarr_forward_backward_and_separate_metrics(joint):
         assert all(p.grad is None or torch.isfinite(p.grad).all() for p in model.parameters())
         predictions = model.predict(**data)
         assert [int(p["metainfo"]["year"]) for p in predictions] == [2018, 2022]
-        metric = JointHydroStateMetric(statistics(), stats, cfg.tasks,
-                                      comparison_years=(2017, 2024))
+        metric = JointHydroStateMetric(
+            statistics(), stats, cfg.tasks, comparison_years=(2017, 2024)
+        )
         metric.process({}, predictions)
         result = metric.compute_metrics(metric.results)
         assert result["site/site_sm_count"] == 1
@@ -209,9 +212,18 @@ def test_joint_config_binds_statistics_and_checkpoint_score(joint):
     independent = Config.fromfile("configs/hydrostate_joint_independent.py")
     conditional = Config.fromfile("configs/hydrostate_joint.py")
     independent.model.router.enabled = True
-    for key in ("model", "train_dataloader", "val_dataloader", "test_dataloader",
-                "optim_wrapper", "param_scheduler", "train_cfg", "val_evaluator",
-                "test_evaluator", "randomness"):
+    for key in (
+        "model",
+        "train_dataloader",
+        "val_dataloader",
+        "test_dataloader",
+        "optim_wrapper",
+        "param_scheduler",
+        "train_cfg",
+        "val_evaluator",
+        "test_evaluator",
+        "randomness",
+    ):
         assert independent[key] == conditional[key]
 
 
@@ -275,12 +287,19 @@ def test_rare_frequency_and_extra_dates_do_not_amplify_spatial_group_mass():
 
     dataset = object.__new__(JointRetrievalDataset)
     dataset.site_fraction = 0.5
-    dataset.product = type("Products", (), {
-        "table": pd.DataFrame(dict(sampling_group=[0, 1])), "__len__": lambda self: 2,
-    })()
-    rows = [dict(frequency_bin=frequency, spatial_group_id=group, valid_sm=1, valid_et=1)
-            for group, frequency, dates in (("a", 0, 1), ("b", 0, 5), ("rare", 1, 8))
-            for _ in range(dates)]
+    dataset.product = type(
+        "Products",
+        (),
+        {
+            "table": pd.DataFrame(dict(sampling_group=[0, 1])),
+            "__len__": lambda self: 2,
+        },
+    )()
+    rows = [
+        dict(frequency_bin=frequency, spatial_group_id=group, valid_sm=1, valid_et=1)
+        for group, frequency, dates in (("a", 0, 1), ("b", 0, 5), ("rare", 1, 8))
+        for _ in range(dates)
+    ]
     dataset.sites = [SimpleNamespace(table=pd.DataFrame(rows))]
     dataset.offsets = [0, 2, 16]
     weights = dataset.sampling_weights()
@@ -293,28 +312,41 @@ def test_rare_frequency_and_extra_dates_do_not_amplify_spatial_group_mass():
 def test_station_priority_score_and_equal_group_report(joint):
     _, stats, _ = joint
     tasks = Config.fromfile("configs/hydrostate_joint.py").tasks
-    metric = JointHydroStateMetric(statistics(), stats, tasks,
-                                  comparison_years=(2017, 2024))
+    metric = JointHydroStateMetric(statistics(), stats, tasks, comparison_years=(2017, 2024))
 
     def row(source, task, error, group, year):
-        return dict(source=source, spatial_group_id=group, frequency_bin="0", year=year,
-                    **{f"{task}/count": 1, f"{task}/sum_abs": abs(error),
-                       f"{task}/sum_sq": error**2, f"{task}/sum_err": error,
-                       f"{task}/sum_y": 1, f"{task}/sum_y2": 1,
-                       f"{task}/sum_x": 1 + error, f"{task}/sum_x2": (1 + error)**2,
-                       f"{task}/sum_xy": 1 + error})
+        return dict(
+            source=source,
+            spatial_group_id=group,
+            frequency_bin="0",
+            year=year,
+            **{
+                f"{task}/count": 1,
+                f"{task}/sum_abs": abs(error),
+                f"{task}/sum_sq": error**2,
+                f"{task}/sum_err": error,
+                f"{task}/sum_y": 1,
+                f"{task}/sum_y2": 1,
+                f"{task}/sum_x": 1 + error,
+                f"{task}/sum_x2": (1 + error) ** 2,
+                f"{task}/sum_xy": 1 + error,
+            },
+        )
 
-    rows = [row("product", "soil_moisture", 1, "", 2020),
-            row("site", "site_sm", 1, "long", 2020),
-            row("site", "site_sm", 1, "long", 2020),
-            row("site", "site_sm", 3, "short", 2015)]
+    rows = [
+        row("product", "soil_moisture", 1, "", 2020),
+        row("site", "site_sm", 1, "long", 2020),
+        row("site", "site_sm", 1, "long", 2020),
+        row("site", "site_sm", 3, "short", 2015),
+    ]
     values = metric.compute_metrics(rows)
-    assert values["site/site_sm_rmse"] == pytest.approx((11 / 3)**0.5)
+    assert values["site/site_sm_rmse"] == pytest.approx((11 / 3) ** 0.5)
     assert values["site/group_macro/site_sm_rmse"] == 2
     assert values["site/group_macro/site_sm_groups"] == 2
     assert values["site/years_2017_2024/site_sm_rmse"] == 1
     assert values["joint_score"] == pytest.approx(
-        values["product/hydro_score"] / 3 + 2 * values["site/hydro_score"] / 3)
+        values["product/hydro_score"] / 3 + 2 * values["site/hydro_score"] / 3
+    )
 
 
 def test_gpu_smoke_selection_pairs_both_sources(joint):
@@ -327,3 +359,66 @@ def test_gpu_smoke_selection_pairs_both_sources(joint):
     assert {dataset.product.table.iloc[i].sampling_group for i in indices[::2]} == set(
         dataset.product.table.sampling_group
     )
+
+
+def test_v4_replaces_old_et_and_allows_cross_task_colocation(joint):
+    import shutil
+
+    dataset, _, report = joint
+    old_root = dataset.site_root
+    definitions = json.loads((old_root / "datasets.json").read_text())["datasets"]
+    sm_root = Path(definitions[0]["data_root"])
+    et_root = sm_root.with_name("new_et")
+    shutil.copytree(sm_root, et_root)
+    sm = pd.read_parquet(sm_root / "samples.parquet")
+    et = sm.copy()
+    sm["valid_et"] = 0
+    et["valid_sm"] = 0
+    for row in sm.itertuples():
+        zarr.open_group(str(sm_root / row.label_path), mode="a")["site_et_native_valid"][:] = 0
+        zarr.open_group(str(et_root / row.label_path), mode="a")["site_sm_native_valid"][:] = 0
+    et["sample_id"] = "et-" + et.sample_id
+    et["cohort"] = 1
+    # A shared location may be training for SM and validation for ET.
+    train = et.index[et.split.eq("train")][0]
+    et.loc[train, "split"] = "validation"
+    sm.to_parquet(sm_root / "samples.parquet", index=False)
+    et.to_parquet(et_root / "samples.parquet", index=False)
+    new = old_root / "releases/new"
+    new.mkdir(parents=True)
+    sm.to_parquet(new / "sm.parquet", index=False)
+    et.to_parquet(new / "et.parquet", index=False)
+    pd.concat([sm, et], ignore_index=True).to_parquet(new / "inventory.parquet", index=False)
+    report = dict(
+        report,
+        version="site_task_specific_et_replacement_v4",
+        source_manifests={
+            str(sm_root): sha256(sm_root / "samples.parquet"),
+            str(et_root): sha256(et_root / "samples.parquet"),
+        },
+    )
+    (new / "split_report.json").write_text(json.dumps(report))
+    (new / "datasets.json").write_text(
+        json.dumps(
+            dict(
+                datasets=[
+                    dict(
+                        type="SiteDataset", manifest="sm.parquet", data_root=str(sm_root), task="sm"
+                    ),
+                    dict(
+                        type="SiteDataset", manifest="et.parquet", data_root=str(et_root), task="et"
+                    ),
+                ]
+            )
+        )
+    )
+    (new / "_PUBLISHED.json").write_text("{}")
+    (old_root / "ACTIVE.json").write_text(
+        json.dumps(dict(version="site_active_release_v1", release="releases/new"))
+    )
+    current = JointRetrievalDataset(dataset.manifest, old_root, "train")
+    assert current.site_root == new
+    assert len(current.sites) == 2
+    assert current.sites[0].table.valid_et.sum() == 0
+    assert current.sites[1].table.valid_sm.sum() == 0
+    hydro_collate([current[0], current[current.offsets[1]], current[current.offsets[2]]])

@@ -31,6 +31,7 @@ class SiteDataset(RetrievalDataset):
         input_profile=PROFILE,
         output_scale=OUTPUT_SCALE,
         flip_probability=0.5,
+        allow_empty_split=False,
     ):
         if (
             input_profile != PROFILE
@@ -56,7 +57,7 @@ class SiteDataset(RetrievalDataset):
             tasks=task_config(TASKS),
         )
         self.table = table.loc[table.split == split].reset_index(drop=True)
-        if self.table.empty:
+        if self.table.empty and not allow_empty_split:
             raise ValueError(f"Empty station {split} split")
         self.input_profile, self.tasks = PROFILE, task_config(TASKS)
         self.training, self.flip_probability = training, flip_probability
@@ -72,12 +73,16 @@ class SiteDataset(RetrievalDataset):
         observed = self._arrays(row, "label", schema.targets)
         for name, maximum in (("site_sm", 1), ("site_et", np.inf)):
             valid = observed[f"{name}_native_valid"].astype(bool)
-            value, weights = (observed[f"{name}_native_{suffix}"]
-                              for suffix in ("value", "weights"))
-            if (not np.isfinite(weights).all() or (weights < 0).any()
-                    or np.any(np.abs(weights.sum((-2, -1))[valid]-1) > 1e-5)
-                    or not np.isfinite(value[valid]).all()
-                    or np.any((value[valid] < 0) | (value[valid] > maximum))):
+            value, weights = (
+                observed[f"{name}_native_{suffix}"] for suffix in ("value", "weights")
+            )
+            if (
+                not np.isfinite(weights).all()
+                or (weights < 0).any()
+                or np.any(np.abs(weights.sum((-2, -1))[valid] - 1) > 1e-5)
+                or not np.isfinite(value[valid]).all()
+                or np.any((value[valid] < 0) | (value[valid] > maximum))
+            ):
                 raise ValueError(f"Invalid station label/operator: {name}")
         targets.update(observed)
         times = {name: torch.from_numpy(metadata["target_bounds"].copy()) for name in self.tasks}

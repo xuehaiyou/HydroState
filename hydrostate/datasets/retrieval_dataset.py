@@ -37,10 +37,15 @@ def read_shard_arrays(root, cache, row, kind, specs, version, config_hash):
     if not (path / "_SUCCESS.json").exists():
         raise ValueError(f"Incomplete shard: {path}")
     group = cache.get(str(path))
-    if (group.attrs.get("schema_version") != version
-            or group.attrs.get("config_sha256") != config_hash):
+    if (
+        group.attrs.get("schema_version") != version
+        or group.attrs.get("config_sha256") != config_hash
+    ):
         raise ValueError(f"Shard contract mismatch: {path}")
-    if kind == "input" and group.attrs.get("input_grids") != grid_metadata(
+    input_grids = group.attrs.get("input_grids")
+    if kind == "input" and group.attrs.get("grid_metadata_storage") == "per_sample_json":
+        input_grids = json.loads(str(group["input_grid_metadata"][int(row.shard_index)]))
+    if kind == "input" and input_grids != grid_metadata(
         dict(crs=row["crs"], transform=json.loads(row["transform"]))
     ):
         raise ValueError(f"Native input grids disagree with tile bounds: {path}")
@@ -117,9 +122,7 @@ class RetrievalDataset(Dataset):
         return len(self.table)
 
     def _arrays(self, row, kind, specs):
-        return read_shard_arrays(
-            self.root, self.cache, row, kind, specs, VERSION, self.config_hash
-        )
+        return read_shard_arrays(self.root, self.cache, row, kind, specs, VERSION, self.config_hash)
 
     def _load_targets(self, row, metadata):
         targets = self._arrays(row, "label", self.schema.targets)

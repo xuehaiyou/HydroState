@@ -1,13 +1,13 @@
 """Joint product/site loading with immutable source contracts and group-balanced sampling."""
 
 import json
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
+from hydrostate.data.site.active import active_release
 from hydrostate.data.site.archives import sha256
 from hydrostate.data.site.contract import SiteSchema
 from hydrostate.data.site.training_statistics import load_site_statistics
@@ -36,9 +36,10 @@ class JointRetrievalDataset(Dataset):
             raise ValueError("Joint station training currently supports the built-in tasks only")
         self.site_fraction = site_fraction
         self.manifest, self.split = str(manifest), split
-        self.site_root = Path(site_split_root)
+        self.site_root = active_release(site_split_root)
         report = json.loads((self.site_root / "split_report.json").read_text())
-        if report["version"] != "site_frequency_task_spatial_split_v3":
+        task_specific = report["version"] == "site_task_specific_et_replacement_v4"
+        if report["version"] != "site_frequency_task_spatial_split_v3" and not task_specific:
             raise ValueError("Joint training requires task-covering v3 station split")
         selection_path = self.site_root / report["joint_product_selection"]
         if sha256(selection_path) != report["joint_product_selection_sha256"]:
@@ -79,10 +80,18 @@ class JointRetrievalDataset(Dataset):
             selected_sites = pd.read_parquet(self.site_root / item["manifest"]).set_index(
                 "sample_id"
             )
+            expected_ids = original_sites.index
+            if task_specific:
+                task = item["task"]
+                other = "et" if task == "sm" else "sm"
+                expected_ids = original_sites.index[
+                    original_sites[f"valid_{task}"].gt(0) & original_sites[f"valid_{other}"].eq(0)
+                ]
             if selected_sites.index.has_duplicates or set(selected_sites.index) != set(
-                original_sites.index
+                expected_ids
             ):
                 raise ValueError("Station selection must preserve every source sample exactly once")
+            original_sites = original_sites.loc[expected_ids]
             columns = [name for name in original_sites.columns if name != "split"]
             if not selected_sites.loc[original_sites.index, columns].equals(
                 original_sites[columns]
@@ -95,7 +104,11 @@ class JointRetrievalDataset(Dataset):
                 raise ValueError("Station original split provenance changed")
             self.sites.append(
                 SiteDataset(
-                    self.site_root / item["manifest"], split, data_root=source, training=training
+                    self.site_root / item["manifest"],
+                    split,
+                    data_root=source,
+                    training=training,
+                    allow_empty_split=task_specific,
                 )
             )
         inventory = pd.read_parquet(self.site_root / "inventory.parquet")
@@ -106,7 +119,11 @@ class JointRetrievalDataset(Dataset):
         locked = set(
             station_index.loc[
                 station_index.product_overlap_count.fillna(0).gt(0)
-                | station_index.split_reason.eq("previous_development_group"),
+                | (
+                    station_index.split_reason.eq("previous_development_group")
+                    if not task_specific
+                    else False
+                ),
                 "spatial_group_id",
             ]
         )
@@ -116,7 +133,14 @@ class JointRetrievalDataset(Dataset):
             expected = inventory[inventory.cohort.eq(i) & inventory.split.eq(split)]
             if not site.table.reset_index(drop=True).equals(expected.reset_index(drop=True)):
                 raise ValueError("Station selection disagrees with split inventory")
-        if inventory.groupby("spatial_group_id").split.nunique().gt(1).any():
+        if task_specific:
+            for task in ("sm", "et"):
+                subset = inventory[inventory[f"valid_{task}"].gt(0)]
+                if subset.groupby("spatial_group_id").split.nunique().gt(1).any():
+                    raise ValueError("Station spatial group crosses splits within a task")
+                if subset.groupby("physical_group_id").split.nunique().gt(1).any():
+                    raise ValueError("Station physical group crosses splits within a task")
+        elif inventory.groupby("spatial_group_id").split.nunique().gt(1).any():
             raise ValueError("Station spatial group crosses splits")
         for item in report["task_coverage"]:
             group = inventory[
@@ -146,8 +170,14 @@ class JointRetrievalDataset(Dataset):
         if component == 0:
             # Use the same in-memory mask dtype as observed station labels. Worker
             # collation preallocates from the first sample and cannot mix bool/u8.
-            targets.update(as_tensors({key: np.zeros(spec.tail_shape, dtype=spec.dtype)
-                                       for key, spec in SiteSchema().targets.items()}))
+            targets.update(
+                as_tensors(
+                    {
+                        key: np.zeros(spec.tail_shape, dtype=spec.dtype)
+                        for key, spec in SiteSchema().targets.items()
+                    }
+                )
+            )
         info = targets["metainfo"]
         info["supervision_source"] = "product" if component == 0 else "site"
         info["spatial_group_id"] = (

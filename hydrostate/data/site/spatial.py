@@ -98,7 +98,16 @@ def check_static(ee, sample, source_cover, cache, config):
         )
         return dict(identity=identity, **{k: raw[k].tolist() for k in raw.dtype.names})
 
-    result = cached_json(Path(cache) / "static" / f"{fingerprint(identity)}.json", fetch)
+    name = f"{fingerprint(identity)}.json"
+    path = Path(cache) / "static" / name
+    # Read through immutable prior caches; changed thresholds are evaluated below.
+    if not path.exists():
+        for prior in config.get("reuse_cache_roots", []):
+            candidate = Path(prior) / "static" / name
+            if candidate.exists():
+                path = candidate
+                break
+    result = cached_json(path, fetch)
     quality = static_quality(
         result["label"], result["confidence"], result["observed"], source_cover, config
     )

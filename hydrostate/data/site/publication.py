@@ -15,6 +15,7 @@ from hydrostate.data.gee.contracts import atomic_json, fingerprint, locked
 from hydrostate.datasets.collate import hydro_collate
 from hydrostate.datasets.joint_dataset import JointRetrievalDataset
 
+from .active import active_release
 from .archives import sha256
 from .release import audit_production
 from .training_statistics import load_site_statistics
@@ -28,7 +29,7 @@ def read(path):
 
 def require_publication_ready(root):
     """Source working collections remain usable; incomplete publication bundles do not."""
-    root = Path(root)
+    root = active_release(root)
     if not (root / "publication.json").exists():
         return
     marker = root / "_PUBLISHED.json"

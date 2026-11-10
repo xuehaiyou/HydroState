@@ -12,6 +12,7 @@ from hydrostate.data.gee.contracts import atomic_json
 from hydrostate.datasets.collate import hydro_collate
 from hydrostate.registry import DATASETS
 
+from .active import active_release
 from .archives import sha256
 
 
@@ -30,13 +31,15 @@ def verify_joint_training(config, output, *, check_batch=False):
         if split == "train":
             weights = dataset.sampling_weights()
             sites = pd.concat([part.table for part in dataset.sites], ignore_index=True)
-            sites["sampling_mass"] = weights[len(dataset.product):].numpy()
+            sites["sampling_mass"] = weights[len(dataset.product) :].numpy()
             groups = sites.groupby("spatial_group_id").sampling_mass.sum()
             result["sampling_mass"] = dict(
                 product=float(weights[: len(dataset.product)].sum()),
                 site=float(sites.sampling_mass.sum()),
-                site_by_frequency={str(k): float(v) for k, v in
-                                   sites.groupby("frequency_bin").sampling_mass.sum().items()},
+                site_by_frequency={
+                    str(k): float(v)
+                    for k, v in sites.groupby("frequency_bin").sampling_mass.sum().items()
+                },
                 largest_site_group_mass=float(groups.max()),
                 site_policy="task_then_spatial_group_then_date",
                 interpretation="Expected sampling mass; repeated draws are not independent data",
@@ -58,7 +61,7 @@ def verify_joint_training(config, output, *, check_batch=False):
                 task: int(batch["data_samples"][f"site_{task}_native_valid"].sum())
                 for task in ("sm", "et")
             }
-    root = Path(cfg.site_split_root)
+    root = active_release(cfg.site_split_root)
     result["site_artifacts"] = {
         name: sha256(root / name)
         for name in ("split_report.json", "site_target_stats.json", "inventory.parquet")
@@ -67,8 +70,11 @@ def verify_joint_training(config, output, *, check_batch=False):
         product=cfg.model.target_statistics["training_fingerprint"],
         site=cfg.model.site_supervision.statistics,
     )
-    result["model"] = dict(type=cfg.model.type, router_enabled=cfg.model.get("router", {}).get(
-        "enabled"), site_loss_weights=dict(cfg.model.site_supervision.loss_weights))
+    result["model"] = dict(
+        type=cfg.model.type,
+        router_enabled=cfg.model.get("router", {}).get("enabled"),
+        site_loss_weights=dict(cfg.model.site_supervision.loss_weights),
+    )
     result["site_score_weight"] = cfg.val_evaluator.site_score_weight
     if check_batch:
         result["scope"] += "_and_actual_mixed_Zarr_batches_no_model_step"
