@@ -67,3 +67,15 @@ batch 32 跑通但张量峰值 39.510 GiB 加外部 0.529 GiB 超过 39.953 GiB 
 修复后重试用新目录 `cosa_joint_l40s_20261110_r4`，根据已有显存结果从 batch 28 开始，
 重新检查含新增代表样本的批次及 B/C 完整流程；旧目录和失败证据保留。
 新增修复相关的联合数据、模型预测、CoSA、验收检查共 47 项本地测试通过；Ruff 和差异检查通过。
+
+## 当前补测提交
+
+- 源码：`5f97f092fcc3e77e368ecf353dd53e2db43f7c39`，GitHub/HPC 已同步，运行使用独立冻结 release。
+- 运行目录：`/scr/u/xiaoz/HydroState/experiments/cosa_joint_l40s_20261110_r4`。
+- debug 作业 **4416952**，12:00:06 HKT 提交；资源仍为单 L40S、4 CPU、48 GiB 主存、25 分钟。
+- 本次探测候选 28/32/36/40；每档四步，B/C 各八步 benchmark 及四步完整 smoke。
+- 控制器 PID **740321**，仅全部验收成功后自动提交各 50 epochs 正式 B/C。
+- 12:02 HKT 查询为 **PENDING / Resources**；Slurm 暂估 12:28:10 启动，可能变化。
+
+尚不能称为 B/C 完整 GPU 验收通过，正式训练仍未提交。队列启动后验收自动继续，
+以本目录的 `debug_passed.json`、`smoke_b/c/result.json`、控制器记录和 Slurm 状态为准。
