@@ -380,7 +380,8 @@ class HydroStateModel(BaseModel):
                 )
                 item["soil_moisture_supervision_source"] = coupling.supervision_source
             item["metainfo"] = {
-                key: value[index] if isinstance(value, (list, tuple)) else value
+                key: value[index] if (isinstance(value, (list, tuple))
+                                      or (torch.is_tensor(value) and value.ndim > 0)) else value
                 for key, value in metainfo.items()
             }
             if data_samples is not None:

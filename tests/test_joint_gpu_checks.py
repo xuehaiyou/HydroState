@@ -1,10 +1,26 @@
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 import torch
 
-from hydrostate.data.site.training_smoke import verify_checkpoint_parameters
+from hydrostate.data.site.training_smoke import representative_indices, verify_checkpoint_parameters
 from hydrostate.experiments.gpu_memory import CudaMemoryMeter, has_memory_headroom
+
+
+def test_representatives_include_each_actual_native_and_scalar_mask_maximum():
+    product = SimpleNamespace(
+        tasks={"et_ice": dict(support="native", grid="native"),
+               "et_land": dict(support="native", grid="native"),
+               "soil_moisture": dict(support="tile_mean_weak", grid="scalar")},
+        table=pd.DataFrame(dict(sampling_group=["0"] * 4,
+                               valid_label_counts=[{}, {"et_land_native_valid": 9},
+                                                   {"et_ice_native_valid": 5},
+                                                   {"soil_moisture_valid": 1}])))
+    sites = [SimpleNamespace(table=pd.DataFrame(dict(valid_sm=[1], et_support=["static_210m"])))]
+    dataset = SimpleNamespace(product=product, sites=sites, offsets=[0, 4])
+    chosen = representative_indices(dataset)
+    assert set(chosen) == {0, 1, 2, 3, 4}
 
 
 def test_memory_retains_peaks_across_logger_reset_and_excludes_cache(monkeypatch):

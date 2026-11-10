@@ -155,7 +155,10 @@ def test_mixed_real_zarr_forward_backward_and_separate_metrics(joint):
         cfg.model.target_statistics = statistics()
         cfg.model.site_supervision = dict(statistics=stats)
         model = MODELS.build(cfg.model)
-        data = model.data_preprocessor(hydro_collate([dataset[0], dataset[2]]), training=True)
+        samples = [dataset[0], dataset[2]]
+        for sample, year in zip(samples, (2018, 2022)):
+            sample["data_samples"]["metainfo"]["year"] = year
+        data = model.data_preprocessor(hydro_collate(samples), training=True)
         losses = model.loss(**data)
         assert losses["valid_count_site_sm"] == 1
         assert losses["valid_count_soil_moisture"] == 1
@@ -165,13 +168,17 @@ def test_mixed_real_zarr_forward_backward_and_separate_metrics(joint):
         assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters())
         assert all(p.grad is None or torch.isfinite(p.grad).all() for p in model.parameters())
         predictions = model.predict(**data)
-        metric = JointHydroStateMetric(statistics(), stats, cfg.tasks)
+        assert [int(p["metainfo"]["year"]) for p in predictions] == [2018, 2022]
+        metric = JointHydroStateMetric(statistics(), stats, cfg.tasks,
+                                      comparison_years=(2017, 2024))
         metric.process({}, predictions)
         result = metric.compute_metrics(metric.results)
         assert result["site/site_sm_count"] == 1
         assert result["product/soil_moisture_count"] == 1
         assert result["site/frequency_0/site_sm_spatial_groups"] == 1
         assert np.isfinite(result["joint_score"])
+        assert result["product/years_2017_2024/soil_moisture_count"] == 1
+        assert result["site/years_2017_2024/site_sm_count"] == 1
     finally:
         torch.set_num_threads(previous_threads)
 

@@ -33,8 +33,37 @@ external 在同步采样点按 `total - free - current_reserved` 测量并取非
 正式任务沿用单 L40S、4 CPU、2 loader workers、SCR 数据；按实测耗时加 10%，
 超出七天按 checkpoint 边界续跑。代表性子集的精度不作为正式验证结论。
 
-## 执行状态
+## 第三次 debug：通过显存测试，发现批量元数据错误
 
 本次相关本地测试共 22 项通过：显存采样/判据、严格参数恢复、失败批量回退、
 提交门槛/去重、既有 checkpoint 与分段续跑。Ruff 和差异空白检查通过。
-尚未提交本次 GPU debug；后续补充实际 commit、作业及结果。
+模型与测试源码提交 `da5dad7fbb833312410b678492eb5397dd187c6f`，已推送 GitHub、
+同步 HPC 并冻结 release。作业 **4416920** 于 11:41:31 HKT 在 SPG-5-4 启动，
+单 L40S、4 CPU、48 GiB 主存、debug 25 分钟；最终 FAILED 1:0，耗时 12 分 22 秒。
+真实混合批次预检、batch 24/28/32 四步探测和 B/C 的 batch 28 八步训练均完成。
+batch 32 跑通但张量峰值 39.510 GiB 加外部 0.529 GiB 超过 39.953 GiB 门槛，
+故选择 batch 28 进入完整验收。B 保存 epoch checkpoint 后，在验证指标处失败：
+批量数值元数据 `year` 没有逐样本拆分，`int(batch_tensor)` 报错。
+控制器已停止，正式训练未提交。
+
+运行根目录：`/scr/u/xiaoz/HydroState/experiments/cosa_joint_l40s_20261110_r3`。
+`debug_passed.json` 仅在全部通过后生成；候选试验保存在 `batch_N/`，根目录的
+`benchmark_b/c.json` 和 `smoke_b/c` 指向最终通过的同一批量证据。
+自动控制器 PID 621923；最终状态查 `submission.json`、`controller_status.json`、
+`controller_failure.json` 和 Slurm，不能仅凭控制器进程存在判为成功。
+
+## 元数据与代表性监督补充修复
+
+`HydroStateModel.predict` 现在把批量张量元数据与字符串列表一样按样本拆分。
+在真实 Zarr 混合批次的本地回归中，用不同年份并启用共同年份指标，修复前复现同一异常。
+修复不改变模型前向、损失、输入数据或年份筛选定义。
+
+同时核对有效监督覆盖：manifest 的计数键为 `et_ice_native_valid` 等实际掩膜名，
+旧短测选样错误地按任务名查询，遗漏最高有效监督的代表样本。现在从任务规格派生掩膜名，
+并要求完整 smoke 中七个产品任务及两项站点任务的有效监督计数都大于零。
+原始训练统计中冰雪 ET 有 3,124 个有效原生监督值，不是数据集缺少该变量。
+这个修复仅改变验收子集，正式训练的采样、划分和统计不变。
+
+修复后重试用新目录 `cosa_joint_l40s_20261110_r4`，根据已有显存结果从 batch 28 开始，
+重新检查含新增代表样本的批次及 B/C 完整流程；旧目录和失败证据保留。
+新增修复相关的联合数据、模型预测、CoSA、验收检查共 47 项本地测试通过；Ruff 和差异检查通过。

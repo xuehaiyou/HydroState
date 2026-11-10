@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import torch
@@ -16,6 +17,7 @@ from hydrostate.data.gee.contracts import atomic_json
 from hydrostate.engine.runner import HydroStateRunner as Runner
 from hydrostate.experiments.gpu_memory import CudaMemoryMeter
 from hydrostate.registry import DATASETS
+from hydrostate.tasks import resolve_tasks
 
 
 def representative_indices(dataset):
@@ -24,8 +26,9 @@ def representative_indices(dataset):
     if "valid_label_counts" in dataset.product.table:
         counts = dataset.product.table.valid_label_counts.map(
             lambda value: json.loads(value) if isinstance(value, str) else value)
-        for task in dataset.product.tasks:
-            values = counts.map(lambda row, name=task: row.get(name, 0))
+        for task, spec in resolve_tasks(dataset.product.tasks).items():
+            key = f"{task}{'_native' if spec.grid == 'native' else ''}_valid"
+            values = counts.map(lambda row, name=key: row.get(name, 0))
             if values.max() > 0:
                 products.append(int(values.idxmax()))
         products = list(dict.fromkeys(products))
@@ -51,6 +54,7 @@ class FiniteLossHook(Hook):
     def __init__(self):
         self.steps = 0
         self.memory = CudaMemoryMeter()
+        self.valid_counts = defaultdict(float)
 
     def after_train_iter(self, runner, batch_idx, data_batch=None, outputs=None):
         if not outputs or "loss" not in outputs:
@@ -58,6 +62,9 @@ class FiniteLossHook(Hook):
         if any(not math.isfinite(float(value)) for value in outputs.values()):
             raise ValueError("Nonfinite training loss or diagnostic")
         self.steps += 1
+        for key, value in outputs.items():
+            if key.startswith("valid_count_"):
+                self.valid_counts[key.removeprefix("valid_count_")] += float(value)
         # Read before LoggerHook resets its memory counters.
         self.memory.sample()
 
@@ -152,6 +159,10 @@ def run(config, output, *, batch_size=2, workers=0, train_steps=8):
     ]
     if not changed or not gradient_checks or not hook.steps:
         raise ValueError("No finite-gradient optimizer update was demonstrated")
+    missing = [task for task in (*runner.model.tasks, "site_sm", "site_et")
+               if hook.valid_counts[task] <= 0]
+    if missing:
+        raise ValueError(f"Representative smoke missing training labels: {missing}")
     for handle in handles:
         handle.remove()
     checkpoint = output / "epoch_1.pth"
@@ -170,6 +181,7 @@ def run(config, output, *, batch_size=2, workers=0, train_steps=8):
         micro_batch=batch_size, accumulation=1, train_steps=hook.steps,
         changed_task_head_parameters=len(changed), finite_gradient_checks=len(gradient_checks),
         **hook.memory.sample(), checkpoint_parameters_verified=restored,
+        valid_supervision_counts=dict(hook.valid_counts),
         elapsed_seconds=time.monotonic() - started,
         test_joint_score=metrics["joint_score"],
         site_loss_weights=dict(cfg.model.site_supervision.loss_weights),
