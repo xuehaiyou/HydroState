@@ -46,3 +46,14 @@ Preparation is not publication or training activation.
   publication or training activation. Read `status.json` for live state.
 - Related local tests: 12 passed; Ruff passed. These are code checks, distinct
   from the HPC smoke audit recorded by the launcher.
+
+## Empty smoke recovery
+
+The first 12 candidates failed the unchanged spatial quality rules, leaving no
+manifest for audit. The old launcher incorrectly invoked audit on this empty
+result. `scripts/run_site_et_additive.py` now resumes existing attempts in batches
+of at most 24, up to 240 total smoke attempts across restarts. It audits only a
+nonempty sample set, then automatically continues production. Budget exhaustion
+or candidate exhaustion are explicit states; genuine audit errors still stop the
+run and retain stderr. Existing cache and rejections are reused without relinking.
+The production contract, EBR list, split targets and quality thresholds are unchanged.
