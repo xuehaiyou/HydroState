@@ -17,7 +17,8 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument("--base", required=True)
 p.add_argument("--output", required=True)
 p.add_argument("--scr", required=True)
-p.add_argument("--resume-from", help="Seed an expanded release from an already published run")
+p.add_argument("--resume-from", help="Seed from a published or explicitly stopped run")
+p.add_argument("--target-total", type=int, default=3000)
 a = p.parse_args()
 root = Path(a.output)
 root.mkdir(parents=True, exist_ok=True)
@@ -34,13 +35,14 @@ with locked(root / ".launcher.lock", blocking=False):
         workers=4,
         cpu_limit=2,
         automatic_publication=True,
+        target_total=a.target_total,
         source_code=str(CODE),
         output=str(root),
         scr=a.scr,
     )
     atomic_json(root / "run.json", dict(meta, status="running"))
     try:
-        result = run(a.base, root, a.scr, 4)
+        result = run(a.base, root, a.scr, 4, target_total=a.target_total)
         atomic_json(root / "run.json", dict(meta, status="published", result=result))
         print(json.dumps(result), flush=True)
     except Exception as error:

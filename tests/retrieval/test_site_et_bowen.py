@@ -80,7 +80,9 @@ def test_collect_keeps_all_dry_successes_even_when_wet_group_is_scarce(
             row, status="success", label_version=module.ET_VERSION
         ),
     )
-    selected = module.collect(None, pd.DataFrame(rows), tmp_path, {"seed": 1}, {}, workers=2)
+    selected = module.collect(
+        None, pd.DataFrame(rows), tmp_path, {"seed": 1}, {}, workers=2, target_total=5 + wet_count
+    )
     assert len(selected) == 5 + wet_count
     assert selected.frequency_bin.eq(0).sum() == 5
     assert selected.candidate_id.is_unique
@@ -260,10 +262,10 @@ def test_strict_draw_hierarchy_and_frequency_independence():
                         physical_group_id=str(i % 3),
                     )
                 )
-    chosen, audit = balanced_draw(rows, seed=7)
+    chosen, audit = balanced_draw(rows, seed=7, target_total=17)
     assert len(chosen) == len(set(chosen))
-    assert audit["by_frequency"] == {0: 17, 1: 1}
-    assert audit["max_sibling_difference"] <= 1
+    assert audit["by_frequency"] == {0: 16, 1: 1}
+    assert audit["max_unsaturated_difference"] <= 1
     # Check the actual selected IDs at every level, including unselected siblings.
     selected = pd.DataFrame(rows).set_index("candidate_id").loc[chosen].reset_index()
     reference = pd.DataFrame(rows)
@@ -277,4 +279,31 @@ def test_strict_draw_hierarchy_and_frequency_independence():
             counts = subset[level].value_counts().reindex(original[level].unique(), fill_value=0)
             assert counts.max() - counts.min() <= 1
         prefix.append(level)
-    assert chosen == balanced_draw(list(reversed(rows)), seed=7)[0]
+    assert chosen == balanced_draw(list(reversed(rows)), seed=7, target_total=17)[0]
+
+
+def test_capacity_redistribution_preserves_target_instead_of_rare_layer_cap():
+    from hydrostate.data.site.strict_sampling import allocate, balanced_draw
+
+    assert allocate({1: 1, 2: 100, 3: 100}, 21, [1, 2, 3]) == {1: 1, 2: 10, 3: 10}
+    rows = [
+        dict(
+            candidate_id=f"{land}-{i}",
+            frequency_bin=0,
+            landcover=land,
+            climate_class=1,
+            year=2020,
+            month=1,
+            physical_group_id=str(i),
+        )
+        for land, count in [(10, 1), (20, 100), (30, 100)]
+        for i in range(count)
+    ]
+    chosen, audit = balanced_draw(rows, seed=7, target_total=21)
+    assert len(chosen) == 21
+    assert audit["by_frequency"] == {0: 21}
+    assert audit["strata"][0]["counts"] == {10: 1, 20: 10, 30: 10}
+    assert audit["max_unsaturated_difference"] == 0
+    assert audit["candidate_shortfall"] == 0
+    chosen, audit = balanced_draw(rows[:1], seed=7, target_total=21)
+    assert len(chosen) == 1 and audit["candidate_shortfall"] == 20

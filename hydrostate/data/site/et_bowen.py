@@ -39,7 +39,9 @@ def seed_expansion(source, root, scr):
             raise ValueError("Expansion source changed")
         return
     if not (source / "publication_result.json").exists():
-        raise ValueError("Expansion requires a completed source release")
+        state = json.loads((source / "run.json").read_text())
+        if state["status"] != "stopped_for_sampling_change":
+            raise ValueError("Expansion requires a published or explicitly stopped source")
     if (root / "attempts.jsonl").exists():
         raise ValueError("Refuse to reseed an existing attempt ledger")
     root.mkdir(parents=True, exist_ok=True)
@@ -47,6 +49,13 @@ def seed_expansion(source, root, scr):
     shutil.copy2(source / "collection.json", root / "collection.json")
     (root / "records").mkdir(exist_ok=True)
     events = [json.loads(line) for line in (source / "attempts.jsonl").read_text().splitlines()]
+    recorded = {event["candidate_id"] for event in events}
+    for folder in ("records", "rejected"):
+        for path in sorted((source / folder).glob("*.json")):
+            if path.stem not in recorded:
+                event = json.loads(path.read_text())
+                events.append(dict(candidate_id=path.stem, status=event["status"]))
+                recorded.add(path.stem)
     for event in events:
         if event["status"] != "success":
             continue
@@ -71,8 +80,10 @@ def seed_expansion(source, root, scr):
     previous.update(table.loc[table.valid_et.gt(0) & table.split.eq("train"), "physical_group_id"])
     atomic_json(root / "plan/previous_et_training.json", sorted(previous))
     atomic_json(root / "plan/previous_active_release.json", str(current))
-    shutil.copy2(source / "attempts.jsonl", root / "attempts.jsonl")
-    atomic_json(marker, dict(source=str(source), policy="frequency_priority_without_downsampling"))
+    with (root / "attempts.jsonl").open("w") as stream:
+        for event in events:
+            stream.write(json.dumps(event) + "\n")
+    atomic_json(marker, dict(source=str(source), attempts=len(events)))
 
 
 class PriorityPicker:
@@ -304,7 +315,7 @@ def enrich_record(result, root):
     return result
 
 
-def collect(ee, table, root, config, norm, workers=4):
+def collect(ee, table, root, config, norm, workers=4, *, target_total=3000):
     evidence = json.loads((root / "plan/footprints.json").read_text())["rows"]
     evidence_map = {tuple(r[k] for k in KEYS): r for r in evidence}
     rows = table_records(table)
@@ -390,7 +401,9 @@ def collect(ee, table, root, config, norm, workers=4):
             succeeded = {r["candidate_id"] for r in completed}
             failures = recorded - succeeded
             desired, balance = balanced_draw(
-                [r for r in rows if r["candidate_id"] not in failures], seed=config["seed"]
+                [r for r in rows if r["candidate_id"] not in failures],
+                seed=config["seed"],
+                target_total=target_total,
             )
             pending = [cid for cid in desired if cid not in recorded]
             atomic_json(
@@ -399,7 +412,7 @@ def collect(ee, table, root, config, norm, workers=4):
                     round=round_number, pending=len(pending), candidate_ids=desired, balance=balance
                 ),
             )
-            save("strict_balanced_sampling", balance["by_frequency"])
+            save("target_balanced_sampling", balance["by_frequency"])
             if not pending:
                 break
             for begin in range(0, len(pending), workers):
@@ -417,7 +430,7 @@ def collect(ee, table, root, config, norm, workers=4):
                             )
                             + "\n"
                         )
-                save("strict_balanced_sampling", balance["by_frequency"])
+                save("target_balanced_sampling", balance["by_frequency"])
                 print(
                     json.dumps(
                         dict(round=round_number, attempted=len(recorded), success=len(completed))
@@ -426,6 +439,17 @@ def collect(ee, table, root, config, norm, workers=4):
                 )
             round_number += 1
     save("collected", capacities, force=True)
+    if len(desired) < target_total:
+        atomic_json(
+            root / "target_shortfall.json",
+            dict(
+                target=target_total,
+                achieved=len(desired),
+                reason="eligible_candidate_pool_exhausted",
+                balance=balance,
+            ),
+        )
+        raise ValueError("Candidate pool exhausted before target; existing SCR release retained")
     if not desired:
         raise ValueError("No quality-qualified balanced ET draw")
     selected = pd.DataFrame(completed).set_index("candidate_id").loc[desired].reset_index()
@@ -450,7 +474,7 @@ def collect(ee, table, root, config, norm, workers=4):
     return selected
 
 
-def run(base, root, scr, workers):
+def run(base, root, scr, workers, *, target_total=3000):
     from olmoearth_pretrain_minimal.olmoearth_pretrain_v1.data.normalize import load_computed_config
 
     from hydrostate.data.gee.client import initialize
@@ -460,6 +484,13 @@ def run(base, root, scr, workers):
     base, root, scr = map(Path, (base, root, scr))
     root.mkdir(parents=True, exist_ok=True)
     with locked(root / ".run.lock", blocking=False):
+        from .strict_sampling import POLICY
+
+        sampling = dict(policy=POLICY, target_total=target_total, seed=20261110)
+        sampling_path = root / "sampling_plan.json"
+        if sampling_path.exists() and json.loads(sampling_path.read_text()) != sampling:
+            raise ValueError("Sampling plan changed; use an expanded run directory")
+        atomic_json(sampling_path, sampling)
         table = prepare_plan(base, root, scr)
         norm = load_computed_config()
         config = dict(
@@ -496,7 +527,15 @@ def run(base, root, scr, workers):
         for folder in ["records", "rejected", "cache/inputs"]:
             (root / folder).mkdir(parents=True, exist_ok=True)
         if not (root / "collection_report.json").exists():
-            collect(initialize("cropland-477906"), table, root, config, norm, workers)
+            collect(
+                initialize("cropland-477906"),
+                table,
+                root,
+                config,
+                norm,
+                workers,
+                target_total=target_total,
+            )
         return finalize_and_publish(base, root, scr)
 
 

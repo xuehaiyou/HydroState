@@ -49,6 +49,9 @@ def pack(root, table):
     if (output / "et.zarr").exists():
         shutil.rmtree(output / "et.zarr")  # Unaccepted packing output only.
     shutil.copy2(root / "collection.json", output / "collection.json")
+    for name in ("sampling_plan.json", "balance_audit.json", "collection_report.json"):
+        if (root / name).exists():
+            shutil.copy2(root / name, output / name)
     source = SiteDataset(root / "samples.parquet", "train", data_root=root)
     attrs = dict(
         config_sha256=source.config_hash,
