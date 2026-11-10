@@ -6,7 +6,7 @@ set -euo pipefail
 : "${HYDROSTATE_SOURCE_HASHES:?Set source checksum file}"
 : "${HYDROSTATE_DATA_ROOT:?Set original product collection root}"
 : "${HYDROSTATE_TARGET_STATS:?Set original product training statistics}"
-: "${HYDROSTATE_SITE_SPLIT_ROOT:?Set completed v3 station split directory}"
+: "${HYDROSTATE_SITE_SPLIT_ROOT:?Set published station split root}"
 : "${HYDROSTATE_WORK_DIR:?Set new joint experiment directory}"
 : "${HYDROSTATE_MICRO_BATCH:?Set GPU-validated batch size}"
 : "${HYDROSTATE_ACCUMULATIVE_COUNTS:?Set gradient accumulation to preserve effective batch}"
@@ -32,8 +32,10 @@ mkdir -p "$HYDROSTATE_WORK_DIR/provenance"
 python tools/data/verify_joint_training.py --config "$HYDROSTATE_CONFIG" \
     --output "$HYDROSTATE_WORK_DIR/provenance/joint_preflight.json" --check-batch
 printf '%s\n' "$HYDROSTATE_CODE_COMMIT" > "$HYDROSTATE_WORK_DIR/provenance/code_commit.txt"
-cp "$HYDROSTATE_SITE_SPLIT_ROOT/datasets.json" "$HYDROSTATE_SITE_SPLIT_ROOT/split_report.json" \
-   "$HYDROSTATE_SITE_SPLIT_ROOT/site_target_stats.json" "$HYDROSTATE_WORK_DIR/provenance/"
+HYDROSTATE_ACTIVE_SITE_ROOT="$(python -c \
+    'import os; from hydrostate.data.site.active import active_release; print(active_release(os.environ["HYDROSTATE_SITE_SPLIT_ROOT"]))')"
+cp "$HYDROSTATE_ACTIVE_SITE_ROOT/datasets.json" "$HYDROSTATE_ACTIVE_SITE_ROOT/split_report.json" \
+   "$HYDROSTATE_ACTIVE_SITE_ROOT/site_target_stats.json" "$HYDROSTATE_WORK_DIR/provenance/"
 exec bash scripts/train.sh \
     "train_dataloader.batch_size=$HYDROSTATE_MICRO_BATCH" \
     "val_dataloader.batch_size=$HYDROSTATE_MICRO_BATCH" \
