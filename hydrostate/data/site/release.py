@@ -57,7 +57,15 @@ def audit_production(root, plan, *, require_complete=False, require_screened=Fal
     report = json.loads((root / "collection_report.json").read_text())
     if require_complete and not report["complete"]:
         raise ValueError("Initial draw and replacements are not complete")
-    if require_screened and not report.get("initial_screening_complete"):
+    additive = "success_targets_by_split" in config
+    if additive:
+        table_counts = pd.read_parquet(root / "samples.parquet").split.value_counts()
+        targets_met = all(
+            table_counts.get(s, 0) == n for s, n in config["success_targets_by_split"].items()
+        )
+        if (require_complete or require_screened or report["complete"]) and not targets_met:
+            raise ValueError("Additive split success targets not met")
+    if require_screened and not additive and not report.get("initial_screening_complete"):
         raise ValueError("Frozen candidate screening has not finished")
     for name, digest in config["plan_sha256"].items():
         if sha256(plan / name) != digest:
@@ -70,8 +78,10 @@ def audit_production(root, plan, *, require_complete=False, require_screened=Fal
     attempted = {
         p.stem for folder in ("records", "rejected") for p in (root / folder).glob("*.json")
     }
-    if (report["complete"] or require_screened) and not set(selected.candidate_id).issubset(
-        attempted
+    if (
+        not additive
+        and (report["complete"] or require_screened)
+        and not set(selected.candidate_id).issubset(attempted)
     ):
         raise ValueError("Original selected candidates have not all been attempted")
     audit_selection(table.to_dict("records"), candidates, config["min_date_gap_days"])

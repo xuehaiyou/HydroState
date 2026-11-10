@@ -398,9 +398,21 @@ def collect_production(
             )
         },
     )
+    if "sampling_reference" in config:
+        production["sampling_reference_sha256"] = sha256(config["sampling_reference"])
     with locked(output / ".production.lock", blocking=False):
         policy_path = output / "sampling_policy.json"
-        if initial_only:
+        if "success_targets_by_split" in config:
+            atomic_json(
+                policy_path,
+                dict(
+                    mode="additive_success_targets",
+                    numerical_quotas=config["success_targets_by_split"],
+                    sampling_reference=config["sampling_reference"],
+                    retain_surplus=False,
+                ),
+            )
+        elif initial_only:
             atomic_json(
                 policy_path,
                 dict(
@@ -461,6 +473,14 @@ def collect_production(
                 elapsed_seconds_this_run=monotonic() - began,
                 attempts_this_run=processed,
             )
+            success_targets = config.get("success_targets_by_split")
+            if success_targets is not None:
+                achieved = Counter(r["split"] for r in rows)
+                report["success_targets_by_split"] = success_targets
+                report["success_targets_met"] = all(
+                    achieved[s] >= n for s, n in success_targets.items()
+                )
+                report["quota_status"] = "fixed_additive_split_targets"
             atomic_json(output / "collection_report.json", report)
             return report
 
@@ -501,6 +521,34 @@ def collect_production(
             return candidate_sample(
                 ee, row, member_map[row["candidate_id"]], output, production, norm
             )
+
+        if "success_targets_by_split" in config:
+            from .et_rebalance import collect_additive_targets
+
+            if not initial_only or candidate_ids is not None:
+                raise ValueError(
+                    "Additive success targets require initial-only without explicit IDs"
+                )
+            try:
+                met = collect_additive_targets(
+                    selected,
+                    rows,
+                    failures,
+                    config,
+                    collect,
+                    consume,
+                    workers=workers,
+                    max_attempts=max_attempts,
+                )
+                audit_selection(rows, candidates, config["min_date_gap_days"])
+                return snapshot(complete=met)
+            finally:
+                snapshot(
+                    complete=all(
+                        sum(r["split"] == s for r in rows) >= n
+                        for s, n in config["success_targets_by_split"].items()
+                    )
+                )
 
         initial = [
             lookup[cid]
