@@ -379,6 +379,8 @@ def test_v4_replaces_old_et_and_allows_cross_task_colocation(joint):
         zarr.open_group(str(et_root / row.label_path), mode="a")["site_sm_native_valid"][:] = 0
     et["sample_id"] = "et-" + et.sample_id
     et["cohort"] = 1
+    et["homogeneous_fraction"] = 0.93
+    et["label_version"] = "corrected_et"
     # A shared location may be training for SM and validation for ET.
     train = et.index[et.split.eq("train")][0]
     et.loc[train, "split"] = "validation"
@@ -422,3 +424,8 @@ def test_v4_replaces_old_et_and_allows_cross_task_colocation(joint):
     assert current.sites[0].table.valid_et.sum() == 0
     assert current.sites[1].table.valid_sm.sum() == 0
     hydro_collate([current[0], current[current.offsets[1]], current[current.offsets[2]]])
+    inventory = pd.read_parquet(new / "inventory.parquet")
+    inventory.loc[inventory.cohort.eq(0), "label_version"] = "fabricated"
+    inventory.to_parquet(new / "inventory.parquet", index=False)
+    with pytest.raises(ValueError, match="selection disagrees"):
+        JointRetrievalDataset(dataset.manifest, old_root, "train")

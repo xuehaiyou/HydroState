@@ -131,7 +131,16 @@ class JointRetrievalDataset(Dataset):
             raise ValueError("Product/development overlap leaked into station evaluation")
         for i, site in enumerate(self.sites):
             expected = inventory[inventory.cohort.eq(i) & inventory.split.eq(split)]
-            if not site.table.reset_index(drop=True).equals(expected.reset_index(drop=True)):
+            # The union inventory includes task-specific quality columns absent from
+            # other cohorts. Those extra cells must be null, not fabricated values.
+            extra = expected.columns.difference(site.table.columns)
+            if (
+                not set(site.table.columns).issubset(expected.columns)
+                or expected[extra].notna().any().any()
+                or not site.table.reset_index(drop=True).equals(
+                    expected[site.table.columns].reset_index(drop=True)
+                )
+            ):
                 raise ValueError("Station selection disagrees with split inventory")
         if task_specific:
             for task in ("sm", "et"):
