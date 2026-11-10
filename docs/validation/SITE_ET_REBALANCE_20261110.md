@@ -31,3 +31,18 @@ aggregation, otherwise 95% homogeneous and valid support with class confidence
 new manifests; never rewrite published shards. New dates form a separate cohort.
 Training statistics must be recomputed for the revised manifests before activation.
 Preparation is not publication or training activation.
+
+## Execution record
+
+- Frozen HPC code: `89981c3`, `/home/xiaoz/releases/site_et_additive_89981c3`.
+- Revision manifests and candidate plan:
+  `/fossfs/xiaozhen/HydroState/site/et_revision_20261110`.
+- Deduplicated unused pool: 23,030 windows (train 15,740; validation 3,506;
+  test 3,784). Frequency bins: zero occurrence 22,801; (0,20)% 229.
+- Launcher/status/log: `/fossfs/xiaozhen/HydroState/site/runs/et_additive_20261110/`.
+- Additive Zarr cohort: `/fossfs/xiaozhen/HydroState/site/prepared/site_et_additive_20261110`.
+- IO-node collection uses 4 workers, 2 CPU affinity, initial 12-attempt smoke
+  collection and scientific audit before automatic continuation. No automatic
+  publication or training activation. Read `status.json` for live state.
+- Related local tests: 12 passed; Ruff passed. These are code checks, distinct
+  from the HPC smoke audit recorded by the launcher.

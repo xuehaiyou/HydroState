@@ -117,3 +117,27 @@ def test_additive_failure_refill_resume_and_no_overshoot(tmp_path):
     )
     assert collect_additive_targets(selected, successes, failures, config, collect, consume)
     assert len(calls) == len(set(calls))
+
+
+def test_mixed_frequency_spatial_group_stays_intact():
+    rows = []
+    for i, split in enumerate(("train", "validation", "test")):
+        for frequency in (0, 1):
+            rows.append(
+                dict(
+                    spatial_group_id=str(i),
+                    physical_group_id=f"{i}-{frequency}",
+                    split=split,
+                    valid_sm=0,
+                    valid_et=1,
+                    frequency_bin=frequency,
+                    landcover=10,
+                    climate_class=1,
+                    year=2020,
+                    month=1,
+                )
+            )
+    table = pd.DataFrame(rows)
+    result = rebalance_et(table)
+    assert result.split.tolist() == table.split.tolist()
+    assert result.groupby("spatial_group_id").split.nunique().max() == 1
