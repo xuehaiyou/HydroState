@@ -96,3 +96,14 @@ def test_overlap_is_rejected():
     )
     with pytest.raises(ValueError, match="overlapping"):
         split_local_days(frame)
+
+
+def test_75_percent_is_accepted_without_redundant_80_percent_gate(tmp_path):
+    corrected = np.full(480, 125.0)
+    corrected[::4] = np.nan
+    data, _ = source(tmp_path, corrected=corrected)
+    # At the summer pole, the entire window is daylight; no artificial night requirement.
+    row = label_window(data, dict(lat=90, lon=0), "2020-06-02", "2020-06-10")
+    assert row["corrected_valid_fraction"] == pytest.approx(0.75)
+    assert row["corrected_night_fraction"] is None
+    assert row["corrected_valid"]
