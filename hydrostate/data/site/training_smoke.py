@@ -14,6 +14,7 @@ from mmengine.registry import init_default_scope
 from hydrostate.cli import configure_pretrained_encoder, configure_target_statistics
 from hydrostate.data.gee.contracts import atomic_json
 from hydrostate.engine.runner import HydroStateRunner as Runner
+from hydrostate.experiments.gpu_memory import CudaMemoryMeter
 from hydrostate.registry import DATASETS
 
 
@@ -49,8 +50,7 @@ def representative_indices(dataset):
 class FiniteLossHook(Hook):
     def __init__(self):
         self.steps = 0
-        self.peak_allocated = 0
-        self.peak_reserved = 0
+        self.memory = CudaMemoryMeter()
 
     def after_train_iter(self, runner, batch_idx, data_batch=None, outputs=None):
         if not outputs or "loss" not in outputs:
@@ -59,8 +59,32 @@ class FiniteLossHook(Hook):
             raise ValueError("Nonfinite training loss or diagnostic")
         self.steps += 1
         # Read before LoggerHook resets its memory counters.
-        self.peak_allocated = max(self.peak_allocated, torch.cuda.max_memory_allocated())
-        self.peak_reserved = max(self.peak_reserved, torch.cuda.max_memory_reserved())
+        self.memory.sample()
+
+    def after_val_iter(self, runner, batch_idx, data_batch=None, outputs=None):
+        self.memory.sample()
+
+    def after_test_iter(self, runner, batch_idx, data_batch=None, outputs=None):
+        self.memory.sample()
+
+
+def verify_checkpoint_parameters(runner, checkpoint):
+    """Perturb the disposable model so a no-op or incomplete reload cannot pass."""
+    expected = {name: p.detach().cpu().clone() for name, p in runner.model.named_parameters()
+                if p.requires_grad}
+    if not expected or not any(value.count_nonzero() for value in expected.values()):
+        raise ValueError("No nonzero trainable checkpoint parameters")
+    if any(not torch.isfinite(value).all() for value in expected.values()):
+        raise ValueError("Nonfinite trained checkpoint parameters")
+    with torch.no_grad():
+        for name, parameter in runner.model.named_parameters():
+            if name in expected:
+                parameter.zero_()
+    runner.load_checkpoint(str(checkpoint), strict=True)
+    for name, parameter in runner.model.named_parameters():
+        if name in expected and not torch.equal(expected[name], parameter.detach().cpu()):
+            raise ValueError(f"Checkpoint did not restore trained parameter: {name}")
+    return len(expected)
 
 
 def run(config, output, *, batch_size=2, workers=0, train_steps=8):
@@ -133,7 +157,7 @@ def run(config, output, *, batch_size=2, workers=0, train_steps=8):
     checkpoint = output / "epoch_1.pth"
     if not checkpoint.is_file():
         raise FileNotFoundError(checkpoint)
-    runner.load_checkpoint(str(checkpoint))
+    restored = verify_checkpoint_parameters(runner, checkpoint)
     metrics = runner.test()
     if not math.isfinite(metrics["joint_score"]):
         raise ValueError("Nonfinite joint evaluation score")
@@ -145,8 +169,7 @@ def run(config, output, *, batch_size=2, workers=0, train_steps=8):
         gpu=torch.cuda.get_device_name(), model=cfg.model.type,
         micro_batch=batch_size, accumulation=1, train_steps=hook.steps,
         changed_task_head_parameters=len(changed), finite_gradient_checks=len(gradient_checks),
-        peak_allocated_gib=hook.peak_allocated / 1024**3,
-        peak_reserved_gib=hook.peak_reserved / 1024**3,
+        **hook.memory.sample(), checkpoint_parameters_verified=restored,
         elapsed_seconds=time.monotonic() - started,
         test_joint_score=metrics["joint_score"],
         site_loss_weights=dict(cfg.model.site_supervision.loss_weights),
@@ -170,5 +193,7 @@ def main():
         run(args.config, args.output, batch_size=args.batch_size, workers=args.workers,
             train_steps=args.train_steps)
     except Exception as error:
-        atomic_json(Path(args.output) / "failure.json", dict(error=repr(error)))
+        atomic_json(Path(args.output) / "failure.json", dict(
+            status="oom" if isinstance(error, torch.cuda.OutOfMemoryError) else "failed",
+            error=repr(error)))
         raise

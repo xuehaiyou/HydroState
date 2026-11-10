@@ -20,11 +20,12 @@ def run(tmp_path):
             status="passed", batch_size=16, train_seconds_per_sample=.1,
             validation_seconds_per_sample=.05, peak_allocated_gib=30,
             peak_reserved_gib=32, gpu_total_gib=48, gpu="L40", train_samples=100,
-            validation_samples=50))
+            validation_samples=50, peak_external_gib=1, memory_samples=8))
         write(tmp_path / f"smoke_{variant}" / "result.json", dict(
             status="passed", micro_batch=16, model="CoSAHydroStateModel",
             site_loss_weights=dict(site_sm=2., site_et=2.), peak_allocated_gib=31,
-            peak_reserved_gib=33, elapsed_seconds=20,
+            peak_reserved_gib=33, peak_external_gib=1, gpu_total_gib=48, memory_samples=8,
+            checkpoint_parameters_verified=10, elapsed_seconds=20,
             selection={name: dict(samples=16) for name in ("train", "val", "test")}))
     write(tmp_path / "submission.json", dict(
         source_release=str(tmp_path / "release"),
@@ -48,10 +49,22 @@ def test_measurement_requires_matched_batch_priority_and_headroom(run):
     value = json.loads(path.read_text())
     value["peak_reserved_gib"] = 46
     path.write_text(json.dumps(value))
+    launch.measurements(run, 50)  # Reusable cache is not active tensor demand.
+    value["peak_allocated_gib"] = 43
+    path.write_text(json.dumps(value))
     with pytest.raises(ValueError, match="headroom"):
         launch.measurements(run, 50)
-    value["peak_reserved_gib"] = 32
+    value["peak_allocated_gib"] = 30
     value["batch_size"] = 8
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="recipe"):
+        launch.measurements(run, 50)
+
+
+def test_submission_requires_checkpoint_restore_evidence(run):
+    path = run / "smoke_c" / "result.json"
+    value = json.loads(path.read_text())
+    value["checkpoint_parameters_verified"] = 0
     path.write_text(json.dumps(value))
     with pytest.raises(ValueError, match="recipe"):
         launch.measurements(run, 50)

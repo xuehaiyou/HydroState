@@ -16,6 +16,7 @@ from hydrostate.cli import configure_pretrained_encoder, configure_target_statis
 from hydrostate.data.gee.contracts import atomic_json
 from hydrostate.data.site.training_smoke import representative_indices
 from hydrostate.datasets.collate import hydro_collate
+from hydrostate.experiments.gpu_memory import CudaMemoryMeter
 from hydrostate.registry import DATASETS, MODELS
 
 
@@ -56,6 +57,7 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2):
                   "not model accuracy or a reusable checkpoint", train_samples=len(dataset),
                   sample_ids=[dataset.product.table.iloc[i].sample_id if i < len(dataset.product)
                               else f"joint_index:{i}" for i in indices])
+    memory = CudaMemoryMeter()
     try:
         iterator = iter(loader)
         torch.cuda.reset_peak_memory_stats()
@@ -68,12 +70,11 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2):
             if any(not torch.isfinite(value).all() for value in losses.values()
                    if torch.is_tensor(value)):
                 raise RuntimeError("Nonfinite joint training loss")
-            torch.cuda.synchronize()
+            measured = memory.sample()
             report["steps"].append(dict(
                 seconds=time.monotonic() - began,
                 data_wait_seconds=loaded - began,
-                peak_allocated_gib=torch.cuda.max_memory_allocated() / 2**30,
-                peak_reserved_gib=torch.cuda.max_memory_reserved() / 2**30))
+                **measured))
             print(json.dumps(dict(batch=batch_size, step=step, **report["steps"][-1])), flush=True)
         train_times = [row["seconds"] for row in report["steps"][2:]]
         report["train_seconds_per_sample"] = sum(train_times) / len(train_times) / batch_size
@@ -92,15 +93,13 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2):
                 torch.cuda.synchronize()
                 began = time.monotonic()
                 model.val_step(next(iterator))
-                torch.cuda.synchronize()
+                memory.sample()
                 times.append(time.monotonic() - began)
         report["validation_seconds_per_sample"] = sum(times[1:]) / 2 / batch_size
         report["status"] = "passed"
     except torch.cuda.OutOfMemoryError as error:
         report.update(status="oom", error=str(error))
-    report.update(peak_allocated_gib=torch.cuda.max_memory_allocated() / 2**30,
-                  peak_reserved_gib=torch.cuda.max_memory_reserved() / 2**30,
-                  elapsed_seconds=time.monotonic() - started)
+    report.update(**memory.sample(), elapsed_seconds=time.monotonic() - started)
     atomic_json(output, report)
     print(json.dumps({k: v for k, v in report.items() if k not in ("sample_ids", "steps")}),
           flush=True)

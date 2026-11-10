@@ -12,6 +12,7 @@ from pathlib import Path
 
 from hydrostate.data.gee.contracts import atomic_json
 
+from .gpu_memory import has_memory_headroom, memory_requirement_gib
 from .retrieval_launch import training_segments
 
 
@@ -31,11 +32,11 @@ def measurements(run, epochs):
                 or bench["batch_size"] != passed["micro_batch"]
                 or smoke["micro_batch"] != passed["micro_batch"]
                 or smoke["model"] != "CoSAHydroStateModel"
+                or smoke["checkpoint_parameters_verified"] <= 0
                 or smoke["site_loss_weights"] != {"site_sm": 2., "site_et": 2.}):
             raise ValueError(f"Unverified matched CoSA recipe: {variant}")
-        peak = max(bench["peak_allocated_gib"], bench["peak_reserved_gib"],
-                   smoke["peak_allocated_gib"], smoke["peak_reserved_gib"])
-        if peak > bench["gpu_total_gib"] * .9:
+        peak = max(memory_requirement_gib(bench), memory_requirement_gib(smoke))
+        if not all(has_memory_headroom(report) for report in (bench, smoke)):
             raise ValueError(f"Insufficient GPU memory headroom: {variant}")
         train_cost = bench["train_seconds_per_sample"]
         val_cost = bench["validation_seconds_per_sample"]
