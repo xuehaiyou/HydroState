@@ -165,7 +165,11 @@ def prepare_revision(published, audit, parent, output, split_source, *, addition
         raise FileExistsError(output)
     original = pd.read_parquet(published / "inventory.parquet")
     stations = json.loads(Path(audit).read_text())
-    passing = {r["station"] for r in stations if r["results"]["measured_all"]["status"] == "pass"}
+    passing = {
+        r["station"]
+        for r in stations
+        if r.get("results", {}).get("measured_all", {}).get("status") == "pass"
+    }
     if ((original.valid_sm > 0) & (original.valid_et > 0)).any():
         raise ValueError("Mixed-target rows need per-target EBR masking")
     retained = original[original.valid_et.eq(0) | original.physical_group_id.isin(passing)]
