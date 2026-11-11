@@ -173,3 +173,14 @@ CoSA 默认关闭梯度 checkpoint，保留训练权重保存。输入质量掩�
 每 epoch 无放回覆盖所有训练窗口；较长站点序列自然贡献更多窗口，不保证站点或任务等量。
 当前产品 13,906、站点 30,608 个训练窗口（其中 ET 2,108），来源比例约 31.2% / 68.8%。
 无放回不会减少 epoch 的窗口数，也不能单独保证更快收敛。显存和 batch 需在关闭 checkpoint 后重测。
+
+## 2026-11-11：新增 shared-LoRA 联合监督对照
+
+`configs/hydrostate_joint_shared.py` 在原 shared-LoRA 架构上接入与 B/C 相同的产品＋站点
+监督、无放回窗口遍历、站点 SM/ET 损失系数 2 和站点优先选模。原有各任务独立查询、
+三深度融合解码器与 TOA 输入适配器保持原行为，shared/private rank 为 8/0，
+patch embedding 和 LayerNorm 参与训练；关闭梯度 checkpoint。
+从原始 FM 权重重新训练，不加载历史任务 checkpoint。此实验与 B/C 比较完整架构，
+不能把差异全归因于 Router（Router 的严格消融仍为 B/C）。
+本次运行覆盖参数统一为 25 epoch、25-epoch 余弦周期，优先匹配 B/C 有效 batch 4；
+正式资源依据该架构真实 GPU 短测确定，单卡、独立目录、一个完整作业。

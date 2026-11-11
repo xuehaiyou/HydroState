@@ -433,3 +433,22 @@ def test_v4_replaces_old_et_and_allows_cross_task_colocation(joint):
     inventory.to_parquet(new / "inventory.parquet", index=False)
     with pytest.raises(ValueError, match="selection disagrees"):
         JointRetrievalDataset(dataset.manifest, old_root, "train")
+
+
+def test_shared_lora_joint_control_preserves_architecture_and_matches_cosa_supervision():
+    shared = Config.fromfile("configs/hydrostate_joint_shared.py")
+    original = Config.fromfile("configs/hydrostate_mtlora_shared.py")
+    cosa = Config.fromfile("configs/hydrostate_joint.py")
+    expected = dict(original.model)
+    expected["encoder"] = dict(expected["encoder"], gradient_checkpointing=False)
+    expected["site_supervision"] = dict(cosa.model.site_supervision)
+    assert shared.model == expected
+    assert shared.model.encoder.private_rank == 0
+    assert shared.model.encoder.shared_rank == 8
+    assert shared.model.encoder.train_patch_embedding
+    assert shared.model.encoder.train_layer_norm
+    assert shared.model.encoder.get("use_landsat_toa_adapter", True)
+    for key in ("train_dataloader", "val_dataloader", "test_dataloader", "optim_wrapper",
+                "param_scheduler", "train_cfg", "val_evaluator", "test_evaluator", "randomness"):
+        assert shared[key] == cosa[key]
+    assert shared.load_from is None and not shared.resume
