@@ -48,32 +48,26 @@ class StateRouter(nn.Module):
         if not self.enabled:
             return features
         b, _, h, w = state.shape
-        embeddings = {
-            name: self.task_embedding.weight[i][None, :, None, None].expand(b, -1, h, w)
-            for i, name in enumerate(self.experts)
-        }
-        keys, values = {}, {}
-        needed = {source for sources in self.sources.values() for source in sources}
-        for source in self.experts:
-            if source not in needed:
-                continue
-            feature = features[source].detach() if self.detach_source else features[source]
-            feature = feature.masked_fill(~valid, 0)
-            keys[source] = self.key(torch.cat((feature, embeddings[source]), dim=1))
-            values[source] = self.value(feature)
-        result = {}
-        for target, sources in self.sources.items():
-            baseline = features[target].masked_fill(~valid, 0)
-            if not sources:
-                result[target] = baseline
-                continue
-            query = self.query(torch.cat((state, embeddings[target]), dim=1))
-            update = 0
-            for source in sources:
-                # FP32 dot products keep sigmoid scores stable under AMP.
-                score = (query.float() * keys[source].float()).sum(1, keepdim=True) * self.scale
-                gate = score.sigmoid().masked_fill(~valid, 0).to(values[source].dtype)
-                update = update + gate * values[source]
-            result[target] = (baseline + self.gamma[target] * update / len(sources)).masked_fill(
-                ~valid, 0)
-        return result
+        count = len(self.experts)
+        embeddings = self.task_embedding.weight[:, None, :, None, None].expand(
+            -1, b, -1, h, w)
+        stacked = torch.stack([features[name] for name in self.experts])
+        source = stacked.detach() if self.detach_source else stacked
+        source = source.masked_fill(~valid[None], 0)
+        keys = self.key(torch.cat((source, embeddings), dim=2).flatten(0, 1)).reshape(
+            count, b, -1, h, w)
+        values = self.value(source.flatten(0, 1)).reshape(count, b, -1, h, w)
+        queries = self.query(torch.cat((state[None].expand(count, -1, -1, -1, -1),
+                                        embeddings), dim=2).flatten(0, 1)).reshape(
+                                            count, b, -1, h, w)
+        # Target/source expert axes are small; no spatial all-pairs tensor.
+        scores = torch.einsum("ibdhw,jbdhw->ijbhw", queries.float(), keys.float()) * self.scale
+        edges = scores.new_tensor([[source in self.sources[target] for source in self.experts]
+                                   for target in self.experts], dtype=torch.bool)
+        gates = scores.sigmoid().masked_fill(~edges[:, :, None, None, None], 0)
+        gates = gates.masked_fill(~valid[:, 0][None, None], 0).to(values.dtype)
+        updates = torch.einsum("ijbhw,jbchw->ibchw", gates, values)
+        return {name: (features[name] + self.gamma[name] * updates[i] / len(self.sources[name])
+                       ).masked_fill(~valid, 0) if self.sources[name] else
+                       features[name].masked_fill(~valid, 0)
+                for i, name in enumerate(self.experts)}

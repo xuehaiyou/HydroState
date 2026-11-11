@@ -138,38 +138,45 @@ class OlmoEarthEncoder(nn.Module):
             indices = indices.to(device=inputs["s1"].device)
         else:
             indices = inputs["_temporal_indices"]
-        context_inputs: list[dict[str, RasterImage]] = []
+        from hydrostate.data.retrieval.contract import PROFILE
+        from hydrostate.data.retrieval.specs import INPUT_SPECS
 
-        for batch_index, modalities in enumerate(metadata):
-            sample: dict[str, RasterImage] = {}
-            from hydrostate.data.retrieval.contract import PROFILE
-            from hydrostate.data.retrieval.specs import INPUT_SPECS
-            modality_names = (tuple(INPUT_SPECS[k].modality for k in self.input_keys)
+        modality_names = (tuple(INPUT_SPECS[k].modality for k in self.input_keys)
                           if self.input_profile == PROFILE else MODALITIES)
-            pairs = zip(self.input_keys, modality_names)
-            for modality_index, (input_key, modality) in enumerate(pairs):
-                item = modalities[modality_index]
-                if item.start == item.stop:
-                    continue
-                selected = indices[item.start:item.stop]
-                image = inputs[input_key][batch_index].index_select(0, selected)  # Tv,C,H,W
-                valid_key = f"{input_key}_valid"
-                if valid_key in inputs:
-                    pixel_valid = inputs[valid_key][batch_index].index_select(0, selected)
-                    if pixel_valid.ndim == 3:
-                        pixel_valid = pixel_valid.unsqueeze(1)
-                    if input_key == "landsat_l2":
-                        image = self.landsat_l2_adapter(image, pixel_valid)
-                    else:
-                        image = image.masked_fill(~pixel_valid.bool(), 0)
-                        if input_key == "landsat" and self.landsat_toa_adapter is not None:
-                            image = self.landsat_toa_adapter(image).masked_fill(
-                                ~pixel_valid.bool(), 0)
-                image = image.permute(1, 0, 2, 3).contiguous()  # C,Tv,H,W
-                sample[modality] = RasterImage(image=image, timestamps=list(item.timestamps))
+        context_inputs: list[dict[str, RasterImage]] = [{} for _ in metadata]
+        pairs = zip(self.input_keys, modality_names)
+        for modality_index, (input_key, modality) in enumerate(pairs):
+            items = [sample[modality_index] for sample in metadata]
+            lengths = [item.stop - item.start for item in items]
+            if not any(lengths):
+                continue
+            images = inputs[input_key]
+            slots = images.shape[1]
+            # One GPU gather/masking operation per sensor, including ragged time series.
+            selected = torch.cat([indices[item.start:item.stop] + batch_index * slots
+                                  for batch_index, item in enumerate(items)])
+            image = images.flatten(0, 1).index_select(0, selected)
+            valid_key = f"{input_key}_valid"
+            if valid_key in inputs:
+                pixel_valid = inputs[valid_key].flatten(0, 1).index_select(0, selected)
+                if pixel_valid.ndim == 3:
+                    pixel_valid = pixel_valid.unsqueeze(1)
+                if input_key == "landsat_l2":
+                    image = self.landsat_l2_adapter(image, pixel_valid)
+                else:
+                    image = image.masked_fill(~pixel_valid.bool(), 0)
+                    if input_key == "landsat" and self.landsat_toa_adapter is not None:
+                        image = self.landsat_toa_adapter(image).masked_fill(~pixel_valid.bool(), 0)
+            # Ragged rslearn containers still require a small metadata-only Python loop.
+            for sample, item, value in zip(context_inputs, items, image.split(lengths)):
+                if item.start != item.stop:
+                    sample[modality] = RasterImage(
+                        image=value.permute(1, 0, 2, 3).contiguous(),
+                        timestamps=list(item.timestamps),
+                    )
+        for batch_index, sample in enumerate(context_inputs):
             if not sample:
                 raise ValueError(f"sample {batch_index} has no valid satellite modality")
-            context_inputs.append(sample)
 
         return ModelContext(inputs=context_inputs, metadatas=[])
 

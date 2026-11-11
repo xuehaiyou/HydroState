@@ -2,7 +2,6 @@
 
 import torch
 from torch import nn
-from torch.nn import functional as F
 
 from hydrostate.registry import MODELS
 
@@ -58,6 +57,7 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
         size = inputs[self.encoder.input_keys[0]].shape[-2:]
         if any(length % self.output_scale for length in size):
             raise ValueError("Input dimensions must divide by output_scale")
+        output_size = tuple(length // self.output_scale for length in size)
         outputs = {}
         for group in self.query_groups:
             bounds = inputs["target_time"][group[0]]
@@ -73,7 +73,6 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
                 selected = [task for task in tasks if task in group]
                 if not selected:
                     continue
-                decoded = self.readouts[name](features[name], valid, size)
-                decoded = F.avg_pool2d(decoded, self.output_scale)
+                decoded = self.readouts[name](features[name], valid, output_size)
                 outputs.update({task: self.heads[task](decoded) for task in selected})
         return self._constrain_outputs(outputs)

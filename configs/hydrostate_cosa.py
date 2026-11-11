@@ -19,7 +19,7 @@ model = dict(
         use_landsat_toa_adapter=False,
         train_patch_embedding=True,
         train_layer_norm=True,
-        gradient_checkpointing=True,
+        gradient_checkpointing=False,
     ),
     decoder=dict(type="CoSAStateFusion", in_channels=768, channels=256,
                  num_levels=3, num_heads=4, quality_channels=32),

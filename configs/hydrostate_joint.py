@@ -7,8 +7,8 @@ model = dict(
     site_supervision=dict(statistics=site_statistics, loss_weights=dict(site_sm=2.0, site_et=2.0))
 )
 train_dataloader = dict(
-    sampler=dict(type="HydroBalancedSampler", shuffle=True),
-    dataset=dict(type="JointRetrievalDataset", site_split_root=site_split_root, site_fraction=0.5),
+    sampler=dict(type="DefaultSampler", shuffle=True, round_up=False),
+    dataset=dict(type="JointRetrievalDataset", site_split_root=site_split_root),
 )
 val_dataloader = dict(dataset=dict(type="JointRetrievalDataset", site_split_root=site_split_root))
 test_dataloader = dict(dataset=dict(type="JointRetrievalDataset", site_split_root=site_split_root))

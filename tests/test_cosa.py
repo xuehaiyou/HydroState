@@ -273,3 +273,79 @@ def test_existing_regional_loader_and_batched_predict_accept_cosa(tmp_path):
     assert predictions[0]["land"].shape == (1, 4, 4)
     assert provenance["model_config"]["type"] == "CoSAHydroStateModel"
     assert len(provenance["checkpoint_sha256"]) == 64
+
+
+def test_batched_depth_pooling_matches_separate_depths_and_gradients():
+    torch.manual_seed(7)
+    fusion = CoSAStateFusion(in_channels=8, channels=8, quality_channels=4)
+    levels = []
+    for _ in range(3):
+        value = torch.randn(2, 3, 2, 2, 8, requires_grad=True)
+        valid = torch.rand(2, 3, 2, 2) > .3
+        times = torch.tensor([[1600000000, 1600691200, 1601382400]]).expand(2, -1)
+        levels.append((value, valid, times))
+    quality = torch.randn(2, 8, 2, 2, requires_grad=True)
+    valid = torch.stack([item[1].any(1) for item in levels]).any(0)[:, None]
+    bounds = torch.tensor([[1600691200, 1601382400]]).expand(2, -1)
+    separate = [fusion.pooler(value, mask, times, bounds, quality)
+                for value, mask, times in levels]
+    expected = fusion.spatial(torch.nn.functional.gelu(
+        fusion.compress(torch.cat(separate, 1)) + quality), valid)
+    actual, _ = fusion((levels, quality, valid), bounds)
+    torch.testing.assert_close(actual, expected)
+    inputs = [item[0] for item in levels] + [quality]
+    left = torch.autograd.grad(expected.sum(), inputs, retain_graph=True)
+    right = torch.autograd.grad(actual.sum(), inputs)
+    for a, b in zip(left, right):
+        torch.testing.assert_close(a, b, atol=2e-6, rtol=2e-5)
+
+
+def test_vectorized_router_matches_directed_loop_and_gradients():
+    torch.manual_seed(8)
+    router = StateRouter(('coverage', 'sm', 'et'), state_channels=8, channels=4,
+                         task_embedding_dim=3, routing_dim=4, residual_init=.3,
+                         sources=dict(coverage=('et',), sm=('coverage', 'et'), et=()))
+    state = torch.randn(2, 8, 3, 3, requires_grad=True)
+    features = {name: torch.randn(2, 4, 3, 3, requires_grad=True) for name in router.experts}
+    valid = torch.rand(2, 1, 3, 3) > .2
+    embeddings = {name: router.task_embedding.weight[i][None, :, None, None].expand(2, -1, 3, 3)
+                  for i, name in enumerate(router.experts)}
+    expected = {}
+    for name in router.experts:
+        value = features[name]
+        query = router.query(torch.cat((state, embeddings[name]), 1))
+        for source in router.sources[name]:
+            expert = features[source].detach().masked_fill(~valid, 0)
+            key = router.key(torch.cat((expert, embeddings[source]), 1))
+            gate = ((query.float() * key.float()).sum(1, keepdim=True)
+                    * router.scale).sigmoid().masked_fill(~valid, 0)
+            value = value + router.gamma[name] * gate * router.value(expert) / len(
+                router.sources[name])
+        expected[name] = value.masked_fill(~valid, 0)
+    actual = router(state, features, valid)
+    for name in router.experts:
+        torch.testing.assert_close(actual[name], expected[name])
+    parameters = [state, *features.values(), *router.parameters()]
+    left = torch.autograd.grad(sum(v.sum() for v in expected.values()), parameters,
+                               retain_graph=True, allow_unused=True)
+    right = torch.autograd.grad(sum(v.sum() for v in actual.values()), parameters,
+                                allow_unused=True)
+    for a, b in zip(left, right):
+        if a is None:
+            assert b is None or torch.count_nonzero(b) == 0
+        else:
+            torch.testing.assert_close(a, b, atol=2e-6, rtol=2e-5)
+
+
+def test_real_encoder_uses_broadcast_mask_and_no_default_checkpoint(tmp_path):
+    from functools import partial
+
+    from hydrostate.models.olmoearth_encoder import _broadcast_sdpa
+
+    cfg = config(tmp_path)
+    assert not cfg.model.encoder.gradient_checkpointing
+    model = MODELS.build(cfg.model)
+    for block in model.encoder.backbone.model.blocks:
+        assert isinstance(block.attn.sdpa, partial)
+        assert block.attn.sdpa.func is _broadcast_sdpa
+        assert not isinstance(block.forward, partial)

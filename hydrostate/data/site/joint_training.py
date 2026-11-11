@@ -20,6 +20,10 @@ def verify_joint_training(config, output, *, check_batch=False):
     cfg = Config.fromfile(str(config))
     init_default_scope("hydrostate")
     configure_target_statistics(cfg, training=True)
+    sampler = cfg.train_dataloader.sampler
+    if (sampler.type != "DefaultSampler" or not sampler.shuffle
+            or sampler.get("round_up", True) or cfg.train_dataloader.get("drop_last", False)):
+        raise ValueError("Joint training requires shuffled complete epochs without replacement")
     result = dict(
         status="passed", scope="configuration_and_contracts", config=str(config), splits={}
     )
@@ -41,8 +45,8 @@ def verify_joint_training(config, output, *, check_batch=False):
                     for k, v in sites.groupby("frequency_bin").sampling_mass.sum().items()
                 },
                 largest_site_group_mass=float(groups.max()),
-                site_policy="task_then_spatial_group_then_date",
-                interpretation="Expected sampling mass; repeated draws are not independent data",
+                site_policy="uniform_windows_without_replacement",
+                interpretation="Dataset proportions; each window appears once per training epoch",
             )
         if check_batch:
             indices = [0]

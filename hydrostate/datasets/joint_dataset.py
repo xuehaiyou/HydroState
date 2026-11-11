@@ -1,4 +1,4 @@
-"""Joint product/site loading with immutable source contracts and group-balanced sampling."""
+"""Joint product/site loading with immutable source contracts and uniform epoch sampling."""
 
 import json
 
@@ -27,14 +27,10 @@ class JointRetrievalDataset(Dataset):
         split,
         data_root=None,
         training=False,
-        site_fraction=0.5,
         **kwargs,
     ):
-        if not 0 < site_fraction < 1:
-            raise ValueError("site_fraction must be between zero and one")
         if kwargs.get("label_specs") or kwargs.get("label_packs"):
             raise ValueError("Joint station training currently supports the built-in tasks only")
-        self.site_fraction = site_fraction
         self.manifest, self.split = str(manifest), split
         self.site_root = active_release(site_split_root)
         report = json.loads((self.site_root / "split_report.json").read_text())
@@ -215,21 +211,5 @@ class JointRetrievalDataset(Dataset):
         return report
 
     def sampling_weights(self):
-        weights = torch.zeros(len(self), dtype=torch.double)
-        groups = self.product.table.sampling_group
-        for _, indices in groups.groupby(groups).groups.items():
-            weights[list(indices)] = (1 - self.site_fraction) / groups.nunique() / len(indices)
-        sites = pd.concat([d.table for d in self.sites], ignore_index=True)
-        # Balance tasks, then spatial groups, then dates. A frequency bin represented
-        # by one group must not gain the mass of hundreds of independent groups.
-        tasks = [name for name in ("sm", "et") if sites[f"valid_{name}"].gt(0).any()]
-        for name in tasks:
-            rows = sites[sites[f"valid_{name}"].gt(0)]
-            counts = rows.groupby("spatial_group_id").spatial_group_id.transform("size")
-            mass = self.site_fraction / len(tasks) / rows.spatial_group_id.nunique()
-            weights[torch.tensor(rows.index.to_numpy()) + len(self.product)] += torch.tensor(
-                (mass / counts).to_numpy(), dtype=torch.double
-            )
-        if not torch.isfinite(weights).all() or (weights <= 0).any():
-            raise ValueError("Invalid joint sampling mass")
-        return weights
+        """Report uniform per-window mass; training traverses each window once."""
+        return torch.full((len(self),), 1 / len(self), dtype=torch.double)

@@ -3,6 +3,7 @@
 import argparse
 import json
 import time
+from functools import partial
 from pathlib import Path
 
 import torch
@@ -17,6 +18,7 @@ from hydrostate.data.gee.contracts import atomic_json
 from hydrostate.data.site.training_smoke import representative_indices
 from hydrostate.datasets.collate import hydro_collate
 from hydrostate.experiments.gpu_memory import CudaMemoryMeter
+from hydrostate.models.olmoearth_encoder import _broadcast_sdpa
 from hydrostate.registry import DATASETS, MODELS
 
 
@@ -40,10 +42,14 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2):
     dataset = DATASETS.build(dict(cfg.train_dataloader.dataset))
     representative = representative_indices(dataset)
     generator = torch.Generator().manual_seed(cfg.randomness.seed)
-    indices = torch.multinomial(dataset.sampling_weights(), batch_size * steps,
-                                replacement=True, generator=generator).tolist()
-    # Include every available product target and site support, in addition to random draws.
-    indices[:min(len(indices), len(representative))] = representative[:len(indices)]
+    required = batch_size * steps
+    if required > len(dataset):
+        raise ValueError("Probe exceeds the unique training windows")
+    chosen = list(dict.fromkeys(representative))
+    selected = set(chosen)
+    chosen.extend(i for i in torch.randperm(len(dataset), generator=generator).tolist()
+                  if i not in selected)
+    indices = chosen[:required]
     loader = DataLoader(dataset, batch_size=batch_size, sampler=indices, num_workers=workers,
                         pin_memory=True, collate_fn=hydro_collate)
     model = MODELS.build(cfg.model).cuda().train()
@@ -57,6 +63,11 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2):
                   "not model accuracy or a reusable checkpoint", train_samples=len(dataset),
                   sample_ids=[dataset.product.table.iloc[i].sample_id if i < len(dataset.product)
                               else f"joint_index:{i}" for i in indices])
+    attention = [block.attn for block in model.encoder.backbone.model.blocks]
+    report["gradient_checkpointing"] = cfg.model.encoder.gradient_checkpointing
+    report["broadcast_attention_blocks"] = sum(
+        isinstance(layer.sdpa, partial) and layer.sdpa.func is _broadcast_sdpa
+        for layer in attention)
     memory = CudaMemoryMeter()
     try:
         iterator = iter(loader)

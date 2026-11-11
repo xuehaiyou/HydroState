@@ -227,7 +227,7 @@ def test_joint_config_binds_statistics_and_checkpoint_score(joint):
         assert independent[key] == conditional[key]
 
 
-def test_long_station_series_does_not_gain_sampling_mass():
+def test_each_window_has_equal_mass_without_source_quota():
     class Table:
         def __init__(self, table):
             self.table = table
@@ -236,7 +236,6 @@ def test_long_station_series_does_not_gain_sampling_mass():
             return len(self.table)
 
     dataset = object.__new__(JointRetrievalDataset)
-    dataset.site_fraction = 0.5
     dataset.product = Table(pd.DataFrame(dict(sampling_group=[0, 0, 1])))
     dataset.sites = [
         Table(
@@ -254,9 +253,8 @@ def test_long_station_series_does_not_gain_sampling_mass():
     ]
     dataset.offsets = [0, 3, 9]
     weights = dataset.sampling_weights()
-    assert weights[:3].sum() == pytest.approx(0.5)
-    assert weights[3:7].sum() == pytest.approx(weights[7])
-    assert weights[3:8].sum() == pytest.approx(weights[8])
+    torch.testing.assert_close(weights, torch.full((9,), 1 / 9, dtype=torch.double))
+    assert weights[:3].sum() == pytest.approx(1 / 3)
 
 
 def test_station_priority_scales_loss_without_changing_valid_count(joint):
@@ -282,11 +280,10 @@ def test_station_priority_scales_loss_without_changing_valid_count(joint):
     assert cfg.model.site_supervision.loss_weights == dict(site_sm=2, site_et=2)
 
 
-def test_rare_frequency_and_extra_dates_do_not_amplify_spatial_group_mass():
+def test_uniform_epoch_visits_every_window_once():
     from types import SimpleNamespace
 
     dataset = object.__new__(JointRetrievalDataset)
-    dataset.site_fraction = 0.5
     dataset.product = type(
         "Products",
         (),
@@ -304,9 +301,16 @@ def test_rare_frequency_and_extra_dates_do_not_amplify_spatial_group_mass():
     dataset.offsets = [0, 2, 16]
     weights = dataset.sampling_weights()
     assert weights.sum() == pytest.approx(1)
-    assert weights[2] == pytest.approx(1 / 6)
-    assert weights[3:8].sum() == pytest.approx(1 / 6)
-    assert weights[8:].sum() == pytest.approx(1 / 6)
+    torch.testing.assert_close(weights, torch.full((16,), 1 / 16, dtype=torch.double))
+    from mmengine.dataset import DefaultSampler
+    cfg = Config.fromfile("configs/hydrostate_joint.py")
+    assert cfg.train_dataloader.sampler.type == "DefaultSampler"
+    sampler = DefaultSampler(dataset, shuffle=True, seed=3407, round_up=False)
+    first = list(sampler)
+    sampler.set_epoch(1)
+    second = list(sampler)
+    assert sorted(first) == sorted(second) == list(range(16))
+    assert first != second
 
 
 def test_station_priority_score_and_equal_group_report(joint):

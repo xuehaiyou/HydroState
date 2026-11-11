@@ -88,7 +88,12 @@ class CoSAStateFusion(nn.Module):
 
     def forward(self, prepared, bounds):
         levels, quality, valid = prepared
-        pooled = [self.pooler(value, mask, times, bounds, quality)
-                  for value, mask, times in levels]
-        value = self.compress(torch.cat(pooled, dim=1)) + quality
+        depth, batch = len(levels), quality.shape[0]
+        values, masks, times = (torch.cat([level[i] for level in levels], dim=0)
+                               for i in range(3))
+        pooled = self.pooler(values, masks, times, bounds.repeat(depth, 1),
+                             quality.repeat(depth, 1, 1, 1)).reshape(
+                                 depth, batch, self.out_channels, *quality.shape[-2:])
+        pooled = pooled.permute(1, 0, 2, 3, 4).flatten(1, 2)
+        value = self.compress(pooled) + quality
         return self.spatial(F.gelu(value), valid), valid
