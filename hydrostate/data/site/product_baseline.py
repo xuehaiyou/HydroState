@@ -35,14 +35,18 @@ def observation_metadata(path):
     return None
 
 
-def observations(release, split="validation"):
+def observations(release, split="validation", limit=None):
     """Stable observation keys preserve co-located sensors and packed Zarr row identity."""
     release = Path(release)
     definitions = json.loads((release / "datasets.json").read_text())["datasets"]
     for cohort, spec in enumerate(definitions):
         root = (release / spec["data_root"]).resolve()
         table = pd.read_parquet(release / spec["manifest"])
-        for row in table[table.split.eq(split)].to_dict("records"):
+        table = table[table.split.eq(split)]
+        if limit is not None:
+            table = table[table.target_time.ge("2017") & table.target_time.lt("2025")]
+            table = table.drop_duplicates("spatial_group_id").head(limit)
+        for row in table.to_dict("records"):
             path = root / row["label_path"]
             labels = zarr.open_group(str(path), mode="r")
             records = observation_metadata(str(path))
@@ -192,14 +196,7 @@ def collect(release, output, project, *, workers=4, limit=None, product_manifest
     ee = initialize(project)
     sm_local = LocalSMAP(product_manifest) if product_manifest else None
     et_local = LocalPML(product_manifest) if product_manifest else None
-    items = list(observations(release))
-    if limit is not None:
-        # Small representative pilot, not a performance/accuracy sample.
-        chosen = []
-        for task in ("sm", "et"):
-            chosen.extend([r for r in items if r["task"] == task
-                           and "2017" <= r["record"]["target_time"] < "2025"][:limit])
-        items = chosen
+    items = list(observations(release, limit=limit))
     rows, failures = [], []
     (output / "rows").mkdir(exist_ok=True)
 
