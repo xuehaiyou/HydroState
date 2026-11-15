@@ -11,6 +11,7 @@
 | [DATA_SCHEMA](DATA_SCHEMA.md) | 数据契约、分片和数据发布约定 |
 | [MTLORA](MTLORA.md) | MTLoRA、shared-LoRA、全量微调及冻结策略 |
 | [COSA](COSA.md) | shared-LoRA 前端、共享状态、Q–K Router 及 B/C 消融 |
+| [ADAPTERFUSION](ADAPTERFUSION.md) | 冻结 shared-LoRA 专家、官方注意力融合及实验 D |
 | [UNET](UNET.md) | 随机初始化 U-Net 对照、输入、监督与运行入口 |
 | [REPOSITORY_STRUCTURE](REPOSITORY_STRUCTURE.md) | 目录职责、依赖方向和历史代码边界 |
 | [IMPLEMENTATION_STATUS](IMPLEMENTATION_STATUS.md) | 已验证内容和未完成事项 |
