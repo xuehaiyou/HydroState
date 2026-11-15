@@ -194,10 +194,16 @@ class MTLoRAFusionDecoder(nn.Module):
         self.refine = nn.Conv2d(channels, channels, 3, padding=1)
 
     def forward(self, levels):
+        return self.decode_spatial(self.fuse_levels(levels))
+
+    def fuse_levels(self, levels):
+        """Expose the unchanged low-resolution expert for optional composition."""
         if len(levels) != len(self.projections) or any(x.shape != levels[0].shape for x in levels):
             raise ValueError("Fusion requires equal-grid depth features")
         value = self.compress(torch.cat([p(x) for p, x in zip(self.projections, levels)], dim=1))
-        value = value + self.residual(value)
+        return value + self.residual(value)
+
+    def decode_spatial(self, value):
         value = F.interpolate(
             value, scale_factor=self.scale_factor, mode="bilinear", align_corners=False
         )

@@ -1,5 +1,6 @@
 """Model components."""
 
+from .adapterfusion import AdapterFusionHydroStateModel
 from .composite_quality import CompositeQualityFusion
 from .cosa import CoSAHydroStateModel, CoSASharedLoRAEncoder, CoSAStateFusion
 from .data_preprocessor import HydroDataPreprocessor
@@ -24,6 +25,7 @@ from .temporal_model import TemporalHydroStateModel, TemporalOlmoEarthEncoder
 from .unet import UNetDecoder, UNetEncoder, UNetHydroStateModel
 
 __all__ = [
+    "AdapterFusionHydroStateModel",
     "AuxiliaryInputFusion",
     "CompositeQualityFusion",
     "CoSAHydroStateModel",
