@@ -55,7 +55,8 @@ def validate(config, output):
     assert all(p.grad is None for n, p in model.named_parameters() if n not in trainable)
     assert not model.encoder.training and not model.decoders.training
     assert any(f.gamma.item() != 0 for f in model.fusions.values())
-    atomic_json(Path(output), dict(status='passed', samples=len(indices),
+    atomic_json(Path(output), dict(status='passed', candidate_samples=len(indices),
+                tested_samples=min(len(indices), len(batches) * 4),
                 baseline_max_absolute_difference=max(differences),
                 trainable_parameters=sum(p.numel() for p in trainable.values()),
                 total_parameters=sum(p.numel() for p in model.parameters()),
