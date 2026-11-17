@@ -3,11 +3,48 @@
 import copy
 
 import torch
+from mmengine.config import Config
 from test_mtlora import config, tiny  # noqa: F401 -- shared tiny FM fixture
 from test_multilevel_temporal_model import raw_inputs
 
 from hydrostate.models.adapterfusion.fusion import ResidualAdapterFusion
 from hydrostate.registry import MODELS
+
+
+def test_joint_experts_preserve_lora_policy_and_receive_gradients(tmp_path):
+    cfg = config(tmp_path).model
+    cfg.encoder.private_rank = 0
+    baseline = MODELS.build(copy.deepcopy(cfg))
+    policy = {n: p.requires_grad for n, p in baseline.named_parameters()}
+    cfg.update(type='AdapterFusionHydroStateModel', baseline_checkpoint=None,
+               freeze_baseline=False)
+    model = MODELS.build(cfg).train()
+    assert model.queries.training and model.decoders.training and model.fusions.training
+    for name, parameter in model.named_parameters():
+        assert parameter.requires_grad == (True if name.startswith('fusions.') else policy[name])
+    x = raw_inputs(model.tasks)
+    x['target_time']['soil_moisture'] += 86400
+    for fusion in model.fusions.values():
+        fusion.gamma.data.fill_(0.1)
+    sum(v.square().mean() for v in model(x).values()).backward()
+    for module in [model.encoder, model.queries, model.decoders, model.heads, model.fusions]:
+        assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in module.parameters())
+    for name, parameter in model.named_parameters():
+        if not parameter.requires_grad:
+            assert parameter.grad is None
+    embedding = model.encoder.backbone.model.patch_embeddings
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in embedding.parameters())
+    assert all(f.attention.value.weight.grad.abs().sum() > 0 for f in model.fusions.values())
+    model.eval()
+    assert not model.fusions.training and not model.queries.training
+
+
+def test_fresh_fusion_config_does_not_load_task_checkpoint():
+    cfg = Config.fromfile('configs/hydrostate_joint_adapterfusion_scratch.py')
+    assert cfg.model.baseline_checkpoint is None and not cfg.model.freeze_baseline
+    assert cfg.model.encoder.private_rank == 0
+    assert cfg.model.encoder.gradient_checkpointing is False
+    assert cfg.train_cfg.max_epochs == 25
 
 
 def test_masked_experts_and_empty_support():

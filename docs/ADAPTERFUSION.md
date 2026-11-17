@@ -1,5 +1,21 @@
 # 实验 D：冻结 shared-LoRA 专家与 AdapterFusion
 
+## 实验 E：从初始任务权重联合训练
+
+配置：`configs/hydrostate_joint_adapterfusion_scratch.py`。保留 OlmoEarth 预训练初始化，
+不加载 A/D 任务 checkpoint；`freeze_baseline=False` 解除 D 的专家冻结和 no-grad 路径。
+仍使用 shared-LoRA 参数策略：共享 LoRA、参与输入的原生 patch embedding、LayerNorm、
+时间查询、三深度融合、辅助输入融合、空间解码器、输出头、任务损失权重，以及官方
+AdapterFusion 和零初始化 gamma 均参与联合训练。其余 FM 权重保持冻结；不是全随机 FM
+或全量微调。保留原有 FM eval 模式抑制随机观测丢弃，eval 不阻断梯度。
+
+沿用 A 的产品和站点监督、数据划分、25 epoch、AdamW 1e-4、1000 iteration warmup，
+不启用 activation checkpointing。运行配置绑定实际 micro-batch 和梯度累积。
+E 与 A 比较联合融合的作用；D 则检验固定专家之后追加融合的作用，二者训练预算不同。
+E 是用户确认的“从头”含义：任务模块新初始化，FM 仍来自预训练。
+
+## 实验 D 的固定专家设置
+
 配置：`configs/hydrostate_joint_adapterfusion.py`。
 
 以产品＋站点联合训练的 shared-LoRA 固定最佳快照初始化，严格加载所有旧权重，
