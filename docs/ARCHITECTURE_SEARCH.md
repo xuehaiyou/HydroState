@@ -30,6 +30,14 @@
 移植前固定 SHA、许可证与来源，保留核心方法，记录时序/空间适配差异。
 初始化统一为 OlmoEarth 预训练权重加新任务模块，不加载全量 A/B/C checkpoint 做少样本实验。
 
+30% 复验使用同一 `configure_search` 配置入口，显式传入
+`train_fraction=.3, epochs=12, seed=<配对种子>`。先用
+`tools/experiments/prepare_search_statistics.py --fraction .3` 对嵌套训练清单计算
+`stats_30`（其他必要参数沿用同一数据定义），入口核验成功标记的清单路径和比例。
+开发验证清单保持不变；不同架构使用相同种子组合，不能复用 `stats_10` 或
+从 10% 任务 checkpoint 继续训练来冒充独立的 30% 复验。
+首轮启动器仍仅提交 10% 筛选；此配置能力不表示 30% 任务已提交或完成真实数据验证。
+
 ## CGC 候选的实现边界
 
 入口 `configs/hydrostate_joint_cgc.py` 继承联合监督 CoSA，仅替换路由模块。
