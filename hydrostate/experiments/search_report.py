@@ -56,7 +56,8 @@ def summarize(root):
         contract = identity
         result = best_validation(directory / 'work')
         if result is not None:
-            result['finished_validation_budget'] = result['completed_validation_epoch'] >= 6
+            result['finished_validation_budget'] = (
+                result['completed_validation_epoch'] >= cfg.train_cfg.max_epochs)
         results[variant] = result
     baseline = results['A']
     for name, result in results.items():
