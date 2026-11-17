@@ -6,6 +6,7 @@ from torch import nn
 from hydrostate.registry import MODELS
 
 from ..hydrostate_model import HydroStateModel
+from ..mlore.routing import MLoRERouter
 from ..retrieval_model import RetrievalModelMixin
 from .branches import SpatialReadout, StateExpert
 from .cgc import CGCRouter
@@ -48,9 +49,11 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
             name: SpatialReadout(channels) for name in self.expert_groups})
         routing = dict(router or {})
         kind = routing.pop("type", "StateRouter")
-        if kind not in ("StateRouter", "CGCRouter"):
+        router_classes = {"StateRouter": StateRouter, "CGCRouter": CGCRouter,
+                          "MLoRERouter": MLoRERouter}
+        if kind not in router_classes:
             raise ValueError(f"Unknown expert router: {kind}")
-        self.router = {"StateRouter": StateRouter, "CGCRouter": CGCRouter}[kind](
+        self.router = router_classes[kind](
             self.expert_groups, state_channels=self.decoder.out_channels,
             channels=channels, **routing)
 

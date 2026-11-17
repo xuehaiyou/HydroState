@@ -64,3 +64,4 @@ select = ["E", "F", "I", "UP"]
 
 [tool.setuptools.package-data]
 "hydrostate.models.adapterfusion.vendor" = ["LICENSE"]
+"hydrostate.models.mlore" = ["PROVENANCE.md"]

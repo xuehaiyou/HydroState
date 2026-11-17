@@ -46,3 +46,13 @@
 
 与 B 比较时仅专家组合机制改变，但新增共享专家带来容量和计算增加，必须同时报告
 参数量及吞吐，不能直接把所有收益归因于路由。物理输出约束、时序查询和尺度监督不变。
+
+## MLoRE 模块候选
+
+入口 `configs/hydrostate_joint_mlore.py`。复用官方 `LoraBlock`、`SpatialAtt`、
+`MOEBlock` 原始类实现，在同一 CoSA 私有特征上应用一层模块，保留低秩共享专家、
+专属低秩卷积、通用卷积和带噪声 top-k 路由。未引入原论文的整套 ViT 和四深度解码流程。
+筛选配置为 4 个专家、top-2；原实现的全部专家仍参与计算，不能宣称稀疏执行加速。
+详细来源、许可证和改动边界见
+[MLoRE provenance](../hydrostate/models/mlore/PROVENANCE.md)。
+与 B/CGC 一样从 FM 预训练权重出发，不加载历史任务 checkpoint。
