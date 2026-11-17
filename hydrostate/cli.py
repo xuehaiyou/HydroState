@@ -105,7 +105,8 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
             fusion = cfg.model.get("input_fusion") or {}
             if selected_inputs != set(fusion.get("inputs", {})):
                 raise ValueError("Selected auxiliary inputs must match model.input_fusion.inputs")
-        actual = training_fingerprint(pd.read_parquet(dataset.manifest), contract)
+        manifest = loaded_joint.manifest if joint else dataset.manifest
+        actual = training_fingerprint(pd.read_parquet(manifest), contract)
         if actual != statistics["training_fingerprint"]:
             raise ValueError("Training manifest differs from frozen target statistics")
     cfg.model.target_statistics = statistics

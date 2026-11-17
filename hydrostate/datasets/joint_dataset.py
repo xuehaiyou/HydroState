@@ -27,6 +27,9 @@ class JointRetrievalDataset(Dataset):
         split,
         data_root=None,
         training=False,
+        selection_root=None,
+        train_fraction=0.1,
+        validation_fraction=0.2,
         **kwargs,
     ):
         if kwargs.get("label_specs") or kwargs.get("label_packs"):
@@ -160,6 +163,10 @@ class JointRetrievalDataset(Dataset):
         for component in self.components:
             self.offsets.append(self.offsets[-1] + len(component))
         self.metainfo = {}
+        self.training_manifests = None
+        if selection_root is not None:
+            from .joint_selection import apply_selection
+            apply_selection(self, selection_root, train_fraction, validation_fraction)
 
     def __len__(self):
         return self.offsets[-1]
@@ -200,8 +207,10 @@ class JointRetrievalDataset(Dataset):
             self.sites
         ):
             raise ValueError("Joint training requires matching cohort statistics")
-        for site, part in zip(self.sites, report["cohorts"]):
-            table = pd.read_parquet(site.manifest)
+        for index, (site, part) in enumerate(zip(self.sites, report["cohorts"])):
+            manifest = (self.training_manifests[index + 1] if self.training_manifests
+                        else site.manifest)
+            table = pd.read_parquet(manifest)
             digest = training_fingerprint(table, site.data_contract)
             if (
                 digest != part["training_fingerprint"]
