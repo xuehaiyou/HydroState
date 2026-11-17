@@ -8,6 +8,7 @@ from hydrostate.registry import MODELS
 from ..hydrostate_model import HydroStateModel
 from ..retrieval_model import RetrievalModelMixin
 from .branches import SpatialReadout, StateExpert
+from .cgc import CGCRouter
 from .encoder import CoSASharedLoRAEncoder
 from .routing import StateRouter
 from .state import CoSAStateFusion
@@ -45,9 +46,13 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
             name: StateExpert(self.decoder.out_channels, channels) for name in self.expert_groups})
         self.readouts = nn.ModuleDict({
             name: SpatialReadout(channels) for name in self.expert_groups})
-        self.router = StateRouter(
+        routing = dict(router or {})
+        kind = routing.pop("type", "StateRouter")
+        if kind not in ("StateRouter", "CGCRouter"):
+            raise ValueError(f"Unknown expert router: {kind}")
+        self.router = {"StateRouter": StateRouter, "CGCRouter": CGCRouter}[kind](
             self.expert_groups, state_channels=self.decoder.out_channels,
-            channels=channels, **dict(router or {}))
+            channels=channels, **routing)
 
     def _forward(self, inputs):
         if set(inputs.get("target_time", {})) != set(self.tasks):

@@ -50,9 +50,11 @@ def test_configs_only_switch_interaction_and_keep_supervision_budget():
     assert original.model.encoder.get("use_landsat_toa_adapter", True)
 
 
-@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("enabled", [False, True, "cgc"])
 def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path, enabled):
     cfg = config(tmp_path, enabled, checkpoint=True)
+    if enabled == "cgc":
+        cfg.model.router = dict(type="CGCRouter", num_shared=2)
     cfg.model.site_supervision = dict(
         statistics=dict(version="site_training_statistics_v1", split="train", ddof=0,
                         training_fingerprint="a" * 64, observations={

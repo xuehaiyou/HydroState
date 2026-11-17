@@ -29,3 +29,20 @@
 代码来源：MLoRE 使用 YuqiYang213/MLoRE，CGC 参考 median-research-group/LibMTL；
 移植前固定 SHA、许可证与来源，保留核心方法，记录时序/空间适配差异。
 初始化统一为 OlmoEarth 预训练权重加新任务模块，不加载全量 A/B/C checkpoint 做少样本实验。
+
+## CGC 候选的实现边界
+
+入口 `configs/hydrostate_joint_cgc.py` 继承联合监督 CoSA，仅替换路由模块。
+原来的 Coverage/SM/ET 私有空间专家保持不变，新增两个共享空间专家；每个分支只混合
+共享专家与自身私有专家，其他任务的私有专家不直接接收本分支损失。
+门控采用 softmax，允许共享专家接收各任务梯度；它不保证消除负迁移。
+
+方法依据为 LibMTL 的 [CGC 实现](https://github.com/median-research-group/LibMTL/blob/4336804847eaa5e0b924b743d76beec7ac3fdc97/LibMTL/architecture/CGC.py)，
+核对版本 `4336804847eaa5e0b924b743d76beec7ac3fdc97`。该实现是 LibMTL 作者对 PLE
+中 CGC 的实现，不是 PLE 原作者代码。本项目保留其共享/私有连接和门控加权定义，
+复用项目现有空间专家，使用有效空间均值状态驱动 gate，替代原实现展平输入。
+这是一层空间 CGC 适配，不称为完整多层 PLE 复现，也不称为任务 Q–K 可扩展 Router。
+新增任务需新增私有专家、gate 和输出头；其少样本迁移能力仍需独立验证。
+
+与 B 比较时仅专家组合机制改变，但新增共享专家带来容量和计算增加，必须同时报告
+参数量及吞吐，不能直接把所有收益归因于路由。物理输出约束、时序查询和尺度监督不变。
