@@ -7,11 +7,11 @@ import zarr
 from mmengine.config import Config
 
 from hydrostate.cli import configure_target_statistics
-from hydrostate.normalization import load_target_statistics, training_fingerprint
-from hydrostate.storage import SampleShardWriter
 from hydrostate.legacy.schema import LegacySchema as Schema
-from hydrostate.statistics import RunningMoments
 from hydrostate.legacy.statistics import compute_statistics
+from hydrostate.normalization import load_target_statistics, training_fingerprint
+from hydrostate.statistics import RunningMoments
+from hydrostate.storage import SampleShardWriter
 
 
 def test_population_moments_and_degenerate_labels():
@@ -98,7 +98,8 @@ def test_training_config_freezes_one_statistics_version(target_statistics, tmp_p
     cfg = Config(
         dict(
             model=dict(target_statistics=statistics),
-            train_dataloader=dict(dataset=dict(manifest=str(manifest), split="train")),
+            train_dataloader=dict(dataset=dict(
+                type="HydroStateZarrDataset", manifest=str(manifest), split="train")),
             val_evaluator=dict(type="HydroStateMetric"),
             test_evaluator=dict(type="HydroStateMetric"),
         )
