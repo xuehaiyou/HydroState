@@ -54,3 +54,26 @@ batch 6 的 A 运行成功，但显存未满足 10% 余量，因此尚不采用�
 任务探测 batch 5，并对 A/B/CGC/MLoRE 进行同口径验收；如 batch 5 显存不足则测 batch 4。
 结果存于 `debug_v3`，与前轮输出分开，依赖前轮 afterok，提交时没有重复计算作业。
 完整测试集仍未读取；新模块只有 CPU 验证证据，尚未声称 GPU 验收或精度通过。
+
+## 四模型 GPU 验收与筛选提交完成
+
+`4462451` COMPLETED / 0:0，耗时 8 分 35 秒。A/B/CGC/MLoRE 的 batch 5
+基准和完整 smoke 均通过，全部七项产品任务及站点 SM/ET 均有实际有效监督，
+有限梯度、权重更新、开发验证、checkpoint 重载通过。仍不构成精度优势证据。
+
+自动提交任务 `4462460` COMPLETED / 0:0，耗时 28 秒；控制代码 `9fc7bde`。
+以下训练均使用科学实现版本 `0fd57eba8a11ea8245d5e5ad9351fdbfa3e99bd2`，
+batch 5、梯度累积 1、6 epoch、每 2 epoch 开发验证一次、固定 4528 训练窗口。
+
+| 模型 | 作业 | 申请时限（含 10% 余量） | 顺序依赖 |
+|---|---|---|---|
+| Shared-LoRA A | 4462483 | 04:06:00 | 无 |
+| CoSA independent B | 4462484 | 03:04:00 | afterok A |
+| CGC | 4462485 | 03:05:00 | afterok B |
+| MLoRE block | 4462486 | 03:08:00 | afterok CGC |
+
+均为 l40s/gpu、单卡、4 CPU、48 GB 主存；一次只运行这一组中的一个模型。
+时限来自各自实测吞吐及 smoke 运行开销，加 10% 后向上取整到分钟。
+首次核实 A 为 PENDING/Priority，其余为 PENDING/Dependency，没有声称已经训练。
+配置、脚本和提交回执在实验根目录 `screen_10/<模型名>/`，汇总为 `screen_10/plan.json`。
+训练重新从 FM 预训练权重和新任务参数出发，不加载短测 checkpoint；不自动运行封存测试集。
