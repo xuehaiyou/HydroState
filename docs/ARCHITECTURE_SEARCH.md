@@ -56,3 +56,12 @@
 详细来源、许可证和改动边界见
 [MLoRE provenance](../hydrostate/models/mlore/PROVENANCE.md)。
 与 B/CGC 一样从 FM 预训练权重出发，不加载历史任务 checkpoint。
+
+## 读取首轮结果
+
+`python tools/experiments/summarize_search.py <实验目录>/screen_10`
+读取四模型标量日志，选择各自最高 joint_score 对应的单个 epoch，同时报告全部任务的
+R²、RMSE、MAE、Bias、有效数目及 checkpoint 是否存在。尚无验证返回空结果，
+尚未完成 6 epoch 验证明确标为 provisional，不能以短测日志替代正式结果。
+汇总先核对四模型的数据、统计量、损失权重和训练预算；有效数目不一致时不给出
+相对 RMSE 改善率。即使数目一致，也不替代最终完整验证集上的样本身份和误差审计。
