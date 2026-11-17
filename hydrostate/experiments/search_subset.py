@@ -109,6 +109,8 @@ def prepare(config, output):
                 group, stratum = 'physical_group_id', 'sampling_group'
             subsets = select_nested(table, fractions, seed=42, group_column=group,
                                     stratum_column=stratum, label_columns=labels,
+                                    minimum_label_windows=(len(table) if split == 'validation'
+                                        and index > 0 and table.valid_et.gt(0).any() else 64),
                                     preserve_groups=index > 0)
             part = dict(full=describe_subset(table, group_column=group,
                                             stratum_column=stratum, label_columns=labels),
