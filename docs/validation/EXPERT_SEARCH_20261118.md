@@ -171,3 +171,19 @@ scontrol 已确认四者均无依赖、排除节点生效；沿用原 job ID，�
 已核实旧任务 CANCELLED 后按原配置补交 **4466456**，无依赖、单 GPU，
 双分区候选且排除 SPG-3-2；旧回执保存为 `submission_cancelled_4466291.json`。
 其余七组不变，本轮仍保留八个架构。
+
+## 完整 MLoRE batch=2 重试
+
+l40s 重试 4466293 在第 1 轮约第 40 批后 OOM，单进程占 44.23 GiB，
+allocated 34.99 GiB、reserved unused 8.72 GiB；与此前多进程争抢不同，
+本次为模型自身显存压力，短验收未覆盖后续高峰。
+用户同意降低 batch 后，补交 **4467334**：micro-batch 5→2、accumulation 2→5，
+有效 batch=10；训练/验证/开发集重载 batch 均为 2；LinearLR warmup 200→500
+微批次，维持 100 次优化器更新。六轮、验证间隔、选模规则、模型与数据均不变。
+MLoRE 的 BatchNorm 使用更小微批统计，梯度累积不能保证与 batch=5 完全等价。
+
+独立输出：`MLoRE_complete/retry_batch2/`，配置、plan.json、submission.json 均保存；
+原失败输出保留。无 checkpoint 可续接，从相同初始化方案重新开始。
+复用已通过的 batch=2 实测速度、原 smoke 固定开销及既有耗时校准，增加 10%，
+申请 04:50:00；这不是声称完整训练显存已获验证，仍需检查新运行。
+双分区候选 c_foss_gpu,l40s，排除 SPG-3-2，无任务依赖，单 GPU、4 CPU。
