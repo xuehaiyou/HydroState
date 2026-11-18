@@ -21,7 +21,8 @@ class MultiLevelTemporalOlmoEarthEncoder(TemporalOlmoEarthEncoder):
                 or tuple(sorted(set(self.out_indices))) != self.out_indices
                 or self.out_indices[0] < 0
                 or self.out_indices[-1] != len(self.backbone.model.blocks) - 1):
-            raise ValueError("Select num_levels increasing depths ending at the final encoder block")
+            raise ValueError(
+                "Select num_levels increasing depths ending at the final encoder block")
 
     def forward(self, inputs):
         return self.forward_levels(inputs, self.out_indices)
