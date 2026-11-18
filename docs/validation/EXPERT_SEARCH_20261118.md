@@ -155,3 +155,9 @@ CUDA_VISIBLE_DEVICES，也不能只强行指定一个看起来空闲的 UUID。
 规避方案：四个失败模型保持原科学配置、batch 和有效 batch，仅在 l40s 独立补交；
 四个正常运行模型不动。提交器增加 --variants，限定补交范围。
 原失败任务日志及回执保留，禁止再次用原 job 的状态冒充成功。
+
+修复提交器 release：`7fbbab3`。补交作业（l40s、单卡、无依赖）：
+CGC **4466291**，CoSA Router **4466292**，完整 MLoRE **4466293**，PLE **4466294**。
+各模型旧回执另存为 `submission_failed_gpu_<old_job>.json`；旧日志保留。
+本次只修正运行位置及重试范围，模型仍为 bc744bd，无更改科学配置。
+HPC skill Slurm 参考已记录节点隔离异常与诊断边界。
