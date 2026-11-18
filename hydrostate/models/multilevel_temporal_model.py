@@ -14,14 +14,14 @@ from .temporal_model import TemporalHydroStateModel, TemporalOlmoEarthEncoder
 class MultiLevelTemporalOlmoEarthEncoder(TemporalOlmoEarthEncoder):
     """Extract three depths in one encoder pass without pooling acquisition times."""
 
-    def __init__(self, out_indices=(3, 7, 11), **kwargs):
+    def __init__(self, out_indices=(3, 7, 11), num_levels=3, **kwargs):
         super().__init__(**kwargs)
         self.out_indices = tuple(out_indices)
-        if (len(self.out_indices) != 3
+        if (num_levels < 1 or len(self.out_indices) != num_levels
                 or tuple(sorted(set(self.out_indices))) != self.out_indices
                 or self.out_indices[0] < 0
                 or self.out_indices[-1] != len(self.backbone.model.blocks) - 1):
-            raise ValueError("Select three increasing depths ending at the final encoder block")
+            raise ValueError("Select num_levels increasing depths ending at the final encoder block")
 
     def forward(self, inputs):
         return self.forward_levels(inputs, self.out_indices)

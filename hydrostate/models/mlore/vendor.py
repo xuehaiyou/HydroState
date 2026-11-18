@@ -131,3 +131,18 @@ class MOEBlock(nn.Module):
         out = self.conv3[task](out)
         return out, route_feat, route_1
 
+
+from torch.nn.init import trunc_normal_
+
+class ConvHead(nn.Module):
+    def __init__(self, in_channels, num_classes):
+        super().__init__()
+
+        self.mt_proj = nn.Sequential(nn.Conv2d(in_channels, in_channels, 3, padding=1), BatchNorm2d(in_channels), nn.GELU())
+        trunc_normal_(self.mt_proj[0].weight, std=0.02)
+
+        self.linear_pred = nn.Conv2d(in_channels, num_classes, kernel_size=1)
+        nn.init.normal(self.linear_pred.bias, mean=0, std=0.02)
+
+    def forward(self, x):
+        return self.linear_pred(self.mt_proj(x))

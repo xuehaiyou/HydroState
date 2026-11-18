@@ -3,11 +3,14 @@
 from .adapterfusion import AdapterFusionHydroStateModel
 from .composite_quality import CompositeQualityFusion
 from .cosa import CoSAHydroStateModel, CoSASharedLoRAEncoder, CoSAStateFusion
+from .cosa.ple import PLEDecoder
 from .data_preprocessor import HydroDataPreprocessor
 from .decoder import SharedUNetDecoder
+from .grouped_experts import GroupedExpertHydroStateModel
 from .heads import RegressionHead
 from .hydrostate_model import HydroStateModel
 from .input_fusion import AuxiliaryInputFusion
+from .mlore.decoder import CompleteMLoREDecoder
 from .mtlora import MTLoRAFusionDecoder, MTLoRAHydroStateModel, MTLoRAOlmoEarthEncoder
 from .multilevel_encoder import MultiLevelOlmoEarthEncoder
 from .multilevel_model import MultiLevelFusionDecoder, MultiLevelHydroStateModel
@@ -25,6 +28,9 @@ from .temporal_model import TemporalHydroStateModel, TemporalOlmoEarthEncoder
 from .unet import UNetDecoder, UNetEncoder, UNetHydroStateModel
 
 __all__ = [
+    "CompleteMLoREDecoder",
+    "GroupedExpertHydroStateModel",
+    "PLEDecoder",
     "AdapterFusionHydroStateModel",
     "AuxiliaryInputFusion",
     "CompositeQualityFusion",

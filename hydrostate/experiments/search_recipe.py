@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def configure_search(cfg, root, *, work_dir, epochs=6, batch_size=4, accumulation=1,
-                     train_fraction=.1, seed=None):
+                     train_fraction=.1, seed=None, station_selection=False):
     root = Path(root)
     if train_fraction not in (.1, .3):
         raise ValueError('Use an audited nested training fraction: 0.1 or 0.3')
@@ -26,6 +26,10 @@ def configure_search(cfg, root, *, work_dir, epochs=6, batch_size=4, accumulatio
         cfg[key].num_workers = 2
     for key in ('val_evaluator', 'test_evaluator'):
         cfg[key].site_statistics = str(stats / 'site_target_stats.json')
+        if station_selection:
+            cfg[key].selection = 'site'
+    if station_selection:
+        cfg.default_hooks.checkpoint.update(save_best='site_score', rule='greater')
     cfg.model.encoder.gradient_checkpointing = False
     cfg.optim_wrapper.accumulative_counts = accumulation
     cfg.train_cfg.update(max_epochs=epochs, val_interval=2 if epochs % 2 == 0 else 1)

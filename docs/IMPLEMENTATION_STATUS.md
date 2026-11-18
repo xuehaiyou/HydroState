@@ -1,9 +1,15 @@
-# 当前实现状态（2026-11-11）
+# 当前实现状态（2026-11-18）
 
 本页记录当前快照；此前逐次追加的记录完整保留在
 [历史实现记录](history/IMPLEMENTATION_STATUS_BEFORE_RETRIEVAL.md)。
 科学与监督规范见 [RETRIEVAL_PIPELINE](RETRIEVAL_PIPELINE.md)，
 执行方式见 [DATA_PREPARATION](DATA_PREPARATION.md)。
+
+2026-11-18 架构清单与最新评价决定见[架构与实验总览](ARCHITECTURE_OVERVIEW.md)：
+站点 SM、ET 为精度评价依据，产品一致性仅作参考。完整 MLoRE、多层 PLE
+及匹配 CGC 已实现，新搜索入口采用仅站点的 `site_score` 选模；相关本地检查已通过。
+AdapterFusion、CoSA Router 与 A/B/原 CGC 一同纳入八组复验，保留已有实验记录。
+真实 GPU 验收与训练提交进度见[本轮记录](validation/EXPERT_SEARCH_20261118.md)。
 
 ## 2026-11-11 校正 ET 3,000 窗口已发布
 

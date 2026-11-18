@@ -25,11 +25,14 @@ class JointHydroStateMetric(BaseMetric):
     default_prefix = None
 
     def __init__(self, target_statistics, site_statistics, tasks, site_score_weight=2 / 3,
-                 comparison_years=None, **kwargs):
+                 comparison_years=None, selection="joint", **kwargs):
         super().__init__(**kwargs)
         if not 0 < site_score_weight < 1:
             raise ValueError("Both observation sources must contribute to model selection")
         self.site_score_weight = site_score_weight
+        if selection not in ("joint", "site"):
+            raise ValueError("Unknown checkpoint selection definition")
+        self.selection = selection
         if comparison_years is not None and (
             len(comparison_years) != 2 or comparison_years[0] > comparison_years[1]
         ):
@@ -80,6 +83,13 @@ class JointHydroStateMetric(BaseMetric):
                                    for key, value in metric.compute_metrics(common).items()})
         weight = self.site_score_weight
         output["joint_score"] = (1 - weight) * scores["product"] + weight * scores["site"]
+        if self.selection == "site":
+            if any(output.get(f"site/{task}_count", 0) <= 0
+                   for task in ("site_sm", "site_et")):
+                raise ValueError("Station selection requires both SM and ET observations")
+            output["site_score"] = -sum(
+                output[f"site/{task}_rmse"] / self.site.task_scales[task]
+                for task in ("site_sm", "site_et")) / 2
         return output
 
     def _group_metrics(self, rows):
@@ -92,7 +102,7 @@ class JointHydroStateMetric(BaseMetric):
         for task in self.site.tasks:
             eligible = [group for group in values if group.get(f"{task}_count", 0) > 0]
             output[f"site/group_macro/{task}_groups"] = len(eligible)
-            for name in ("rmse", "mae", "bias", "r2"):
+            for name in ("rmse", "mae", "bias", "r2", "correlation"):
                 numbers = [group[f"{task}_{name}"] for group in eligible
                            if math.isfinite(group[f"{task}_{name}"])]
                 if numbers:

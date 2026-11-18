@@ -50,7 +50,7 @@ def test_configs_only_switch_interaction_and_keep_supervision_budget():
     assert original.model.encoder.get("use_landsat_toa_adapter", True)
 
 
-@pytest.mark.parametrize("enabled", [False, True, "cgc", "mlore"])
+@pytest.mark.parametrize("enabled", [False, True, "cgc", "mlore", "ple", "mlore_complete"])
 def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path, enabled):
     cfg = config(tmp_path, enabled, checkpoint=True)
     if enabled == "cgc":
@@ -58,6 +58,21 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
     if enabled == "mlore":
         cfg.model.router = dict(type="MLoRERouter", grid_size=3,
                                 ranks=(2, 4), private_rank=2, topk=1)
+    if enabled in ("ple", "mlore_complete"):
+        cfg.model.type = "GroupedExpertHydroStateModel"
+        cfg.model.branches = None
+        cfg.model.router = None
+        if enabled == "ple":
+            cfg.model.decoder = dict(type="PLEDecoder", groups=["coverage", "sm", "et"],
+                temporal=dict(in_channels=32, channels=16, quality_channels=4),
+                widths=(16, 8), tower_channels=8)
+        else:
+            cfg.model.official_heads = True
+            cfg.model.encoder.out_indices = [0, 1, 3, 5]
+            cfg.model.encoder.num_levels = 4
+            cfg.model.decoder = dict(type="CompleteMLoREDecoder", groups=["coverage", "sm", "et"],
+                in_channels=32, channels=8, grid_size=3, ranks=(2, 4), private_rank=2,
+                topk=1, quality_channels=4)
     cfg.model.site_supervision = dict(
         statistics=dict(version="site_training_statistics_v1", split="train", ddof=0,
                         training_fingerprint="a" * 64, observations={
@@ -80,7 +95,8 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
     assert losses["valid_count_site_sm"] == losses["valid_count_site_et"] == 1
     assert losses["valid_count_soil_moisture"] == 1
     (losses["loss_site_sm"] + losses["loss_site_et"]).backward()
-    for task in ("soil_moisture", "et_water", "et_ice", "et_land"):
+    for task in (("sm", "et") if enabled == "mlore_complete" else
+                 ("soil_moisture", "et_water", "et_ice", "et_land")):
         assert any(p.grad is not None and p.grad.abs().sum() > 0
                    for p in model.heads[task].parameters())
     predictions = model.predict(**data)

@@ -94,9 +94,9 @@ def verify_checkpoint_parameters(runner, checkpoint):
     return len(expected)
 
 
-def run(config, output, *, batch_size=2, workers=0, train_steps=8):
+def run(config, output, *, batch_size=2, workers=0, train_steps=8, accumulation=1):
     output = Path(output)
-    if min(batch_size, train_steps) < 1 or workers < 0:
+    if min(batch_size, train_steps, accumulation) < 1 or workers < 0:
         raise ValueError("Positive batch/steps and nonnegative worker count required")
     if (output / "result.json").exists():
         raise FileExistsError("Use a new smoke output directory")
@@ -121,7 +121,7 @@ def run(config, output, *, batch_size=2, workers=0, train_steps=8):
                       persistent_workers=False)
     cfg.work_dir = str(output)
     cfg.train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=1, val_interval=1)
-    cfg.optim_wrapper.accumulative_counts = 1
+    cfg.optim_wrapper.accumulative_counts = accumulation
     cfg.param_scheduler = []
     cfg.default_hooks.logger.interval = 1
     cfg.default_hooks.checkpoint.update(save_optimizer=False, save_param_scheduler=False)
@@ -172,13 +172,17 @@ def run(config, output, *, batch_size=2, workers=0, train_steps=8):
     metrics = runner.test()
     if not math.isfinite(metrics["joint_score"]):
         raise ValueError("Nonfinite joint evaluation score")
+    if cfg.test_evaluator.get("selection") == "site" and not math.isfinite(metrics["site_score"]):
+        raise ValueError("Nonfinite station selection score")
     for task in ("site_sm", "site_et"):
         if metrics.get(f"site/{task}_count", 0) <= 0:
             raise ValueError(f"No valid {task} evaluation labels")
     result = dict(
         status="passed", scope="GPU joint training/validation/checkpoint reload/test smoke only",
         gpu=torch.cuda.get_device_name(), model=cfg.model.type,
-        micro_batch=batch_size, accumulation=1, train_steps=hook.steps,
+        micro_batch=batch_size, accumulation=accumulation, train_steps=hook.steps,
+        total_parameters=sum(p.numel() for p in runner.model.parameters()),
+        trainable_parameters=sum(p.numel() for p in runner.model.parameters() if p.requires_grad),
         changed_task_head_parameters=len(changed), finite_gradient_checks=len(gradient_checks),
         **hook.memory.sample(), checkpoint_parameters_verified=restored,
         valid_supervision_counts=dict(hook.valid_counts),
@@ -200,10 +204,11 @@ def main():
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--train-steps", type=int, default=8)
+    parser.add_argument("--accumulation", type=int, default=1)
     args = parser.parse_args()
     try:
         run(args.config, args.output, batch_size=args.batch_size, workers=args.workers,
-            train_steps=args.train_steps)
+            train_steps=args.train_steps, accumulation=args.accumulation)
     except Exception as error:
         atomic_json(Path(args.output) / "failure.json", dict(
             status="oom" if isinstance(error, torch.cuda.OutOfMemoryError) else "failed",
