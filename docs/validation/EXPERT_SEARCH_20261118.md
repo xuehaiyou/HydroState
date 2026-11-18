@@ -110,3 +110,21 @@ MLoRE 4464731、PLE 4464732 已 COMPLETED/0:0；不重跑已完成验收。
 更新失败不会释放；已接受回执复用同一 job，不重复训练。保留原 A 拒绝记录后补交。
 模型源码与科学配置仍使用 bc744bd，全部八个模型验收已通过，无需重做。
 HPC skill 主文件及 Slurm 参考同步记录此站点限制和可用流程。
+
+修复提交器冻结为 `4fd1797`，本地提交器相关 3 项测试、Ruff、skill 校验通过。
+从登录节点执行一次补交，八组均接受且完成 hold→更新分区→release：
+
+| 架构 | 六轮训练 job |
+|---|---:|
+| A | 4466178 |
+| AdapterFusion | 4466179 |
+| B | 4466180 |
+| 原 CGC | 4466181 |
+| 匹配 CGC | 4466182 |
+| CoSA Router | 4466183 |
+| 完整 MLoRE | 4466184 |
+| PLE | 4466185 |
+
+按表中顺序 afterany 串行执行；每个实验一个作业，候选分区 c_foss_gpu,l40s。
+原 A 拒绝回执保存在 `A/submission_rejected_dual_partition.json`。
+当前各 `submission.json` 保存实际提交命令、job ID、预算和 partition_dispatch=released。
