@@ -138,18 +138,21 @@ def release_partition_candidates(record, job, partitions):
     atomic_json(record, item)
 
 
-def submit_training(root, partitions='l40s'):
+def submit_training(root, partitions='l40s', variants=None):
     if not partitions or set(partitions.split(',')) - {'l40s', 'c_foss_gpu'}:
         raise ValueError('Unsupported GPU partitions')
     root = Path(root).resolve()
     plan = json.loads((root / 'plan.json').read_text())
+    selected = list(plan['variants']) if variants is None else list(variants)
+    if not selected or len(set(selected)) != len(selected) or set(selected) - set(plan['variants']):
+        raise ValueError('Select distinct variants from the frozen plan')
     env = json.loads((root / 'environment.json').read_text())
     env['HYDROSTATE_SLURM_PARTITION'] = partitions
     release = Path(env['HYDROSTATE_CODE_ROOT'])
     if plan['code_commit'] != env['HYDROSTATE_CODE_COMMIT']:
         raise ValueError('Training and acceptance must use the same frozen commit')
     calibration = json.loads((root / 'timing_calibration.json').read_text())
-    for variant in plan['variants']:
+    for variant in selected:
         directory = root / variant
         receipt = json.loads((directory / 'debug/submission.json').read_text())
         job = receipt['job_id']
@@ -201,6 +204,7 @@ def main():
     parser.add_argument('--selection-root')
     parser.add_argument('--variant', choices=tuple(VARIANTS))
     parser.add_argument('--partitions', default='l40s')
+    parser.add_argument('--variants', nargs='+', choices=tuple(VARIANTS))
     args = parser.parse_args()
     if args.stage == 'prepare':
         if not args.selection_root:
@@ -211,4 +215,4 @@ def main():
             parser.error('--variant is required')
         accept(args.root, args.variant)
     else:
-        submit_training(args.root, args.partitions)
+        submit_training(args.root, args.partitions, args.variants)

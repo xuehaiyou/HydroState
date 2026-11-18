@@ -136,3 +136,22 @@ HPC skill 主文件及 Slurm 参考同步记录此站点限制和可用流程。
 这覆盖上文的串行计划；模型之间没有科学或数据依赖，各自输出目录独立。
 提交器同步移除模型之间的 afterany，仅保留提交前逐模型验收检查。
 各任务保留单 GPU 和双分区候选，实际并行数量由可用资源和账号配额决定。
+
+## 并行启动 OOM 诊断与隔离（2026-11-18）
+
+原 CGC 4466181、CoSA Router 4466183、完整 MLoRE 4466184、PLE 4466185
+在 SPG-3-2 启动约 48 秒后失败。错误中四个训练 PID 895383/895438/895427/895437
+互相占用同一 GPU，单进程只用约 2.6–15 GiB 时卡已满，不能归因于 batch 太大。
+CGC 同 batch=5 的独立验收峰值 reserved 30.86 GiB，GPU 总量 44.39 GiB。
+
+只读诊断 4466263：SLURM_JOB_GPUS=3，CUDA_VISIBLE_DEVICES=0，但 nvidia-smi
+可见两张 GPU（UUID 7d799632…、75fd8faf…），默认 CUDA 选择前者。
+4466268/4466273 核实 /proc NVIDIA 设备含 minor 0–9，而 Slurm 节点配置为 8 GPU；
+minor 3 对应 UUID 3fcfd8a2…，显式设该 UUID 后 torch.cuda.device_count()=0。
+这证明分配标识与实际可访问设备不一致；不能安全地将 SLURM_JOB_GPUS 直接改成
+CUDA_VISIBLE_DEVICES，也不能只强行指定一个看起来空闲的 UUID。
+具体系统配置根因仍需集群管理员核实，本项目不改系统 GRES/cgroup 配置。
+
+规避方案：四个失败模型保持原科学配置、batch 和有效 batch，仅在 l40s 独立补交；
+四个正常运行模型不动。提交器增加 --variants，限定补交范围。
+原失败任务日志及回执保留，禁止再次用原 job 的状态冒充成功。
