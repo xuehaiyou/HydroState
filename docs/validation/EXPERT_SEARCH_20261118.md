@@ -161,3 +161,8 @@ CGC **4466291**，CoSA Router **4466292**，完整 MLoRE **4466293**，PLE **446
 各模型旧回执另存为 `submission_failed_gpu_<old_job>.json`；旧日志保留。
 本次只修正运行位置及重试范围，模型仍为 bc744bd，无更改科学配置。
 HPC skill Slurm 参考已记录节点隔离异常与诊断边界。
+
+用户随后授权恢复双分区候选并排除异常节点。已直接更新四个仍 PENDING 的
+4466291–4466294：`Partition=c_foss_gpu,l40s ExcNodeList=SPG-3-2`。
+scontrol 已确认四者均无依赖、排除节点生效；沿用原 job ID，未重复提交。
+这覆盖此前仅 l40s 的排队计划，不改模型、batch 或正在运行的任务。
