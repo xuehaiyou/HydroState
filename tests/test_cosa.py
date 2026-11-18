@@ -79,6 +79,10 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
                             "site_sm": dict(count=10, mean=.2, std=.1),
                             "site_et": dict(count=10, mean=2., std=1.),
                         }), loss_weights=dict(site_sm=2., site_et=2.))
+    # HPC config.dump sorts mapping keys; group identity must not depend on ordering.
+    config_file = tmp_path / "roundtrip.py"
+    cfg.dump(str(config_file))
+    cfg = Config.fromfile(str(config_file))
     model = MODELS.build(cfg.model).train()
     raw = batch()
     for name, value in raw["data_samples"].items():

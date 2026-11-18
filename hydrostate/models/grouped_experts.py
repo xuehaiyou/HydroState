@@ -23,7 +23,7 @@ class GroupedExpertHydroStateModel(RetrievalModelMixin, HydroStateModel):
         assigned = [task for tasks in self.expert_groups.values() for task in tasks]
         if (not self.expert_groups or any(not tasks for tasks in self.expert_groups.values())
                 or len(assigned) != len(set(assigned)) or set(assigned) != set(self.tasks)
-                or tuple(self.expert_groups) != self.decoder.groups):
+                or set(self.expert_groups) != set(self.decoder.groups)):
             raise ValueError('Expert groups must partition outputs and match the decoder')
         if self.input_fusion is not None:
             raise ValueError('Expert decoders own observation-quality fusion')
