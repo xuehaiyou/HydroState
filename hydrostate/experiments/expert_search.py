@@ -124,10 +124,13 @@ def environment_script(release, env, command):
     return '\n'.join([*lines, 'exec ' + shlex.join(command)]) + '\n'
 
 
-def submit_training(root):
+def submit_training(root, partitions='l40s'):
+    if not partitions or set(partitions.split(',')) - {'l40s', 'c_foss_gpu'}:
+        raise ValueError('Unsupported GPU partitions')
     root = Path(root).resolve()
     plan = json.loads((root / 'plan.json').read_text())
     env = json.loads((root / 'environment.json').read_text())
+    env['HYDROSTATE_SLURM_PARTITION'] = partitions
     release = Path(env['HYDROSTATE_CODE_ROOT'])
     if plan['code_commit'] != env['HYDROSTATE_CODE_COMMIT']:
         raise ValueError('Training and acceptance must use the same frozen commit')
@@ -159,7 +162,7 @@ def submit_training(root):
         script.write_text(environment_script(release, env,
             [sys.executable, 'tools/train.py', str(directory / 'config.py')]))
         cmd = ['sbatch', '--parsable', f'--job-name=hs_station_{variant}',
-            '--partition=l40s', '--qos=gpu', '--account=geog_geors', '--nodes=1',
+            f'--partition={partitions}', '--qos=gpu', '--account=geog_geors', '--nodes=1',
             '--ntasks=1', '--gres=gpu:1', '--cpus-per-task=4', '--mem=64G',
             f'--time={budget["walltime"]}', f'--output={directory}/%j.out',
             f'--error={directory}/%j.err']
@@ -168,7 +171,8 @@ def submit_training(root):
             cmd.append(f'--dependency=afterany:{previous}')
         cmd.append(str(script))
         previous = submit_once(directory / 'submission.json', cmd,
-            dict(code_commit=plan['code_commit'], debug_job=job, budget=budget,
+            dict(code_commit=plan['code_commit'], partitions=partitions,
+                 debug_job=job, budget=budget,
                  batch_size=passed['batch_size'], accumulation=passed['accumulation'],
                  epochs=6, selection='site_score'))
         print(variant, previous, flush=True)
@@ -180,6 +184,7 @@ def main():
     parser.add_argument('--root', required=True)
     parser.add_argument('--selection-root')
     parser.add_argument('--variant', choices=tuple(VARIANTS))
+    parser.add_argument('--partitions', default='l40s')
     args = parser.parse_args()
     if args.stage == 'prepare':
         if not args.selection_root:
@@ -190,4 +195,4 @@ def main():
             parser.error('--variant is required')
         accept(args.root, args.variant)
     else:
-        submit_training(args.root)
+        submit_training(args.root, args.partitions)
