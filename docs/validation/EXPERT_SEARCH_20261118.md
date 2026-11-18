@@ -166,3 +166,8 @@ HPC skill Slurm 参考已记录节点隔离异常与诊断边界。
 4466291–4466294：`Partition=c_foss_gpu,l40s ExcNodeList=SPG-3-2`。
 scontrol 已确认四者均无依赖、排除节点生效；沿用原 job ID，未重复提交。
 这覆盖此前仅 l40s 的排队计划，不改模型、batch 或正在运行的任务。
+
+用户先要求去除原 CGC，取消 4466291 已生效；随后决定保留。
+已核实旧任务 CANCELLED 后按原配置补交 **4466456**，无依赖、单 GPU，
+双分区候选且排除 SPG-3-2；旧回执保存为 `submission_cancelled_4466291.json`。
+其余七组不变，本轮仍保留八个架构。
