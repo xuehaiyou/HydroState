@@ -149,7 +149,6 @@ def submit_training(root, partitions='l40s'):
     if plan['code_commit'] != env['HYDROSTATE_CODE_COMMIT']:
         raise ValueError('Training and acceptance must use the same frozen commit')
     calibration = json.loads((root / 'timing_calibration.json').read_text())
-    previous = None
     for variant in plan['variants']:
         directory = root / variant
         receipt = json.loads((directory / 'debug/submission.json').read_text())
@@ -181,20 +180,18 @@ def submit_training(root, partitions='l40s'):
             '--ntasks=1', '--gres=gpu:1', '--cpus-per-task=4', '--mem=64G',
             f'--time={budget["walltime"]}', f'--output={directory}/%j.out',
             f'--error={directory}/%j.err']
-        # A failed independent model must not prevent the other candidates running.
-        if previous:
-            cmd.append(f'--dependency=afterany:{previous}')
+        # Architectures have independent outputs and may train concurrently.
         if ',' in partitions:
             cmd.append('--hold')
         cmd.append(str(script))
-        previous = submit_once(directory / 'submission.json', cmd,
+        job_id = submit_once(directory / 'submission.json', cmd,
             dict(code_commit=plan['code_commit'], partitions=partitions,
                  debug_job=job, budget=budget,
                  batch_size=passed['batch_size'], accumulation=passed['accumulation'],
                  epochs=6, selection='site_score'))
         if ',' in partitions:
-            release_partition_candidates(directory / 'submission.json', previous, partitions)
-        print(variant, previous, flush=True)
+            release_partition_candidates(directory / 'submission.json', job_id, partitions)
+        print(variant, job_id, flush=True)
 
 
 def main():

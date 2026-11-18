@@ -128,3 +128,11 @@ HPC skill 主文件及 Slurm 参考同步记录此站点限制和可用流程。
 按表中顺序 afterany 串行执行；每个实验一个作业，候选分区 c_foss_gpu,l40s。
 原 A 拒绝回执保存在 `A/submission_rejected_dual_partition.json`。
 当前各 `submission.json` 保存实际提交命令、job ID、预算和 partition_dispatch=released。
+
+## 独立排队（用户确认）
+
+已对仍 PENDING 的 4466179–4466185 执行 `scontrol update JobId=... Dependency=0`，
+核实八个训练作业 DEPENDENCY 均为 null。4466178 已运行，未中断或重启。
+这覆盖上文的串行计划；模型之间没有科学或数据依赖，各自输出目录独立。
+提交器同步移除模型之间的 afterany，仅保留提交前逐模型验收检查。
+各任务保留单 GPU 和双分区候选，实际并行数量由可用资源和账号配额决定。
