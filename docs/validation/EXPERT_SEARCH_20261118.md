@@ -25,3 +25,36 @@ PLE 共享门控解析结果和跨任务梯度、缺测掩膜、真实小型编�
 前后向及 checkpoint 重载；通过验收后依据实际吞吐、历史短测到端到端的校准系数，
 加 10% 时间余量提交训练。候选训练按 afterany 顺序依赖，某模型失败不阻止其他模型。
 已有运行不会被中止或覆盖。
+
+## HPC 提交（12:57 HKT 核实）
+
+冻结实现 commit：`c6f9198562364b32dd267aaea2cad4fac7315a79`。
+代码由 Git 同步后在 SCR 创建独立 release，不修改既有训练的冻结目录。
+实验根目录：`/scr/u/xiaoz/HydroState/experiments/architecture_experts_20261118`。
+
+| GPU 验收 | Slurm job |
+|---|---:|
+| 完整 MLoRE | 4464680 |
+| PLE | 4464681 |
+| 匹配 CGC | 4464682 |
+| AdapterFusion E | 4464683 |
+| CoSA Router | 4464684 |
+| A／B／原 CGC 合并验收 | 4464685 |
+
+均为 l40s/debug，单 GPU、4 CPU、64 GiB 主存、20 分钟上限，按 afterany 顺序执行。
+首次 B 单独提交被 `QOSMaxSubmitJobPerUserLimit` 拒绝，未创建作业；已核实 debug
+最多同时提交 6 个任务，将 A/B/CGC 合并到仍 PENDING 的 4464685 启动脚本。
+拒绝回执保留，三个基准各有独立输出与验收报告。
+
+自动训练提交作业 **4464693**：c_foss_amd/normal、1 CPU、4 GiB、3 分钟，
+依赖最后一个验收作业结束。它逐项要求验收作业 COMPLETED/0:0、显存余量及
+checkpoint 重载证据，才提交对应训练；回执防止重复提交。正式训练使用
+l40s/gpu、单 GPU、4 CPU、64 GiB，八组按 afterany 顺序运行。
+normal 用于短 CPU 提交控制，不用于绕过 GPU debug 限制。
+
+短测到完整训练的耗时校准复用上一轮四个模型实测：训练用完整训练日志中位耗时
+与短测的比率上界，验证用完整验证日志耗时与短测的比率上界，再增加 10% 余量。
+原始数值保存在 `timing_calibration.json`；每模型预算保存在其训练提交回执。
+
+此处记录的是验收及自动提交流程已被调度器接受；截至本次查询，尚未声称
+GPU 验收通过、八个正式训练作业已产生或新模型已有精度结果。
