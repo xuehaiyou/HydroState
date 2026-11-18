@@ -47,3 +47,28 @@ def test_submit_receipt_prevents_duplicates_and_ambiguous_retry(tmp_path, monkey
     record.write_text(json.dumps(dict(status='submitting')))
     with pytest.raises(RuntimeError, match='prior submission'):
         submit_once(record, ['sbatch', 'a.sh'], {})
+
+
+def test_partition_update_precedes_release_and_failure_keeps_job_held(tmp_path, monkeypatch):
+    from hydrostate.experiments.expert_search import release_partition_candidates
+
+    record = tmp_path / 'submission.json'
+    record.write_text(json.dumps(dict(status='accepted', job_id='321')))
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[1] == 'update':
+            raise RuntimeError('update rejected')
+
+    monkeypatch.setattr('subprocess.run', run)
+    with pytest.raises(RuntimeError, match='update rejected'):
+        release_partition_candidates(record, '321', 'c_foss_gpu,l40s')
+    assert len(calls) == 1  # A failed update must never release the held job.
+    calls.clear()
+    monkeypatch.setattr('subprocess.run', lambda cmd, **kw: calls.append(cmd))
+    release_partition_candidates(record, '321', 'c_foss_gpu,l40s')
+    assert calls == [['scontrol', 'update', 'JobId=321', 'Partition=c_foss_gpu,l40s'],
+                     ['scontrol', 'release', '321']]
+    release_partition_candidates(record, '321', 'c_foss_gpu,l40s')
+    assert len(calls) == 2

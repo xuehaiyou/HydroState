@@ -99,3 +99,14 @@ MLoRE 4464731、PLE 4464732 已 COMPLETED/0:0；不重跑已完成验收。
 新回执 `controller_dual_submission.json` 和调度变更记录
 `dual_partition_update.json` 位于 v2 实验目录；原验收作业号与依赖不变。
 仅提交器使用新 release，实际验收及训练模型源码仍为 bc744bd。
+
+## 双分区 sbatch 拒绝修复
+
+4464833 在提交 A 时失败，未产生训练 job。2026-11-18 复核：相同资源下
+`sbatch --test-only --partition=c_foss_gpu,l40s` 返回 Invalid partition name，
+两个单分区均通过。测试编号不算实际任务。HKU 的提交入口不接受该组合，
+不能从此前 scontrol 更新成功推断 sbatch 也支持。
+提交器改用单分区 `--hold` 提交，保存回执后 scontrol 更新双分区候选，成功才 release。
+更新失败不会释放；已接受回执复用同一 job，不重复训练。保留原 A 拒绝记录后补交。
+模型源码与科学配置仍使用 bc744bd，全部八个模型验收已通过，无需重做。
+HPC skill 主文件及 Slurm 参考同步记录此站点限制和可用流程。

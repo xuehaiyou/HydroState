@@ -124,6 +124,20 @@ def environment_script(release, env, command):
     return '\n'.join([*lines, 'exec ' + shlex.join(command)]) + '\n'
 
 
+def release_partition_candidates(record, job, partitions):
+    """HKU rejects multi-partition sbatch; configure a held job before release."""
+    item = json.loads(record.read_text())
+    if item.get('partition_dispatch') == 'released':
+        return
+    subprocess.run(['scontrol', 'update', f'JobId={job}',
+                    f'Partition={partitions}'], check=True)
+    item['partition_dispatch'] = 'configured_held'
+    atomic_json(record, item)
+    subprocess.run(['scontrol', 'release', str(job)], check=True)
+    item['partition_dispatch'] = 'released'
+    atomic_json(record, item)
+
+
 def submit_training(root, partitions='l40s'):
     if not partitions or set(partitions.split(',')) - {'l40s', 'c_foss_gpu'}:
         raise ValueError('Unsupported GPU partitions')
@@ -162,19 +176,24 @@ def submit_training(root, partitions='l40s'):
         script.write_text(environment_script(release, env,
             [sys.executable, 'tools/train.py', str(directory / 'config.py')]))
         cmd = ['sbatch', '--parsable', f'--job-name=hs_station_{variant}',
-            f'--partition={partitions}', '--qos=gpu', '--account=geog_geors', '--nodes=1',
+            f'--partition={partitions.split(",")[0]}', '--qos=gpu',
+            '--account=geog_geors', '--nodes=1',
             '--ntasks=1', '--gres=gpu:1', '--cpus-per-task=4', '--mem=64G',
             f'--time={budget["walltime"]}', f'--output={directory}/%j.out',
             f'--error={directory}/%j.err']
         # A failed independent model must not prevent the other candidates running.
         if previous:
             cmd.append(f'--dependency=afterany:{previous}')
+        if ',' in partitions:
+            cmd.append('--hold')
         cmd.append(str(script))
         previous = submit_once(directory / 'submission.json', cmd,
             dict(code_commit=plan['code_commit'], partitions=partitions,
                  debug_job=job, budget=budget,
                  batch_size=passed['batch_size'], accumulation=passed['accumulation'],
                  epochs=6, selection='site_score'))
+        if ',' in partitions:
+            release_partition_candidates(directory / 'submission.json', previous, partitions)
         print(variant, previous, flush=True)
 
 
