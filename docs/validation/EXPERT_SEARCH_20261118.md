@@ -93,3 +93,9 @@ expert_groups 字典顺序，新模型错误地要求它与 decoder.groups 的�
 调度顺序由 Slurm 优先级及可用资源决定，不承诺严格的先到先得。
 模型、数据及配置仍冻结在 bc744bd release；更新的提交器单独绑定新 Git release。
 MLoRE 4464731、PLE 4464732 已 COMPLETED/0:0；不重跑已完成验收。
+
+提交器更新 commit：`383d733`。已取消仍排队且被 hold 的旧 CPU 控制任务
+4464737，以 **4464833** 替代，仍依赖最后一个 GPU 验收 4464736。
+新回执 `controller_dual_submission.json` 和调度变更记录
+`dual_partition_update.json` 位于 v2 实验目录；原验收作业号与依赖不变。
+仅提交器使用新 release，实际验收及训练模型源码仍为 bc744bd。
