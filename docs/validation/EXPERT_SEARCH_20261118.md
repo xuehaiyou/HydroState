@@ -187,3 +187,18 @@ MLoRE 的 BatchNorm 使用更小微批统计，梯度累积不能保证与 batch
 复用已通过的 batch=2 实测速度、原 smoke 固定开销及既有耗时校准，增加 10%，
 申请 04:50:00；这不是声称完整训练显存已获验证，仍需检查新运行。
 双分区候选 c_foss_gpu,l40s，排除 SPG-3-2，无任务依赖，单 GPU、4 CPU。
+
+## MLoRE 超时后续训（2026-11-19）
+
+batch=2 作业 4467334 在 SPG-3-1 达到 04:50 walltime，被 TIMEOUT，未再次 OOM。
+已完成第 2 轮验证，停止于第 3 轮 1640/2264；未保存的第 3 轮进度需重跑。
+已实际读取 `retry_batch2/work/epoch_2.pth`：meta epoch=2、iter=4528，包含
+optimizer 和 param_schedulers。使用 resume=True/load_from 此完整 checkpoint，
+不使用只含模型的 best checkpoint；保留原 work_dir 与最佳分数状态，max_epochs=6。
+
+续训任务 **4471209**，配置及回执位于 `MLoRE_complete/retry_batch2/resume_epoch2/`。
+batch=2、accumulation=5、单卡4CPU、双分区候选、排除SPG-3-2、无依赖。
+依据同一真实训练第 1/2 轮保存时间差 5360 秒和第 2 轮验证 2736 秒，
+剩余4轮训练+2次验证+120秒初始化，再加10%，申请 **08:16:00**。
+此前预算使用短测估计且实际运行在不同GPU分区，低估端到端耗时；本次改用真实日志。
+冻结科学代码仍为 bc744bd，不改模型、数据、损失及选模标准。
