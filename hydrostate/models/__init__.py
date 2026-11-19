@@ -7,6 +7,8 @@ from .cosa.ple import PLEDecoder
 from .data_preprocessor import HydroDataPreprocessor
 from .decoder import SharedUNetDecoder
 from .grouped_experts import GroupedExpertHydroStateModel
+from .gradient_cgc import GradientCGC
+from .task_attention import TaskAttentionDecoder
 from .heads import RegressionHead
 from .hydrostate_model import HydroStateModel
 from .input_fusion import AuxiliaryInputFusion
@@ -28,6 +30,8 @@ from .temporal_model import TemporalHydroStateModel, TemporalOlmoEarthEncoder
 from .unet import UNetDecoder, UNetEncoder, UNetHydroStateModel
 
 __all__ = [
+    "GradientCGC",
+    "TaskAttentionDecoder",
     "CompleteMLoREDecoder",
     "GroupedExpertHydroStateModel",
     "PLEDecoder",
