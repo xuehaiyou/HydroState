@@ -67,9 +67,9 @@ def run(config, checkpoint, directory):
                     fields = model._forward(inputs)
                     for task, (pred, target, valid) in station_values(fields, samples).items():
                         for i, j in valid.nonzero().tolist():
-                            info = samples['metainfo'][i]
-                            rows.append(dict(mode=mode, task=task, sample_id=info['sample_id'],
-                                             site=info['spatial_group_id'], observation=j,
+                            info = samples['metainfo']
+                            rows.append(dict(mode=mode, task=task, sample_id=info['sample_id'][i],
+                                             site=info['spatial_group_id'][i], observation=j,
                                              pred=pred[i,j].item(), target=target[i,j].item()))
     pd.DataFrame(rows).to_parquet(directory / 'paired.parquet', index=False)
 
