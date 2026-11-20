@@ -84,3 +84,26 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
                 decoded = self.readouts[name](features[name], valid, output_size)
                 outputs.update({task: self.heads[task](decoded) for task in selected})
         return self._constrain_outputs(outputs)
+
+
+@MODELS.register_module()
+class CGCAblation(CoSAHydroStateModel):
+    """One intervention at a time, keeping the original temporal state and readouts."""
+    def __init__(self, intervention, **kwargs):
+        super().__init__(**kwargs)
+        if not isinstance(self.router, CGCRouter):
+            raise ValueError("Ablation requires original CGC")
+        if intervention == 'constant_gate':
+            # Retain each gate's learnable bias as task-specific mixture logits.
+            for gate in self.router.gates.values():
+                nn.init.zeros_(gate.weight)
+                gate.weight.requires_grad_(False)
+        elif intervention == 'pointwise':
+            for expert in (*self.experts.values(), *self.router.shared):
+                width = expert.spatial.first.in_channels
+                # Two pointwise convolutions with 9x hidden width match the
+                # kernel-weight count of the original two 3x3 convolutions.
+                expert.spatial.first = nn.Conv2d(width, 9 * width, 1)
+                expert.spatial.second = nn.Conv2d(9 * width, width, 1)
+        else:
+            raise ValueError(f"Unknown CGC intervention: {intervention}")
