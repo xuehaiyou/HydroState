@@ -50,13 +50,18 @@ def run(config, checkpoint, directory):
         inputs, samples = batch['inputs'], batch['data_samples']
         levels = model.encoder(inputs)
         with patch.object(model.encoder, 'forward', return_value=levels):
-            for mode in ('dynamic', 'train_mean', 'uniform', 'private_only', 'shared_only'):
+            for mode in ('dynamic', 'train_mean', 'uniform', 'private_only', 'shared_only',
+                         'coverage_mean', 'et_mean', 'local_sm'):
                 with ExitStack() as stack:
+                    if mode == 'local_sm':
+                        stack.enter_context(patch.object(model.router, 'spatial_gates', {'sm'}))
                     for name, gate in gates.items():
-                        if mode == 'dynamic':
+                        if mode in ('dynamic', 'local_sm'):
+                            continue
+                        if mode in ('coverage_mean', 'et_mean') and mode != name + '_mean':
                             continue
                         def intervene(module, args, logits, name=name):
-                            if mode == 'train_mean':
+                            if mode in ('train_mean', 'coverage_mean', 'et_mean'):
                                 return means[name].log().to(logits).expand_as(logits)
                             if mode == 'uniform':
                                 return torch.zeros_like(logits)
