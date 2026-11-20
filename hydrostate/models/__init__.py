@@ -13,6 +13,7 @@ from .heads import RegressionHead
 from .hydrostate_model import HydroStateModel
 from .input_fusion import AuxiliaryInputFusion
 from .ltae import LTAEStateFusion
+from .ltae.retrieval import UTAEDecoder, UTAEInput
 from .mlore.decoder import CompleteMLoREDecoder
 from .mtlora import MTLoRAFusionDecoder, MTLoRAHydroStateModel, MTLoRAOlmoEarthEncoder
 from .multilevel_encoder import MultiLevelOlmoEarthEncoder
@@ -31,6 +32,8 @@ from .temporal_model import TemporalHydroStateModel, TemporalOlmoEarthEncoder
 from .unet import UNetDecoder, UNetEncoder, UNetHydroStateModel
 
 __all__ = [
+    "UTAEDecoder",
+    "UTAEInput",
     "LTAEStateFusion",
     "GradientCGC",
     "TaskAttentionDecoder",

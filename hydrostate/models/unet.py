@@ -17,6 +17,36 @@ from .hydrostate_model import HydroStateModel
 from .retrieval_model import RetrievalModelMixin
 
 
+def sequence_parts(inputs):
+    reference = inputs[next(iter(SENSORS))]
+    batch, _, _, height, width = reference.shape
+    if height % 8 or width % 8:
+        raise ValueError("U-Net input grid must be divisible by eight")
+    sensor_valid = inputs["sensor_valid"].to(device=reference.device, dtype=torch.bool)
+    if sensor_valid.shape != (batch, TIME_STEPS, len(SENSORS)):
+        raise ValueError("U-Net requires five ordered satellite slots")
+    parts = []
+    for index, (sensor, channels) in enumerate(SENSORS.items()):
+        value = inputs[sensor]
+        valid = inputs[f"{sensor}_valid"].bool()
+        if value.shape != (batch, TIME_STEPS, channels, height, width) or (
+            valid.shape != (batch, TIME_STEPS, 1, height, width)
+        ):
+            raise ValueError(f"Invalid U-Net spectral input shape: {sensor}")
+        valid = valid & sensor_valid[:, :, index, None, None, None]
+        # Clear excluded values before convolution, including NaN and infinity.
+        parts.append(value.masked_fill(~valid, 0))
+    for name in INPUT_GROUPS:
+        quality, valid = inputs[f"{name}_quality"], inputs[f"{name}_valid"].bool()
+        if quality.shape != (batch, TIME_STEPS, QUALITY_CHANNELS, height, width) or (
+            valid.shape != (batch, TIME_STEPS, 1, height, width)
+        ):
+            raise ValueError(f"Invalid U-Net observation quality shape: {name}")
+        parts.extend(((quality / 8).masked_fill(~valid, 0),
+                      valid.float()))
+    return parts
+
+
 class UNetBlock(nn.Sequential):
     def __init__(self, in_channels, out_channels):
         groups = min(32, out_channels)
@@ -56,32 +86,8 @@ class UNetEncoder(nn.Module):
         )
 
     def pack_inputs(self, inputs):
-        reference = inputs[self.input_keys[0]]
-        batch, _, _, height, width = reference.shape
-        if height % 8 or width % 8:
-            raise ValueError("U-Net input grid must be divisible by eight")
-        sensor_valid = inputs["sensor_valid"].to(device=reference.device, dtype=torch.bool)
-        if sensor_valid.shape != (batch, TIME_STEPS, len(SENSORS)):
-            raise ValueError("U-Net requires five ordered satellite slots")
-        parts = []
-        for index, (sensor, channels) in enumerate(SENSORS.items()):
-            value = inputs[sensor]
-            valid = inputs[f"{sensor}_valid"].bool()
-            if value.shape != (batch, TIME_STEPS, channels, height, width) or (
-                valid.shape != (batch, TIME_STEPS, 1, height, width)
-            ):
-                raise ValueError(f"Invalid U-Net spectral input shape: {sensor}")
-            valid = valid & sensor_valid[:, :, index, None, None, None]
-            # Clear excluded values before convolution, including NaN and infinity.
-            parts.append(value.masked_fill(~valid, 0).flatten(1, 2))
-        for name in INPUT_GROUPS:
-            quality, valid = inputs[f"{name}_quality"], inputs[f"{name}_valid"].bool()
-            if quality.shape != (batch, TIME_STEPS, QUALITY_CHANNELS, height, width) or (
-                valid.shape != (batch, TIME_STEPS, 1, height, width)
-            ):
-                raise ValueError(f"Invalid U-Net observation quality shape: {name}")
-            parts.extend(((quality / 8).masked_fill(~valid, 0).flatten(1, 2),
-                          valid.float().flatten(1, 2)))
+        parts = [x.flatten(1, 2) for x in sequence_parts(inputs)]
+        batch, _, height, width = parts[0].shape
         season = inputs["target_season"]
         if season.shape != (batch, 2):
             raise ValueError("U-Net requires two target-season channels from the preprocessor")
@@ -120,19 +126,7 @@ class UNetDecoder(nn.Module):
         return value
 
 
-@MODELS.register_module()
-class UNetHydroStateModel(RetrievalModelMixin, HydroStateModel):
-    """One shared U-Net and independent heads, with the same physical supervision."""
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        if not isinstance(self.encoder, UNetEncoder) or not isinstance(self.decoder, UNetDecoder):
-            raise TypeError("UNetHydroStateModel requires UNetEncoder and UNetDecoder")
-        if self.encoder.channels != self.decoder.encoder_channels:
-            raise ValueError("U-Net encoder and decoder channel widths disagree")
-        if self.input_fusion is not None:
-            raise ValueError("U-Net consumes observation quality directly in its input channels")
-
+class CentralWindowModel(RetrievalModelMixin, HydroStateModel):
     def _forward(self, inputs):
         if "target_time" not in inputs or set(inputs["target_time"]) != set(self.tasks):
             raise ValueError("U-Net requires explicit target windows for every task")
@@ -156,3 +150,17 @@ class UNetHydroStateModel(RetrievalModelMixin, HydroStateModel):
             torch._assert_async((inputs["target_time"][task] == reference).all(),
                                 "U-Net requires aligned target windows for all tasks")
         return super()._forward(inputs)
+
+
+@MODELS.register_module()
+class UNetHydroStateModel(CentralWindowModel):
+    """One shared U-Net and independent heads, with the same physical supervision."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not isinstance(self.encoder, UNetEncoder) or not isinstance(self.decoder, UNetDecoder):
+            raise TypeError("UNetHydroStateModel requires UNetEncoder and UNetDecoder")
+        if self.encoder.channels != self.decoder.encoder_channels:
+            raise ValueError("U-Net encoder and decoder channel widths disagree")
+        if self.input_fusion is not None:
+            raise ValueError("U-Net consumes observation quality directly in its input channels")
