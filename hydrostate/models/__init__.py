@@ -1,6 +1,7 @@
 """Model components."""
 
 from .adapterfusion import AdapterFusionHydroStateModel
+from .auto_lambda import AutoLambdaCGC
 from .composite_quality import CompositeQualityFusion
 from .cosa import CoSAHydroStateModel, CoSASharedLoRAEncoder, CoSAStateFusion
 from .cosa.ple import PLEDecoder
@@ -32,6 +33,7 @@ from .temporal_model import TemporalHydroStateModel, TemporalOlmoEarthEncoder
 from .unet import UNetDecoder, UNetEncoder, UNetHydroStateModel
 
 __all__ = [
+    "AutoLambdaCGC",
     "UTAEDecoder",
     "UTAEInput",
     "LTAEStateFusion",
