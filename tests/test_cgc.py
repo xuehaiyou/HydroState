@@ -41,3 +41,21 @@ def test_cgc_configuration_changes_only_router():
     cgc.model.router = base.model.router
     cgc.work_dir = base.work_dir
     assert cgc.to_dict() == base.to_dict()
+
+
+def test_spatial_sm_gate_changes_only_sm_and_matches_direct_mixture():
+    base = CGCRouter(('sm', 'et'), 4, 3)
+    local = CGCRouter(('sm', 'et'), 4, 3, spatial_gates=('sm',))
+    local.load_state_dict(base.state_dict(), strict=True)
+    state = torch.randn(2, 4, 3, 3)
+    valid = torch.ones_like(state[:, :1], dtype=torch.bool)
+    valid[:, :, 0, 1] = False
+    features = {task: torch.randn(2, 3, 3, 3) for task in base.experts}
+    values = local(state, features, valid)
+    torch.testing.assert_close(values['et'], base(state, features, valid)['et'])
+    assert not values['sm'][:, :, 0, 1].any()
+    experts = [expert(state.masked_fill(~valid, 0), valid) for expert in local.shared]
+    weights = local.gates['sm'](state[:, :, 1, 2]).softmax(-1)
+    expected = sum(feature[:, :, 1, 2] * weights[:, i:i + 1]
+                   for i, feature in enumerate([*experts, features['sm']]))
+    torch.testing.assert_close(values['sm'][:, :, 1, 2], expected)

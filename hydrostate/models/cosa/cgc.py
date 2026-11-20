@@ -12,9 +12,13 @@ from .branches import StateExpert
 
 
 class CGCRouter(nn.Module):
-    def __init__(self, experts, state_channels=256, channels=64, num_shared=2):
+    def __init__(self, experts, state_channels=256, channels=64, num_shared=2,
+                 spatial_gates=()):
         super().__init__()
         self.experts = tuple(experts)
+        self.spatial_gates = frozenset(spatial_gates)
+        if not self.spatial_gates.issubset(self.experts):
+            raise ValueError("Spatial gates require a declared expert group")
         if not self.experts or type(num_shared) is not int or num_shared < 1:
             raise ValueError("CGC requires private tasks and positive shared expert count")
         self.shared = nn.ModuleList([
@@ -32,6 +36,12 @@ class CGCRouter(nn.Module):
         for task in self.experts:
             # No other task's private expert enters this gate or receives its loss.
             candidates = torch.stack([*shared, features[task]], dim=1)
+            if task in self.spatial_gates:
+                logits = self.gates[task](masked.movedim(1, -1))
+                weights = logits.float().softmax(-1).to(candidates.dtype)
+                outputs[task] = torch.einsum("bhwk,bkchw->bchw", weights, candidates).masked_fill(
+                    ~valid, 0)
+                continue
             weights = self.gates[task](pooled).float().softmax(-1).to(candidates.dtype)
             outputs[task] = torch.einsum("bk,bkchw->bchw", weights, candidates).masked_fill(
                 ~valid, 0)
