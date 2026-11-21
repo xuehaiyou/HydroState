@@ -154,3 +154,8 @@ debug 使用 `tools/experiments/verify_joint_gpu.py` 做完整训练/验证/保�
 `tools/watch_mtlora_collection.py` 是显式启动的调度器，等待完成标记后提交准备和成对训练，
 保留提交意图以防重复。采样入口不会自动启动它。
 旧配置/脚本已移到 `configs/experiments/legacy`、`scripts/legacy` 和 `tools/legacy`。
+
+## 人工覆盖点外部验证
+
+冰川人工水体、冰雪、陆地点的独立样本契约、采集及多模型验证入口见
+[人工覆盖点验证](COVER_POINT_VALIDATION.md)。该评估不改变现有产品/站点划分或选模分数。
