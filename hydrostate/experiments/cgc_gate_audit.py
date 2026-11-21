@@ -14,12 +14,17 @@ from hydrostate.models.site_supervision import station_values
 
 
 @torch.inference_mode()
-def run(config, checkpoint, directory, local_sm_only=False):
+def run(config, checkpoint, directory, local_sm_only=False, split='validation'):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     cfg = Config.fromfile(config)
     if cfg.val_dataloader.dataset.split != 'validation':
         raise ValueError('Development validation required')
+    if split == 'test':
+        if not local_sm_only:
+            raise ValueError('Held-out comparison is fixed to original and local SM gates')
+        cfg.val_dataloader.dataset.split = split
+        cfg.val_dataloader.dataset.pop('selection_root', None)
     cfg.train_dataloader.dataset.training = False
     cfg.work_dir = str(directory / 'log')
     configure_target_statistics(cfg, training=True)
@@ -48,7 +53,14 @@ def run(config, checkpoint, directory, local_sm_only=False):
         means = {name: total / counts[name] for name, total in totals.items()}
         atomic_json(directory / 'gate_means.json', {k: v.tolist() for k, v in means.items()})
     rows = []
-    for raw in runner.val_dataloader:
+    loader = runner.val_dataloader
+    if split == 'test':
+        from torch.utils.data import DataLoader, Subset
+        dataset = loader.dataset
+        loader = DataLoader(Subset(dataset, range(dataset.offsets[1], len(dataset))),
+                            batch_size=loader.batch_size, collate_fn=loader.collate_fn,
+                            num_workers=loader.num_workers)
+    for raw in loader:
         batch = model.data_preprocessor(raw, training=False)
         inputs, samples = batch['inputs'], batch['data_samples']
         levels = model.encoder(inputs)
@@ -86,4 +98,5 @@ if __name__ == '__main__':
     for argument in ('config', 'checkpoint', 'directory'):
         parser.add_argument(argument)
     parser.add_argument('--local-sm-only', action='store_true')
+    parser.add_argument('--split', choices=('validation', 'test'), default='validation')
     run(**vars(parser.parse_args()))
