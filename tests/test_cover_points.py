@@ -163,3 +163,60 @@ def test_network_failure_is_resumable_not_rejection(tmp_path, monkeypatch):
     monkeypatch.setattr("hydrostate.data.cover_points.collection.input_arrays", fake_inputs)
     collect(root, project="test", pilot=True, ee=object(), norm={})
     assert audit(root, pilot=True)["passed"]
+
+
+def test_common_comparison_keeps_proximity_supplement_separate(tmp_path):
+    from hydrostate.evaluation.cover_points import compare
+
+    frame = pd.DataFrame(
+        dict(
+            point_index=[0, 1, 2],
+            cover_class=[0, 1, 2],
+            predicted_class=[0, 1, 2],
+            label_valid=[True] * 3,
+            prediction_valid=[True] * 3,
+            training_overlap=[True, False, False],
+            sample_id=["a", "b", "c"],
+            observation_date=["2021-06-15"] * 3,
+            output_row=[1] * 3,
+            output_col=[1] * 3,
+            site_name=["Test"] * 3,
+        )
+    )
+    entries = []
+    for name in ["A", "B"]:
+        folder = tmp_path / name
+        folder.mkdir()
+        (folder / "provenance.json").write_text(
+            json.dumps(dict(scope="full", dataset_publication_sha256="same"))
+        )
+        (folder / "_SUCCESS.json").write_text(json.dumps(dict(complete=True)))
+        frame.to_parquet(folder / "predictions.parquet", index=False)
+        entries.append(f"{name}={folder}")
+    result = compare(entries, tmp_path / "common.json")
+    assert result["common_points"] == 2
+    assert result["common_valid_points_including_training_proximity"] == 3
+    metrics = result["models"]["A"]
+    assert metrics["point_metrics"]["classes"]["water"]["support"] == 0
+    assert (
+        metrics["all_valid_point_metrics_with_training_proximity"]["classes"]["water"]["support"]
+        == 1
+    )
+
+
+def test_budget_uses_measured_io_and_ten_percent_margin(tmp_path):
+    from hydrostate.evaluation.cover_point_launch import estimate_seconds
+
+    (tmp_path / "probe/A").mkdir(parents=True)
+    (tmp_path / "probe_progress.json").write_text(
+        json.dumps(dict(complete=True, models=[dict(name="A", seconds=30)]))
+    )
+    (tmp_path / "A_benchmark.json").write_text(
+        json.dumps(dict(selected_batch_size=4, measurements=[dict(batch_size=4, seconds=2)]))
+    )
+    (tmp_path / "probe/A/metrics.json").write_text(
+        json.dumps(dict(inference_seconds=12, windows=6))
+    )
+    seconds, detail = estimate_seconds(tmp_path, 100)
+    assert detail[0]["estimated_seconds"] == 218
+    assert seconds == 240

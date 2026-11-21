@@ -64,6 +64,9 @@ def summarize(frame):
         training_overlap_points=int(frame.training_overlap.sum()),
         conflicting_cells=len(conflict_keys),
         point_metrics=classification_metrics(scored),
+        all_valid_point_metrics_with_training_proximity=classification_metrics(
+            frame[frame.label_valid & frame.prediction_valid]
+        ),
         consistent_unique_cell_metrics=classification_metrics(unique),
         by_site={str(k): classification_metrics(g) for k, g in scored.groupby("site_name")},
         by_site_date={

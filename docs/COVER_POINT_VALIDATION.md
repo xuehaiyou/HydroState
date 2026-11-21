@@ -72,3 +72,18 @@ python tools/validation/evaluate_cover_points.py compare \
 `python -m pytest tests/test_cover_points.py` 覆盖标签映射、重复冲突、真实点-网格
 重投影、Zarr 往返、断点跳过、pilot 发布门槛、缺测与空类别分类统计。
 真实采集、GPU 启动及各模型结果另记 `docs/validation/`，不以单元测试代替实采验收。
+
+## 多模型执行
+
+`tools/benchmarks/cover_points.py` 在真实试采输入上测量 1、2、4…64 的推理 batch，
+选择峰值 allocated 显存不超过设备总量 85% 的最大已测值。短测使用 debug QoS，
+不把重复试采输入的吞吐解释为正式数据读取吞吐。
+`tools/validation/evaluate_cover_suite.py` 接收显式 models.json（name/config/checkpoint），
+`--phase probe` 做逐模型显存测量和六窗口端到端短测，`--phase full` 做完整比较。
+`tools/validation/launch_cover_evaluation.py --wait` 是显式启动的轻量控制器：
+等待数据发布和 probe 作业成功，使用每模型实测 I/O 推理速度与初始化耗时估算预算，
+增加 10% 余量后提交单卡 l40s 正式验证；提交意图与回执防止重复。
+控制器不会停止采集或训练，probe 失败则报错退出，不自动重复提交。
+
+报告保留全部有效点（包含训练邻近范围）的补充指标，并与独立子集清晰分开。
+若某一类独立样本数为零，则没有该类的独立验证结论，不能用总体指标代替。

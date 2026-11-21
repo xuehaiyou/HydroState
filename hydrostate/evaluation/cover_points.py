@@ -156,7 +156,10 @@ def compare(predictions, output):
     if len(identities) != 1 or not tables:
         raise ValueError("Models must use the same published dataset")
     common = None
+    common_valid = None
     for frame in tables.values():
+        valid_keys = set(frame.index[frame.label_valid & frame.prediction_valid])
+        common_valid = valid_keys if common_valid is None else common_valid & valid_keys
         keys = set(
             frame.index[frame.label_valid & frame.prediction_valid & ~frame.training_overlap]
         )
@@ -167,7 +170,9 @@ def compare(predictions, output):
         common_points=len(common), point_indices=sorted(common), models={}, provenance=provenance
     )
     for name, frame in tables.items():
-        report["models"][name] = summarize(frame.loc[sorted(common)])
+        report["models"][name] = summarize(frame.loc[sorted(common_valid)])
+        report["models"][name]["independent_common_metrics"] = summarize(frame.loc[sorted(common)])
+    report["common_valid_points_including_training_proximity"] = len(common_valid)
     atomic_json(output, report)
     return report
 
