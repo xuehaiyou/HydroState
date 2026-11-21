@@ -105,3 +105,32 @@ def test_tied_refinement_starts_at_local_cgc_and_keeps_private_paths_isolated():
     assert model.private['et'].project.weight.grad is None
     assert model.private['sm'].project.weight.grad.abs().sum() > 0
     assert model.refinement.shared[0].project.weight.grad.abs().sum() > 0
+
+
+def test_learned_locality_recovers_both_gate_scales_and_shares_three_scalars():
+    from hydrostate.models.cosa.cgc import RecurrentCGCRouter
+
+    groups = ('coverage', 'sm', 'et')
+    model = RecurrentCGCRouter(groups, 4, 3, depth=2, spatial_gates=(), learn_locality=True)
+    assert len(model.locality) == 3
+    state = torch.randn(2, 4, 3, 3)
+    valid = torch.ones_like(state[:, :1], dtype=torch.bool)
+    valid[0] = False
+    valid[1, :, 0, 0] = False
+    features = {t: torch.randn(2, 3, 3, 3) for t in groups}
+    with torch.no_grad():
+        model.step.fill_(.4)
+    outputs = model(state, features, valid)
+    sum(y.square().sum() for y in outputs.values()).backward()
+    for name in groups:
+        assert model.locality[name].grad.abs() > 0
+        assert not outputs[name][0].any()
+    for logit, spatial in ((-100., ()), (100., groups)):
+        ref = RecurrentCGCRouter(groups, 4, 3, depth=2, spatial_gates=spatial)
+        ref.load_state_dict({k: v for k, v in model.state_dict().items()
+                             if not k.startswith('locality.')})
+        with torch.no_grad():
+            for p in model.locality.values():
+                p.fill_(logit)
+        for task, value in ref(state, features, valid).items():
+            torch.testing.assert_close(model(state, features, valid)[task], value)

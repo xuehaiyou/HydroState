@@ -36,7 +36,7 @@ class CGCRouter(nn.Module):
         mixed, _ = self.extract(state, features, valid)
         return mixed
 
-    def extract(self, state, features, valid, selectors=None):
+    def extract(self, state, features, valid, selectors=None, locality=None):
         if set(features) != set(self.experts):
             raise ValueError("CGC features disagree with task experts")
         masked = state.masked_fill(~valid, 0)
@@ -51,8 +51,13 @@ class CGCRouter(nn.Module):
             # No other task's private expert enters this gate or receives its loss.
             candidates = torch.stack([*shared, features[task]], dim=1)
             selector = masked if selectors is None else selectors[task].masked_fill(~valid, 0)
-            if task in self.spatial_gates:
+            if task in self.spatial_gates or locality is not None:
                 logits = self.gates[task](selector.movedim(1, -1))
+                if locality is not None:
+                    # A linear gate commutes with the masked spatial mean.
+                    logits = logits.float()
+                    mean = logits.masked_fill(~valid.movedim(1, -1), 0).sum((1, 2)) / count
+                    logits = torch.lerp(mean[:, None, None, :], logits, locality[task].sigmoid().float())
                 weights = logits.float().softmax(-1).to(candidates.dtype)
                 outputs[task] = torch.einsum("bhwk,bkchw->bchw", weights, candidates).masked_fill(
                     ~valid, 0)
@@ -68,10 +73,14 @@ class RecurrentCGCRouter(CGCRouter):
     """Repeat spatial expert extraction with a shared set of refinement weights."""
 
     def __init__(self, experts, state_channels=256, channels=64, num_shared=2,
-                 spatial_gates=('sm',), depth=3):
+                 spatial_gates=('sm',), depth=3, learn_locality=False):
         if type(depth) is not int or depth < 1:
             raise ValueError("CGC depth must be a positive integer")
         super().__init__(experts, state_channels, channels, num_shared, spatial_gates)
+        if learn_locality and self.spatial_gates:
+            raise ValueError("Choose learned locality or fixed spatial gates")
+        self.locality = (nn.ParameterDict({name: nn.Parameter(torch.zeros(())) for name in experts})
+                         if learn_locality else None)
         self.depth = depth
         if depth > 1:
             self.refinement = CGCRouter(experts, channels, channels, num_shared, spatial_gates)
@@ -79,13 +88,14 @@ class RecurrentCGCRouter(CGCRouter):
             self.step = nn.Parameter(torch.zeros(()))
 
     def forward(self, state, features, valid):
-        tasks, shared = self.extract(state, features, valid)
+        tasks, shared = self.extract(state, features, valid, locality=self.locality)
         if self.depth == 1:
             return tasks
         common = torch.stack(shared).mean(0)
         for _ in range(self.depth - 1):
             candidates = {name: expert(tasks[name], valid) for name, expert in self.private.items()}
-            proposal, shared = self.refinement.extract(common, candidates, valid, selectors=tasks)
+            proposal, shared = self.refinement.extract(common, candidates, valid, selectors=tasks,
+                                                        locality=self.locality)
             tasks = {name: value + self.step * (proposal[name] - value)
                      for name, value in tasks.items()}
             common = common + self.step * (torch.stack(shared).mean(0) - common)
