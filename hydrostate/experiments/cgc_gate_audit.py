@@ -14,7 +14,7 @@ from hydrostate.models.site_supervision import station_values
 
 
 @torch.inference_mode()
-def run(config, checkpoint, directory):
+def run(config, checkpoint, directory, local_sm_only=False):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     cfg = Config.fromfile(config)
@@ -36,22 +36,24 @@ def run(config, checkpoint, directory):
             counts[name] += len(logits)
         return hook
 
-    with ExitStack() as stack:
-        for name, gate in gates.items():
-            stack.enter_context(gate.register_forward_hook(accumulate(name)))
-        for raw in runner.train_dataloader:
-            batch = model.data_preprocessor(raw, training=False)
-            model._forward(batch['inputs'])
-    means = {name: total / counts[name] for name, total in totals.items()}
-    atomic_json(directory / 'gate_means.json', {k: v.tolist() for k, v in means.items()})
+    modes = ('dynamic', 'local_sm')
+    if not local_sm_only:
+        modes += ('train_mean', 'uniform', 'private_only', 'shared_only', 'coverage_mean', 'et_mean')
+        with ExitStack() as stack:
+            for name, gate in gates.items():
+                stack.enter_context(gate.register_forward_hook(accumulate(name)))
+            for raw in runner.train_dataloader:
+                batch = model.data_preprocessor(raw, training=False)
+                model._forward(batch['inputs'])
+        means = {name: total / counts[name] for name, total in totals.items()}
+        atomic_json(directory / 'gate_means.json', {k: v.tolist() for k, v in means.items()})
     rows = []
     for raw in runner.val_dataloader:
         batch = model.data_preprocessor(raw, training=False)
         inputs, samples = batch['inputs'], batch['data_samples']
         levels = model.encoder(inputs)
         with patch.object(model.encoder, 'forward', return_value=levels):
-            for mode in ('dynamic', 'train_mean', 'uniform', 'private_only', 'shared_only',
-                         'coverage_mean', 'et_mean', 'local_sm'):
+            for mode in modes:
                 with ExitStack() as stack:
                     if mode == 'local_sm':
                         stack.enter_context(patch.object(model.router, 'spatial_gates', {'sm'}))
@@ -83,4 +85,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for argument in ('config', 'checkpoint', 'directory'):
         parser.add_argument(argument)
+    parser.add_argument('--local-sm-only', action='store_true')
     run(**vars(parser.parse_args()))
