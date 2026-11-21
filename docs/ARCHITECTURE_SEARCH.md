@@ -1,6 +1,7 @@
 # 少样本架构探索
 
 全部已有实验与待实现候选见[架构与实验总览](ARCHITECTURE_OVERVIEW.md)。
+局部 SM 门控、冻结权重干预和新增开源候选的站点精度见[CGC 机理与小样本验证](validation/CGC_MECHANISM_20261121.md)。
 **2026-11-18 最新决定：以站点 SM、ET 精度评价与选模，产品一致性仅供参考。**
 既有实验的 joint_score 包含产品项，历史记录不改写。新入口
 `tools/experiments/expert_search.py` 使用 `site_score`：训练集标准差归一化的
