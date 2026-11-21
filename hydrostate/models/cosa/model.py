@@ -87,6 +87,31 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
 
 
 @MODELS.register_module()
+class CGCSMRefinement(CoSAHydroStateModel):
+    """Refit the existing SM pathway of a joint checkpoint with fixed shared features."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not isinstance(self.router, CGCRouter) or self.expert_groups.get('sm') != ('soil_moisture',):
+            raise ValueError("SM refinement requires a CGC with a separate soil moisture group")
+        self.requires_grad_(False)
+        for module in self.sm_modules():
+            module.requires_grad_(True)
+
+    def sm_modules(self):
+        return (self.experts['sm'], self.router.gates['sm'], self.readouts['sm'],
+                self.heads['soil_moisture'])
+
+    def train(self, mode=True):
+        # Keep the shared representation, including stochastic layers and buffers, fixed.
+        super().train(False)
+        self.training = mode
+        for module in self.sm_modules():
+            module.train(mode)
+        return self
+
+
+@MODELS.register_module()
 class CGCAblation(CoSAHydroStateModel):
     """One intervention at a time, keeping the original temporal state and readouts."""
     def __init__(self, intervention, **kwargs):

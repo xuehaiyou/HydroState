@@ -374,3 +374,20 @@ def test_real_encoder_uses_broadcast_mask_and_no_default_checkpoint(tmp_path):
         assert isinstance(block.attn.sdpa, partial)
         assert block.attn.sdpa.func is _broadcast_sdpa
         assert not isinstance(block.forward, partial)
+
+
+def test_cgc_sm_refinement_preserves_every_non_sm_prediction(tmp_path, tiny):
+    cfg = config(tmp_path)
+    cfg.model.router = dict(type="CGCRouter", spatial_gates=["sm"])
+    cfg.model.type = "CGCSMRefinement"
+    model = MODELS.build(cfg.model).train()
+    assert not model.encoder.training and not model.decoder.training
+    inputs = model.data_preprocessor(batch(), training=True)["inputs"]
+    optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=.1)
+    before = model(inputs)
+    before["soil_moisture"].mean().backward()
+    optimizer.step()
+    after = model.eval()(inputs)
+    assert not torch.equal(after["soil_moisture"], before["soil_moisture"])
+    for name in set(before) - {"soil_moisture"}:
+        torch.testing.assert_close(after[name], before[name], atol=0, rtol=0)
