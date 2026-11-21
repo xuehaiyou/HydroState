@@ -13,18 +13,24 @@ from .branches import StateExpert
 
 class CGCRouter(nn.Module):
     def __init__(self, experts, state_channels=256, channels=64, num_shared=2,
-                 spatial_gates=()):
+                 spatial_gates=(), private_only=()):
         super().__init__()
         self.experts = tuple(experts)
         self.spatial_gates = frozenset(spatial_gates)
-        if not self.spatial_gates.issubset(self.experts):
-            raise ValueError("Spatial gates require a declared expert group")
+        self.private_only = frozenset(private_only)
+        if not (self.spatial_gates | self.private_only).issubset(self.experts):
+            raise ValueError("Routing policies require a declared expert group")
+        if self.private_only & self.spatial_gates:
+            raise ValueError("A private-only task has no spatial gate")
         if not self.experts or type(num_shared) is not int or num_shared < 1:
             raise ValueError("CGC requires private tasks and positive shared expert count")
         self.shared = nn.ModuleList([
             StateExpert(state_channels, channels) for _ in range(num_shared)])
         self.gates = nn.ModuleDict({
             name: nn.Linear(state_channels, num_shared + 1) for name in self.experts})
+        # Consume identical initialization draws for the paired training control.
+        for name in self.private_only:
+            del self.gates[name]
 
     def forward(self, state, features, valid):
         if set(features) != set(self.experts):
@@ -34,6 +40,9 @@ class CGCRouter(nn.Module):
         shared = [expert(masked, valid) for expert in self.shared]
         outputs = {}
         for task in self.experts:
+            if task in self.private_only:
+                outputs[task] = features[task].masked_fill(~valid, 0)
+                continue
             # No other task's private expert enters this gate or receives its loss.
             candidates = torch.stack([*shared, features[task]], dim=1)
             if task in self.spatial_gates:

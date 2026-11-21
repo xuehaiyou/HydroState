@@ -43,6 +43,20 @@ def test_cgc_configuration_changes_only_router():
     assert cgc.to_dict() == base.to_dict()
 
 
+def test_private_sm_bypasses_shared_experts():
+    router = CGCRouter(('sm', 'et'), 4, 3, private_only=('sm',))
+    state = torch.randn(1, 4, 3, 3)
+    valid = torch.ones_like(state[:, :1], dtype=torch.bool)
+    valid[:, :, 1, 2] = False
+    features = {task: torch.randn(1, 3, 3, 3, requires_grad=True) for task in router.experts}
+    values = router(state, features, valid)
+    torch.testing.assert_close(features['sm'].masked_fill(~valid, 0), values['sm'])
+    values['sm'].sum().backward()
+    assert set(router.gates) == {'et'}
+    assert features['sm'].grad is not None
+    assert all(p.grad is None for p in router.shared.parameters())
+
+
 def test_spatial_sm_gate_changes_only_sm_and_matches_direct_mixture():
     base = CGCRouter(('sm', 'et'), 4, 3)
     local = CGCRouter(('sm', 'et'), 4, 3, spatial_gates=('sm',))
