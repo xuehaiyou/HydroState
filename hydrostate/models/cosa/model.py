@@ -9,7 +9,7 @@ from ..hydrostate_model import HydroStateModel
 from ..mlore.routing import MLoRERouter
 from ..retrieval_model import RetrievalModelMixin
 from .branches import SpatialReadout, StateExpert
-from .cgc import CGCRouter
+from .cgc import CGCRouter, RecurrentCGCRouter
 from .encoder import CoSASharedLoRAEncoder
 from .routing import StateRouter
 from .state import CoSAStateFusion
@@ -50,6 +50,7 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
         routing = dict(router or {})
         kind = routing.pop("type", "StateRouter")
         router_classes = {"StateRouter": StateRouter, "CGCRouter": CGCRouter,
+                          "RecurrentCGCRouter": RecurrentCGCRouter,
                           "MLoRERouter": MLoRERouter}
         if kind not in router_classes:
             raise ValueError(f"Unknown expert router: {kind}")

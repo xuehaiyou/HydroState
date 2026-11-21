@@ -73,3 +73,35 @@ def test_spatial_sm_gate_changes_only_sm_and_matches_direct_mixture():
     expected = sum(feature[:, :, 1, 2] * weights[:, i:i + 1]
                    for i, feature in enumerate([*experts, features['sm']]))
     torch.testing.assert_close(values['sm'][:, :, 1, 2], expected)
+
+
+def test_tied_refinement_starts_at_local_cgc_and_keeps_private_paths_isolated():
+    from hydrostate.models.cosa.cgc import RecurrentCGCRouter
+
+    groups = ('sm', 'et')
+    torch.manual_seed(42)
+    ref = CGCRouter(groups, 4, 3, spatial_gates=['sm'])
+    torch.manual_seed(42)
+    model = RecurrentCGCRouter(groups, 4, 3, depth=3)
+    x = torch.randn(2, 4, 3, 3)
+    valid = torch.ones_like(x[:, :1], dtype=torch.bool)
+    valid[0] = False
+    features = {t: torch.randn(2, 3, 3, 3, requires_grad=True) for t in groups}
+    result = model(x, features, valid)
+    for task, value in ref(x, features, valid).items():
+        torch.testing.assert_close(result[task], value, rtol=0, atol=0)
+    result['sm'].sum().backward()
+    assert model.step.grad.abs() > 0
+    with torch.no_grad():
+        model.step.fill_(.5)
+    model.zero_grad(set_to_none=True)
+    calls = []
+    hook = model.refinement.shared[0].register_forward_hook(lambda *args: calls.append(1))
+    result = model(x, features, valid)
+    hook.remove()
+    assert len(calls) == 2 and not result['sm'][0].any()
+    result['sm'].sum().backward()
+    assert features['et'].grad is None
+    assert model.private['et'].project.weight.grad is None
+    assert model.private['sm'].project.weight.grad.abs().sum() > 0
+    assert model.refinement.shared[0].project.weight.grad.abs().sum() > 0

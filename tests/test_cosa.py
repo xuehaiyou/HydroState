@@ -50,11 +50,13 @@ def test_configs_only_switch_interaction_and_keep_supervision_budget():
     assert original.model.encoder.get("use_landsat_toa_adapter", True)
 
 
-@pytest.mark.parametrize("enabled", [False, True, "cgc", "mlore", "ple", "mlore_complete"])
+@pytest.mark.parametrize("enabled", [False, True, "cgc", "recurrent_cgc", "mlore", "ple", "mlore_complete"])
 def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path, enabled):
     cfg = config(tmp_path, enabled, checkpoint=True)
     if enabled == "cgc":
         cfg.model.router = dict(type="CGCRouter", num_shared=2)
+    if enabled == "recurrent_cgc":
+        cfg.model.router = dict(type="RecurrentCGCRouter", spatial_gates=["sm"], depth=3)
     if enabled == "mlore":
         cfg.model.router = dict(type="MLoRERouter", grid_size=3,
                                 ranks=(2, 4), private_rank=2, topk=1)
