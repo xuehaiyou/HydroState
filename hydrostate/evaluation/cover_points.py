@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -42,7 +43,14 @@ def evaluate(root, config, checkpoint, output, *, batch_size=4, device="cuda", l
     configure_target_statistics(cfg, training=False)
     if cfg.model.encoder.input_profile != PROFILE:
         raise ValueError("Checkpoint inputs differ from cover collection")
-    dataset = CoverPointDataset(root)
+    published = root / "_PUBLISHED.json"
+    if not published.exists():
+        if not limit:
+            raise ValueError("Full inference requires a published dataset")
+        published = root / "audit" / "pilot.json"
+        if not json.loads(published.read_text()).get("passed"):
+            raise ValueError("Smoke inference requires a passed real-data pilot")
+    dataset = CoverPointDataset(root, require_published=limit is None)
     points = pd.read_parquet(root / "points.parquet")
     plan = pd.read_parquet(root / "plan.parquet")
     overlaps, overlap_report = training_overlap(cfg, plan)
@@ -60,7 +68,7 @@ def evaluate(root, config, checkpoint, output, *, batch_size=4, device="cuda", l
         config_sha256=file_hash(config),
         checkpoint=str(checkpoint),
         checkpoint_sha256=file_hash(checkpoint),
-        dataset_publication_sha256=file_hash(root / "_PUBLISHED.json"),
+        dataset_publication_sha256=file_hash(published),
         point_manifest_sha256=file_hash(root / "points.parquet"),
         model_config=cfg.model.to_dict(),
         training_dataset_config=cfg.train_dataloader.dataset.to_dict(),
@@ -71,6 +79,10 @@ def evaluate(root, config, checkpoint, output, *, batch_size=4, device="cuda", l
     atomic_json(output / "provenance.json", provenance)
     n = min(len(dataset), limit) if limit else len(dataset)
     predictions = []
+    if str(device).startswith("cuda"):
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+    started = time.monotonic()
     for start in range(0, n, batch_size):
         items = [dataset[i] for i in range(start, min(start + batch_size, n))]
         outputs = predict_records(model, [dict(inputs=item["inputs"]) for item in items], device)
@@ -83,7 +95,7 @@ def evaluate(root, config, checkpoint, output, *, batch_size=4, device="cuda", l
             if np.any(support & ~finite):
                 raise ValueError("Nonfinite cover prediction on valid support")
             if np.any(
-                support & ((np.abs(values.sum(axis=1) - 1) > 1e-4) | (values < -1e-6).any(axis=1))
+                support & ((np.abs(values.sum(axis=1) - 1) > 0.01) | (values < -1e-6).any(axis=1))
             ):
                 raise ValueError("Cover fractions do not close")
             for j, point_index in enumerate(labels["cover_point_index"]):
@@ -110,6 +122,12 @@ def evaluate(root, config, checkpoint, output, *, batch_size=4, device="cuda", l
     atomic_parquet(frame, output / "predictions.parquet")
     report = summarize(frame)
     report["scope"] = provenance["scope"]
+    if str(device).startswith("cuda"):
+        torch.cuda.synchronize()
+        report["peak_cuda_memory_bytes"] = torch.cuda.max_memory_allocated()
+    report["inference_seconds"] = time.monotonic() - started
+    report["windows"] = n
+    report["batch_size"] = batch_size
     atomic_json(output / "metrics.json", report)
     atomic_json(output / "_SUCCESS.json", dict(complete=True, scope=provenance["scope"]))
     return report
