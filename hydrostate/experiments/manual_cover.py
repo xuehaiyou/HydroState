@@ -18,6 +18,49 @@ from hydrostate.datasets.joint_dataset import JointRetrievalDataset
 from hydrostate.storage.packs import file_hash
 
 VARIANTS = ("CGC", "CoSA_Router", "B")
+RESIDUAL_VARIANTS = ("bg_residual", "bg_residual_centered")
+
+
+def prepare_residual_pair(reference, root, output):
+    """Reuse the frozen joint selection, statistics and budget for both residual models."""
+    reference, root, output = Path(reference), Path(root), Path(output)
+    if output.resolve() == reference.resolve() or reference.resolve() in output.resolve().parents:
+        raise ValueError("Residual experiments need their own output outside the reference run")
+    config = reference / "CGC" / "config.py"
+    frozen = json.loads((reference / "prepared.json").read_text())
+    publication = file_hash(root / "_PUBLISHED.json")
+    if frozen["publication_sha256"] != publication:
+        raise ValueError("Reference selection belongs to a different manual Cover publication")
+    cfg = Config.fromfile(config)
+    for loader in (cfg.train_dataloader, cfg.val_dataloader, cfg.test_dataloader):
+        if loader.dataset.type != "ManualJointDataset" or Path(loader.dataset.manual_root) != root:
+            raise ValueError("Expected joint manual Cover loaders from this release")
+    if (
+        cfg.model.router.type != "CGCRouter"
+        or cfg.default_hooks.checkpoint.save_best != "manual_joint_score"
+    ):
+        raise ValueError("Expected manual joint CGC reference config")
+    if cfg.load_from is not None or cfg.resume:
+        raise ValueError("Use the reference architecture config from before training")
+    report = dict(
+        variants=list(RESIDUAL_VARIANTS),
+        publication_sha256=publication,
+        reference_config=str(config),
+        reference_config_sha256=file_hash(config),
+    )
+    receipt = output / "prepared.json"
+    if receipt.exists():
+        if json.loads(receipt.read_text()) != report:
+            raise ValueError("The residual experiment reference has changed")
+        return
+    for name in RESIDUAL_VARIANTS:
+        directory = output / name
+        directory.mkdir(parents=True, exist_ok=True)
+        cfg.model.type = "BackgroundResidualModel"
+        cfg.model.router = dict(center=name == "bg_residual_centered")
+        cfg.work_dir = str(directory / "work")
+        cfg.dump(str(directory / "config.py"))
+    atomic_json(receipt, report)
 
 
 def supports(dataset):

@@ -15,7 +15,7 @@ from mmengine.config import Config
 from hydrostate.data.gee.contracts import atomic_json, locked
 from hydrostate.experiments.gpu_memory import has_memory_headroom
 
-from .manual_cover import VARIANTS, prepare
+from .manual_cover import RESIDUAL_VARIANTS, VARIANTS, prepare, prepare_residual_pair
 
 
 def submit(directory, command, record):
@@ -126,26 +126,46 @@ def finish_test(config):
     )
 
 
-def run(root, models, output):
+def run(root, models=None, output=None, reference=None):
     root, output = Path(root), Path(output)
+    reference = Path(reference) if reference is not None else None
+    variants = RESIDUAL_VARIANTS if reference is not None else VARIANTS
+    final_test = reference is None
     output.mkdir(parents=True, exist_ok=True)
     repo = Path(__file__).resolve().parents[2]
     commit = subprocess.check_output(
         ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
     ).strip()
     with locked(output / ".controller.lock", blocking=False):
+        data_run = reference.parent if reference is not None else output.parent
         while not (root / "_PUBLISHED.json").exists():
-            if (output.parent / "data_failed.json").exists():
+            if (data_run / "data_failed.json").exists():
                 raise RuntimeError("Data preparation failed; training stays unsubmitted")
             atomic_json(
                 output / "status.json",
                 dict(status="waiting_for_published_data", code_commit=commit),
             )
             time.sleep(60)
-        if not (output / "prepared.json").exists():
+        if reference is not None:
+            while not (reference / "prepared.json").is_file():
+                ref_status = reference / "status.json"
+                if (
+                    ref_status.is_file()
+                    and json.loads(ref_status.read_text()).get("status") == "failed"
+                ):
+                    raise RuntimeError(
+                        "Reference data selection failed; shared training inputs unavailable"
+                    )
+                atomic_json(
+                    output / "status.json",
+                    dict(status="waiting_for_joint_selection", code_commit=commit),
+                )
+                time.sleep(60)
+            prepare_residual_pair(reference, root, output)
+        elif not (output / "prepared.json").exists():
             prepare(models, root, output)
         jobs = {}
-        for name in VARIANTS:
+        for name in variants:
             directory = output / name / "acceptance"
             directory.mkdir(exist_ok=True)
             command = [
@@ -185,7 +205,7 @@ def run(root, models, output):
             if pending:
                 time.sleep(60)
         training_jobs = {}
-        for name in VARIANTS:
+        for name in variants:
             directory = output / name
             accepted = directory / "acceptance"
             receipt = json.loads((accepted / "passed.json").read_text())
@@ -215,7 +235,7 @@ def run(root, models, output):
                     stage.load_from = str(Path(cfg.work_dir) / f"epoch_{completed}.pth")
                 stage.dump(str(chunk / "config.py"))
                 commands = [[sys.executable, "tools/train.py", str(chunk / "config.py")]]
-                if end == 6:
+                if final_test and end == 6:
                     commands.append(
                         [
                             sys.executable,
@@ -228,7 +248,7 @@ def run(root, models, output):
                 script(chunk / "run.sh", commands)
                 # Final held-out test also costs inference; use the actual test sample count.
                 test_seconds = 0
-                if end == 6:
+                if final_test and end == 6:
                     from hydrostate.registry import DATASETS
 
                     test_seconds = (
@@ -271,6 +291,9 @@ def main():
     p = sub.add_parser("run")
     for name in ("root", "models", "output"):
         p.add_argument("--" + name, required=True)
+    p = sub.add_parser("residual-pair", help="Train only the two new architectures")
+    for name in ("root", "reference", "output"):
+        p.add_argument("--" + name, required=True)
     p = sub.add_parser("acceptance")
     p.add_argument("--config", required=True)
     p.add_argument("--output", required=True)
@@ -278,10 +301,16 @@ def main():
     p.add_argument("--config", required=True)
     args = vars(parser.parse_args())
     command = args.pop("command")
+    if command == "residual-pair":
+        reference, output = (Path(args[k]).resolve() for k in ("reference", "output"))
+        if reference == output or reference in output.parents or output in reference.parents:
+            parser.error("Use a separate run directory for the new models")
     try:
-        {"run": run, "acceptance": acceptance, "test": finish_test}[command](**args)
+        {"run": run, "residual-pair": run, "acceptance": acceptance, "test": finish_test}[command](
+            **args
+        )
     except Exception as error:
-        if command == "run":
+        if command in ("run", "residual-pair"):
             atomic_json(
                 Path(args["output"]) / "status.json", dict(status="failed", error=str(error))
             )

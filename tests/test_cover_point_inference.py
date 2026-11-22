@@ -1,5 +1,6 @@
 """The point evaluator uses the actual label-free model path with all seven tasks."""
 
+import pytest
 import torch
 from retrieval.test_model import batch
 from test_cosa import config
@@ -36,9 +37,13 @@ def test_label_free_cover_inference_closes_and_preserves_invalid_pixels(tmp_path
         torch.testing.assert_close(cover.sum(0), torch.ones_like(item["water"]))
 
 
-def test_manual_cover_real_model_gradient_and_export(tmp_path):
+@pytest.mark.parametrize("center", [None, False, True])
+def test_manual_cover_real_model_gradient_and_export(tmp_path, center):
     cfg = config(tmp_path)
     cfg.model.manual_cover_weight = 2.0
+    if center is not None:
+        cfg.model.type = "BackgroundResidualModel"
+        cfg.model.router = dict(center=center)
     model = MODELS.build(cfg.model)
     raw = batch()
     samples = raw["data_samples"]
@@ -58,5 +63,8 @@ def test_manual_cover_real_model_gradient_and_export(tmp_path):
     assert all(v == 0 for k, v in losses.items() if k.startswith("valid_count_"))
     losses["loss_manual_cover"].backward()
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters())
+    if center is not None:
+        assert model.background_residual.background["coverage"].weight.grad.abs().sum() > 0
+        assert model.background_residual.detail["coverage"].weight.grad.abs().sum() > 0
     predictions = model.eval().predict(raw["inputs"], samples)
     assert predictions[0]["manual_water_valid"].all()
