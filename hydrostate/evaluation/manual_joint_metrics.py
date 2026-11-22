@@ -60,6 +60,12 @@ class ManualJointMetric(JointHydroStateMetric):
                     score.confusion += row["confusion"]
                     score.windows += 1
                 report = score.report()
+                if report["accuracy"] is not None:
+                    output[f"cover/{kind}/{group}/accuracy"] = report["accuracy"]
+                for i, actual in enumerate(report["class_order"]):
+                    for j, predicted in enumerate(report["class_order"]):
+                        key = f"cover/{kind}/{group}/confusion_{actual}_{predicted}"
+                        output[key] = int(score.confusion[i, j])
                 for name, metrics in report["fraction_metrics"].items():
                     for key, value in metrics.items():
                         if value is not None:
