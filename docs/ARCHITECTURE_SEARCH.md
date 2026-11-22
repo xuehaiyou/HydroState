@@ -2,7 +2,9 @@
 
 全部已有实验与待实现候选见[架构与实验总览](ARCHITECTURE_OVERVIEW.md)。
 局部 SM 门控、冻结权重干预和新增开源候选的站点精度见[CGC 机理与小样本验证](validation/CGC_MECHANISM_20261121.md)。
-**2026-11-18 最新决定：以站点 SM、ET 精度评价与选模，产品一致性仅供参考。**
+**2026-11-22 起，新的架构训练和验证统一纳入冰川人工点、Sen1Floods11 LabelHand、站点 SM 和站点 ET。** 四组分别比较，产品指标保留作参考。发布、固定划分和开发集判据见[人工 Cover 联合训练](MANUAL_COVER_TRAINING.md)。在此次决定前已启动的站点实验继续作为机理对照。
+
+2026-11-18 的站点基准以 SM、ET 精度评价与选模，产品一致性仅供参考。
 既有实验的 joint_score 包含产品项，历史记录不改写。新入口
 `tools/experiments/expert_search.py` 使用 `site_score`：训练集标准差归一化的
 站点 SM、ET RMSE 等权平均的负值；产品指标仍记录，不参与保存最佳 checkpoint。

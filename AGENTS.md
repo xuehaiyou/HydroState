@@ -54,6 +54,10 @@
 
 ## 模型与对照实验
 
+- 2026-11-22 起，新的架构训练和验证同时使用已发布的冰川人工点、Sen1Floods11 LabelHand、
+  站点 SM 和站点 ET。首轮候选为 CGC、CoSA_Router、B。每个模型用同一开发验证检查点
+  分别报告两种 Cover 来源和两项站点结果；产品一致性单列。比较规则见
+  [人工 Cover 联合训练](docs/MANUAL_COVER_TRAINING.md)。
 - 当前主干是 OlmoEarth v1.2 Base，12 个 Transformer block、768 通道。
   MTLoRA 使用共享 TA-LoRA，并在第 4/8/12 层提供任务专属 TS-LoRA 出口；
   各任务独立做目标时间查询、三个深度特征融合和解码，加入观测质量摘要。
