@@ -112,3 +112,74 @@ def test_flood_metrics_never_report_land_or_ice():
     assert set(report["fraction_metrics"]) == {"water"}
     assert report["fraction_metrics"]["water"]["rmse"] == 0
     assert report["classes"]["water"]["f1"] == 1
+
+
+def test_addition_preserves_splits_and_rejects_close_holdout():
+    import pytest
+
+    from hydrostate.data.spatial import grid
+    from hydrostate.experiments.manual_cover_extend import append_train
+
+    def row(name, lon, split):
+        crs, transform = grid(lon, 25)
+        return dict(
+            sample_id=name,
+            region=name,
+            lon=lon,
+            lat=25,
+            crs=crs,
+            transform=transform,
+            split=split,
+            spatial_group=name,
+        )
+
+    old = pd.DataFrame([row("holdout", 70, "test"), row("train", 100, "train")])
+    added = pd.DataFrame([row("India", 85, "train")])
+    combined, distances = append_train(old, added)
+    pd.testing.assert_frame_equal(combined.iloc[:2].reset_index(drop=True), old)
+    assert distances[distances.different_split].support_gap_m.gt(35000).all()
+    with pytest.raises(ValueError, match="spatial isolation"):
+        append_train(old, pd.DataFrame([row("too_close", 70.01, "train")]))
+
+
+def test_flood_catalog_retains_2016(tmp_path):
+    import json
+
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from hydrostate.data.manual_cover.prepare import flood_catalog, flood_plan
+
+    source = tmp_path / "raw"
+    folder = source / "data/flood_events/HandLabeled/LabelHand"
+    folder.mkdir(parents=True)
+    (source / "Sen1Floods11_Metadata.geojson").write_text(
+        json.dumps(
+            dict(
+                features=[
+                    dict(
+                        properties=dict(
+                            location="India", s1_date="2016/08/12", s2_date="2016/08/12"
+                        )
+                    )
+                ]
+            )
+        )
+    )
+    with rasterio.open(
+        folder / "India_1_LabelHand.tif",
+        "w",
+        driver="GTiff",
+        height=2,
+        width=2,
+        count=1,
+        dtype="int16",
+        crs="EPSG:4326",
+        transform=from_origin(85, 25, 0.0001, 0.0001),
+    ) as f:
+        f.write(np.ones((1, 2, 2), dtype="int16"))
+    catalog = flood_catalog(source, tmp_path / "release")
+    assert catalog[0]["included"]
+    plan = flood_plan(catalog)
+    assert not plan.empty
+    assert plan.target_time.str.startswith("2016").all()

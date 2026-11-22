@@ -220,3 +220,15 @@ def test_budget_uses_measured_io_and_ten_percent_margin(tmp_path):
     seconds, detail = estimate_seconds(tmp_path, 100)
     assert detail[0]["estimated_seconds"] == 218
     assert seconds == 240
+
+
+def test_points_outside_product_years_are_retained(tmp_path):
+    from hydrostate.data.cover_points.prepare import parse_points
+
+    path = source_file(tmp_path)
+    raw = pd.read_csv(path)
+    raw["image_date"] = [20160812, 20250101, 20210615, 20210615, 20210615]
+    raw.to_csv(path, index=False)
+    points, _ = parse_points(path)
+    assert len(points) == 5
+    assert {"2016-08-12", "2025-01-01"} <= set(points.observation_date)

@@ -46,8 +46,6 @@ def parse_points(source):
         if not np.isfinite([lon, lat]).all() or not (-180 <= lon <= 180 and -60 <= lat < 84):
             raise ValueError("Point outside supported geographic input domain")
         day = pd.to_datetime(r["image_date"], format="%Y%m%d", errors="raise").date()
-        if not 2017 <= day.year <= 2024:
-            raise ValueError("Annotation outside current comparison years")
         records.append(
             dict(
                 source_row=i,

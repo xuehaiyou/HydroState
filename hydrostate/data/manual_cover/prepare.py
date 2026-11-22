@@ -53,10 +53,8 @@ def flood_catalog(source, root):
                 observation_date=day,
                 s1_date=e["s1_date"].replace("/", "-"),
                 s2_date=day,
-                included=2017 <= date.fromisoformat(day).year <= 2024,
-                exclusion_reason=""
-                if 2017 <= date.fromisoformat(day).year <= 2024
-                else "outside_2017_2024_input_contract",
+                included=True,
+                exclusion_reason="",
                 crs=crs,
                 transform=affine,
                 bounds=bounds,
