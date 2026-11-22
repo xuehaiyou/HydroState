@@ -42,9 +42,10 @@ class SpatialReadout(nn.Module):
 class BackgroundResidual(nn.Module):
     """Separate a masked tile background from spatial deviations in latent space."""
 
-    def __init__(self, groups, state_channels, channels, center):
+    def __init__(self, groups, state_channels, channels, center, retain_scene_context=False):
         super().__init__()
         self.center = center
+        self.retain_scene_context = retain_scene_context
         self.local = StateExpert(state_channels, channels)
         self.background = nn.ModuleDict({
             name: nn.Conv2d(state_channels, channels, 1) for name in groups})
@@ -54,7 +55,8 @@ class BackgroundResidual(nn.Module):
     def forward(self, state, valid):
         count = valid.sum((-2, -1), keepdim=True).clamp_min(1)
         mean_state = state.masked_fill(~valid, 0).float().sum((-2, -1), keepdim=True) / count
-        local = self.local((state - mean_state.to(state.dtype)).masked_fill(~valid, 0), valid)
+        local_input = state if self.retain_scene_context else state - mean_state.to(state.dtype)
+        local = self.local(local_input.masked_fill(~valid, 0), valid)
         # The task projections are linear without bias, so centering once before
         # them gives every task a zero-mean detail without repeated reductions.
         if self.center:
