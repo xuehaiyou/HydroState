@@ -50,11 +50,14 @@ def test_configs_only_switch_interaction_and_keep_supervision_budget():
     assert original.model.encoder.get("use_landsat_toa_adapter", True)
 
 
-@pytest.mark.parametrize("enabled", [False, True, "cgc", "recurrent_cgc", "mlore", "ple", "mlore_complete"])
+@pytest.mark.parametrize("enabled", [False, True, "cgc", "recurrent_cgc", "background", "mlore", "ple", "mlore_complete"])
 def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path, enabled):
     cfg = config(tmp_path, enabled, checkpoint=True)
     if enabled == "cgc":
         cfg.model.router = dict(type="CGCRouter", num_shared=2)
+    if enabled == "background":
+        cfg.model.type = "BackgroundResidualModel"
+        cfg.model.router = dict(center=True)
     if enabled == "recurrent_cgc":
         cfg.model.router = dict(type="RecurrentCGCRouter", spatial_gates=["sm"], depth=3)
     if enabled == "mlore":
@@ -393,3 +396,24 @@ def test_cgc_sm_refinement_preserves_every_non_sm_prediction(tmp_path, tiny):
     assert not torch.equal(after["soil_moisture"], before["soil_moisture"])
     for name in set(before) - {"soil_moisture"}:
         torch.testing.assert_close(after[name], before[name], atol=0, rtol=0)
+
+
+def test_centering_changes_only_valid_spatial_mean():
+    from hydrostate.models.cosa.branches import BackgroundResidual
+
+    torch.manual_seed(42)
+    model = BackgroundResidual(['sm', 'et'], 8, 4, center=False)
+    x = torch.randn(2, 8, 5, 5)
+    valid = torch.ones_like(x[:, :1], dtype=torch.bool)
+    valid[0] = False
+    valid[1, :, 1, 2] = False
+    x.masked_fill_(~valid, float('nan'))
+    raw = model(x, valid)
+    model.center = True
+    centered = model(x, valid)
+    for name, output in centered.items():
+        assert not output[0].any() and not output[1, :, 1, 2].any()
+        background = model.background[name](x[1, :, valid[1, 0]].mean(-1).view(1, 8, 1, 1))
+        difference = raw[name][1, :, valid[1, 0]] - output[1, :, valid[1, 0]]
+        torch.testing.assert_close(difference, difference.mean(-1, keepdim=True).expand_as(difference))
+        torch.testing.assert_close(output[1, :, valid[1, 0]].mean(-1), background.flatten())

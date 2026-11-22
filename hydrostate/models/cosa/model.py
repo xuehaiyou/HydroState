@@ -8,7 +8,7 @@ from hydrostate.registry import MODELS
 from ..hydrostate_model import HydroStateModel
 from ..mlore.routing import MLoRERouter
 from ..retrieval_model import RetrievalModelMixin
-from .branches import SpatialReadout, StateExpert
+from .branches import BackgroundResidual, SpatialReadout, StateExpert
 from .cgc import CGCRouter, RecurrentCGCRouter
 from .encoder import CoSASharedLoRAEncoder
 from .routing import StateRouter
@@ -43,11 +43,13 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
         channels = options.pop("channels", 64)
         if options or type(channels) is not int or channels < 1:
             raise ValueError("Branches require a positive channels setting")
+        self._build_spatial_modules(channels, dict(router or {}))
+
+    def _build_spatial_modules(self, channels, routing):
         self.experts = nn.ModuleDict({
             name: StateExpert(self.decoder.out_channels, channels) for name in self.expert_groups})
         self.readouts = nn.ModuleDict({
             name: SpatialReadout(channels) for name in self.expert_groups})
-        routing = dict(router or {})
         kind = routing.pop("type", "StateRouter")
         router_classes = {"StateRouter": StateRouter, "CGCRouter": CGCRouter,
                           "RecurrentCGCRouter": RecurrentCGCRouter,
@@ -57,6 +59,10 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
         self.router = router_classes[kind](
             self.expert_groups, state_channels=self.decoder.out_channels,
             channels=channels, **routing)
+
+    def _spatial_features(self, state, valid):
+        features = {name: expert(state, valid) for name, expert in self.experts.items()}
+        return self.router(state, features, valid)
 
     def _forward(self, inputs):
         if set(inputs.get("target_time", {})) != set(self.tasks):
@@ -74,8 +80,7 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
                 torch._assert_async((inputs["target_time"][task] == bounds).all(),
                                     "CoSA query group requires matching target intervals")
             state, valid = self.decoder(prepared, bounds)
-            features = {name: expert(state, valid) for name, expert in self.experts.items()}
-            features = self.router(state, features, valid)
+            features = self._spatial_features(state, valid)
             # All source experts are queried at the recipient's interval, never at
             # their independently requested output times.
             for name, tasks in self.expert_groups.items():
@@ -85,6 +90,20 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
                 decoded = self.readouts[name](features[name], valid, output_size)
                 outputs.update({task: self.heads[task](decoded) for task in selected})
         return self._constrain_outputs(outputs)
+
+
+@MODELS.register_module()
+class BackgroundResidualModel(CoSAHydroStateModel):
+    """Retrieval with a common local spatial block and one background per task group."""
+
+    def _build_spatial_modules(self, channels, routing):
+        self.background_residual = BackgroundResidual(
+            self.expert_groups, self.decoder.out_channels, channels, **routing)
+        self.readouts = nn.ModuleDict({
+            name: SpatialReadout(channels) for name in self.expert_groups})
+
+    def _spatial_features(self, state, valid):
+        return self.background_residual(state, valid)
 
 
 @MODELS.register_module()
