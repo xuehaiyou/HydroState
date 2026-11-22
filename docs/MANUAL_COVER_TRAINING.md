@@ -82,3 +82,14 @@ python tools/experiments/launch_manual_cover.py run --root ROOT --models PREVIOU
 - https://github.com/cloudtostreet/Sen1Floods11/blob/master/README.md
 - https://tc.copernicus.org/articles/19/1675/2025/
 - https://github.com/RaineyAbe/glacier-snow-cover-mapping
+
+### 三候选结果汇总
+
+```bash
+python tools/experiments/summarize_manual_cover.py TRAINING_ROOT --output REPORT.json
+```
+
+汇总固定 CGC、CoSA_Router、B。每个模型按 `manual_joint_score` 选择同一验证 epoch，
+分别保留该 epoch 的 Cover、SM、ET 指标和选定 checkpoint 的最终测试指标；
+不会拼接各任务在不同 epoch 的最优结果。训练不足六轮、缺少 checkpoint 或最终测试
+结果时标为不完整。指标可用仍需结合 Slurm 退出状态核实成功，不能仅凭日志判断任务完成。
