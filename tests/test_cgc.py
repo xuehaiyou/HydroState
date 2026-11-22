@@ -134,3 +134,18 @@ def test_learned_locality_recovers_both_gate_scales_and_shares_three_scalars():
                 p.fill_(logit)
         for task, value in ref(state, features, valid).items():
             torch.testing.assert_close(model(state, features, valid)[task], value)
+
+
+def test_factorized_gate_recovers_endpoints_and_mixed_marginals():
+    from hydrostate.models.cosa.cgc import split_gate_weights
+
+    tile = torch.randn(2, 1, 1, 3)
+    local = torch.randn(2, 3, 4, 3)
+    for scores in (tile, local):
+        torch.testing.assert_close(split_gate_weights(scores, scores), scores.softmax(-1))
+    for shared, private in ((tile, local), (local, tile)):
+        weights = split_gate_weights(shared, private)
+        torch.testing.assert_close(weights.sum(-1), torch.ones_like(weights[..., 0]))
+        torch.testing.assert_close(weights[..., -1], private.softmax(-1)[..., -1].expand(2, 3, 4))
+        relative = weights[..., :2] / weights[..., :2].sum(-1, keepdim=True)
+        torch.testing.assert_close(relative, shared[..., :2].softmax(-1).expand_as(relative))

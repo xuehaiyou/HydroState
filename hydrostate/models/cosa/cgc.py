@@ -11,13 +11,27 @@ from torch import nn
 from .branches import StateExpert
 
 
+def split_gate_weights(shared_logits, private_logits):
+    """Conditional weights over shared experts and marginal probability of private use."""
+    q = shared_logits[..., :-1].float().softmax(-1)
+    private = private_logits.float().softmax(-1)[..., -1:]
+    shared = q * (1 - private)
+    return torch.cat((shared, private.expand_as(shared[..., :1])), dim=-1)
+
+
 class CGCRouter(nn.Module):
     def __init__(self, experts, state_channels=256, channels=64, num_shared=2,
-                 spatial_gates=(), private_only=()):
+                 spatial_gates=(), private_only=(), split_gates=None):
         super().__init__()
         self.experts = tuple(experts)
         self.spatial_gates = frozenset(spatial_gates)
         self.private_only = frozenset(private_only)
+        self.split_gates = split_gates
+        if split_gates is not None and (
+            self.spatial_gates or self.private_only or split_gates not in
+            ('tile_tile', 'tile_local', 'local_tile', 'local_local')
+        ):
+            raise ValueError('Expected two gate scopes in shared/private order')
         if not (self.spatial_gates | self.private_only).issubset(self.experts):
             raise ValueError("Routing policies require a declared expert group")
         if self.private_only & self.spatial_gates:
@@ -51,6 +65,19 @@ class CGCRouter(nn.Module):
             # No other task's private expert enters this gate or receives its loss.
             candidates = torch.stack([*shared, features[task]], dim=1)
             selector = masked if selectors is None else selectors[task].masked_fill(~valid, 0)
+            if self.split_gates is not None:
+                shared_scope, private_scope = self.split_gates.split('_')
+                pooled = pooled_state if selectors is None else selector.sum((-2, -1)) / count
+                scores = {}
+                gate = self.gates[task]
+                if 'tile' in (shared_scope, private_scope):
+                    scores['tile'] = gate(pooled)[:, None, None, :]
+                if 'local' in (shared_scope, private_scope):
+                    scores['local'] = gate(selector.movedim(1, -1))
+                weights = split_gate_weights(scores[shared_scope], scores[private_scope])
+                outputs[task] = ((weights.movedim(-1, 1)[:, :, None].to(candidates.dtype)
+                                  * candidates).sum(1)).masked_fill(~valid, 0)
+                continue
             if task in self.spatial_gates or locality is not None:
                 logits = self.gates[task](selector.movedim(1, -1))
                 if locality is not None:

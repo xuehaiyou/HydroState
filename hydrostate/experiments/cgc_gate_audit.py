@@ -14,12 +14,14 @@ from hydrostate.models.site_supervision import station_values
 
 
 @torch.inference_mode()
-def run(config, checkpoint, directory, local_sm_only=False, split='validation', adaptive=False):
+def run(config, checkpoint, directory, local_sm_only=False, split='validation', adaptive=False, factorized=False):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     cfg = Config.fromfile(config)
     if cfg.val_dataloader.dataset.split != 'validation':
         raise ValueError('Development validation required')
+    if factorized and (adaptive or local_sm_only or split != 'validation'):
+        raise ValueError('Factorized audit requires development validation only')
     if adaptive and (split != 'validation' or local_sm_only):
         raise ValueError('Adaptive interventions require development validation only')
     if split == 'test':
@@ -44,7 +46,9 @@ def run(config, checkpoint, directory, local_sm_only=False, split='validation', 
         return hook
 
     modes = ('dynamic', 'local_sm')
-    if adaptive:
+    if factorized:
+        modes = ('dynamic', 'tile_tile', 'tile_local', 'local_tile', 'local_local')
+    elif adaptive:
         if getattr(model.router, 'depth', None) != 2 or model.router.locality is None:
             raise ValueError('Two learned-locality blocks required')
         neutral = torch.nn.ParameterDict({
@@ -63,7 +67,7 @@ def run(config, checkpoint, directory, local_sm_only=False, split='validation', 
         atomic_json(directory / 'gate_means.json', {k: v.tolist() for k, v in means.items()})
     rows = []
     loader = runner.val_dataloader
-    if split == 'test' or adaptive:
+    if split == 'test' or adaptive or factorized:
         from torch.utils.data import DataLoader, Subset
         dataset = loader.dataset
         loader = DataLoader(Subset(dataset, range(dataset.offsets[1], len(dataset))),
@@ -76,6 +80,8 @@ def run(config, checkpoint, directory, local_sm_only=False, split='validation', 
         with patch.object(model.encoder, 'forward', return_value=levels):
             for mode in modes:
                 with ExitStack() as stack:
+                    if factorized and mode != 'dynamic':
+                        stack.enter_context(patch.object(model.router, 'split_gates', mode))
                     if mode == 'skip_refinement':
                         stack.enter_context(patch.object(model.router, 'depth', 1))
                     if mode == 'equal_locality':
@@ -83,7 +89,7 @@ def run(config, checkpoint, directory, local_sm_only=False, split='validation', 
                     if mode == 'local_sm':
                         stack.enter_context(patch.object(model.router, 'spatial_gates', {'sm'}))
                     for name, gate in gates.items():
-                        if adaptive or mode in ('dynamic', 'local_sm'):
+                        if factorized or adaptive or mode in ('dynamic', 'local_sm'):
                             continue
                         if mode in ('coverage_mean', 'et_mean') and mode != name + '_mean':
                             continue
@@ -110,6 +116,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for argument in ('config', 'checkpoint', 'directory'):
         parser.add_argument(argument)
+    parser.add_argument('--factorized', action='store_true')
     parser.add_argument('--adaptive', action='store_true')
     parser.add_argument('--local-sm-only', action='store_true')
     parser.add_argument('--split', choices=('validation', 'test'), default='validation')
