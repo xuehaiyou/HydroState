@@ -159,3 +159,7 @@ debug 使用 `tools/experiments/verify_joint_gpu.py` 做完整训练/验证/保�
 
 冰川人工水体、冰雪、陆地点的独立样本契约、采集及多模型验证入口见
 [人工覆盖点验证](COVER_POINT_VALIDATION.md)。该评估不改变现有产品/站点划分或选模分数。
+
+人工 Cover 比例样本及空间隔离后的三架构训练见
+[人工 Cover 联合训练](MANUAL_COVER_TRAINING.md)，实际发布/提交进度见
+[2026-11-22 运行记录](validation/MANUAL_COVER_TOP3_20261122.md)。
