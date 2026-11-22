@@ -14,12 +14,14 @@ from hydrostate.models.site_supervision import station_values
 
 
 @torch.inference_mode()
-def run(config, checkpoint, directory, local_sm_only=False, split='validation'):
+def run(config, checkpoint, directory, local_sm_only=False, split='validation', adaptive=False):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     cfg = Config.fromfile(config)
     if cfg.val_dataloader.dataset.split != 'validation':
         raise ValueError('Development validation required')
+    if adaptive and (split != 'validation' or local_sm_only):
+        raise ValueError('Adaptive interventions require development validation only')
     if split == 'test':
         if not local_sm_only:
             raise ValueError('Held-out comparison is fixed to original and local SM gates')
@@ -42,7 +44,14 @@ def run(config, checkpoint, directory, local_sm_only=False, split='validation'):
         return hook
 
     modes = ('dynamic', 'local_sm')
-    if not local_sm_only:
+    if adaptive:
+        if getattr(model.router, 'depth', None) != 2 or model.router.locality is None:
+            raise ValueError('Two learned-locality blocks required')
+        neutral = torch.nn.ParameterDict({
+            name: torch.nn.Parameter(torch.zeros_like(value), requires_grad=False)
+            for name, value in model.router.locality.items()})
+        modes = ('dynamic', 'skip_refinement', 'equal_locality')
+    elif not local_sm_only:
         modes += ('train_mean', 'uniform', 'private_only', 'shared_only', 'coverage_mean', 'et_mean')
         with ExitStack() as stack:
             for name, gate in gates.items():
@@ -54,7 +63,7 @@ def run(config, checkpoint, directory, local_sm_only=False, split='validation'):
         atomic_json(directory / 'gate_means.json', {k: v.tolist() for k, v in means.items()})
     rows = []
     loader = runner.val_dataloader
-    if split == 'test':
+    if split == 'test' or adaptive:
         from torch.utils.data import DataLoader, Subset
         dataset = loader.dataset
         loader = DataLoader(Subset(dataset, range(dataset.offsets[1], len(dataset))),
@@ -67,10 +76,14 @@ def run(config, checkpoint, directory, local_sm_only=False, split='validation'):
         with patch.object(model.encoder, 'forward', return_value=levels):
             for mode in modes:
                 with ExitStack() as stack:
+                    if mode == 'skip_refinement':
+                        stack.enter_context(patch.object(model.router, 'depth', 1))
+                    if mode == 'equal_locality':
+                        stack.enter_context(patch.object(model.router, 'locality', neutral))
                     if mode == 'local_sm':
                         stack.enter_context(patch.object(model.router, 'spatial_gates', {'sm'}))
                     for name, gate in gates.items():
-                        if mode in ('dynamic', 'local_sm'):
+                        if adaptive or mode in ('dynamic', 'local_sm'):
                             continue
                         if mode in ('coverage_mean', 'et_mean') and mode != name + '_mean':
                             continue
@@ -97,6 +110,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     for argument in ('config', 'checkpoint', 'directory'):
         parser.add_argument(argument)
+    parser.add_argument('--adaptive', action='store_true')
     parser.add_argument('--local-sm-only', action='store_true')
     parser.add_argument('--split', choices=('validation', 'test'), default='validation')
     run(**vars(parser.parse_args()))
