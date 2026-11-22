@@ -37,10 +37,12 @@ class AlignedLandCoupling(WaterSoilCoupling):
 class RetrievalModelMixin:
     """Shared current-contract SM support and ET export, independent of architecture."""
 
-    def __init__(self, land_time_policy="aligned_or_window", site_supervision=None, **kwargs):
+    def __init__(self, land_time_policy="aligned_or_window", site_supervision=None,
+                 manual_cover_weight=None, **kwargs):
         if land_time_policy not in ("aligned_or_window", "require_aligned"):
             raise ValueError("Unknown land_time_policy")
         self.land_time_policy = land_time_policy
+        self.manual_cover_weight = manual_cover_weight
         super().__init__(**kwargs)
         if self.water_soil_coupling is not None:
             self.water_soil_coupling = AlignedLandCoupling(**vars(self.water_soil_coupling))
@@ -53,6 +55,12 @@ class RetrievalModelMixin:
         losses = super()._loss_from_outputs(outputs, data_samples, auxiliary, auxiliary_weights)
         if hasattr(self, "site_objective"):
             losses.update(self.site_objective(outputs, data_samples))
+        if self.manual_cover_weight is not None:
+            from .manual_cover_supervision import manual_cover_loss
+
+            losses["loss_manual_cover"] = manual_cover_loss(
+                outputs, data_samples, self.manual_cover_weight
+            )
         return losses
 
     def _land_samples(self, inputs, samples):
@@ -112,6 +120,11 @@ class RetrievalModelMixin:
             for i, output in enumerate(outputs):
                 output["sm_land_time_aligned"] = samples["sm_land_time_aligned"][i]
         for i, output in enumerate(outputs):
+            if data_samples is not None and "manual_water" in data_samples:
+                for name in ("water", "snow_ice", "land"):
+                    for suffix in ("", "_valid"):
+                        key = "manual_" + name + suffix
+                        output[key] = data_samples[key][i]
             output["target_time"] = {
                 task: bounds[i] for task, bounds in inputs["target_time"].items()
             }

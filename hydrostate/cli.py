@@ -74,7 +74,7 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
         manifest = cfg.train_dataloader.dataset.manifest
         source = str(Path(manifest).with_name("target_stats.json"))
     statistics = load_target_statistics(source, tasks)
-    joint = cfg.train_dataloader.dataset.type == "JointRetrievalDataset"
+    joint = cfg.train_dataloader.dataset.type in ("JointRetrievalDataset", "ManualJointDataset")
     if joint:
         from hydrostate.data.site.publication import require_publication_ready
         from hydrostate.registry import DATASETS
@@ -115,7 +115,9 @@ def configure_target_statistics(cfg: Config, training: bool) -> None:
         if evaluators is None:
             continue
         for evaluator in evaluators if isinstance(evaluators, list) else [evaluators]:
-            if evaluator["type"].split(".")[-1] in ("HydroStateMetric", "JointHydroStateMetric"):
+            if evaluator["type"].split(".")[-1] in (
+                "HydroStateMetric", "JointHydroStateMetric", "ManualJointMetric"
+            ):
                 evaluator["target_statistics"] = statistics
                 if joint:
                     evaluator["site_statistics"] = cfg.model.site_supervision.statistics

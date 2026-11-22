@@ -34,3 +34,29 @@ def test_label_free_cover_inference_closes_and_preserves_invalid_pixels(tmp_path
         cover = torch.stack([item[t] for t in ("water", "snow_ice", "land")])
         assert torch.isfinite(cover).all()
         torch.testing.assert_close(cover.sum(0), torch.ones_like(item["water"]))
+
+
+def test_manual_cover_real_model_gradient_and_export(tmp_path):
+    cfg = config(tmp_path)
+    cfg.model.manual_cover_weight = 2.0
+    model = MODELS.build(cfg.model)
+    raw = batch()
+    samples = raw["data_samples"]
+    for key in samples:
+        if key.endswith("_valid"):
+            samples[key].zero_()
+    for name in ("water", "snow_ice", "land"):
+        samples["manual_" + name] = torch.zeros_like(samples["water"])
+        samples["manual_" + name + "_valid"] = torch.zeros_like(samples["water"], dtype=torch.bool)
+    samples["manual_water"][0] = 1
+    samples["manual_water_valid"][0] = True
+    samples["manual_snow_ice"][1] = 1
+    for name in ("water", "snow_ice", "land"):
+        samples["manual_" + name + "_valid"][1] = True
+    losses = model.loss(raw["inputs"], samples)
+    assert losses["loss_manual_cover"] > 0
+    assert all(v == 0 for k, v in losses.items() if k.startswith("valid_count_"))
+    losses["loss_manual_cover"].backward()
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters())
+    predictions = model.eval().predict(raw["inputs"], samples)
+    assert predictions[0]["manual_water_valid"].all()

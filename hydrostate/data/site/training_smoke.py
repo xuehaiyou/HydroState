@@ -47,6 +47,10 @@ def representative_indices(dataset):
     indices = []
     for i in range(max(len(products), len(sites))):
         indices.extend((products[i % len(products)], sites[i % len(sites)]))
+    if hasattr(dataset, "manual"):
+        manual = [dataset.base_length + int(g.index[0])
+                  for _, g in dataset.manual.table.groupby("source")]
+        indices = manual + indices
     return indices
 
 

@@ -73,3 +73,42 @@ def test_region_all_dates_stay_together():
     assert plan.groupby("region").split.nunique().eq(1).all()
     assert set(plan[plan.region.eq("glacier:SouthCascade")].split) == {"test"}
     assert gaps[gaps.different_split].support_gap_m.gt(35000).all()
+
+
+def test_unified_manual_loss_density_and_missing_gradients():
+    import torch
+
+    from hydrostate.models.manual_cover_supervision import manual_cover_loss
+
+    values = {
+        c: torch.full((2, 1, 4, 4), 0.25, requires_grad=True) for c in ("water", "snow_ice", "land")
+    }
+    targets = {}
+    for c in values:
+        targets["manual_" + c] = torch.zeros((2, 1, 4, 4))
+        targets["manual_" + c + "_valid"] = torch.zeros((2, 1, 4, 4), dtype=torch.bool)
+        targets["manual_" + c + "_valid"][0, 0, 0, 0] = True
+    targets["manual_water"][0, 0, 0, 0] = 1
+    targets["manual_water"][1] = 0.5
+    targets["manual_water_valid"][1] = True
+    loss = manual_cover_loss(values, targets, weight=2)
+    expected = 2 * ((0.75**2 + 0.25**2 + 0.25**2) / 3 + 0.25**2) / 2
+    assert abs(loss.item() - expected) < 1e-6
+    loss.backward()
+    assert not values["land"].grad[1].any()
+    assert not values["snow_ice"].grad[1].any()
+    assert values["water"].grad[1].abs().sum() > 0
+
+
+def test_flood_metrics_never_report_land_or_ice():
+    from hydrostate.evaluation.manual_cover import Scores
+
+    t = area_fractions(box(0, 0, 600, 1200), box(0, 0, 1200, 1200), [10, 0, 0, 0, -10, 1200])
+    predicted = np.stack([t["water"][0], np.zeros((40, 40)), 1 - t["water"][0]])
+    score = Scores("sen1floods11")
+    score.add(predicted, t, np.ones((40, 40), dtype=bool))
+    report = score.report()
+    assert set(report["classes"]) == {"water"}
+    assert set(report["fraction_metrics"]) == {"water"}
+    assert report["fraction_metrics"]["water"]["rmse"] == 0
+    assert report["classes"]["water"]["f1"] == 1

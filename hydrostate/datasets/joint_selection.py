@@ -19,8 +19,8 @@ def selection_path(root, audit, split, fraction, component):
 def apply_selection(dataset, root, train_fraction, validation_fraction):
     root = Path(root)
     audit = json.loads((root / 'audit.json').read_text())
-    if audit.get('version') != 1 or dataset.split not in ('train', 'validation'):
-        raise ValueError('Search selections support train/development validation only')
+    if audit.get('version') != 1 or dataset.split not in ('train', 'validation', 'test'):
+        raise ValueError('Unknown selected split')
     fraction = train_fraction if dataset.split == 'train' else validation_fraction
     training_manifests = []
     for index, component in enumerate(dataset.components):
