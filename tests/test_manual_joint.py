@@ -61,3 +61,19 @@ def test_slurm_submit_receipt_prevents_duplicates(tmp_path, monkeypatch):
     assert submit(tmp_path, ["sbatch", "run.sh"], {"phase": "test"}) == "123"
     assert len(calls) == 1
     assert json.loads((tmp_path / "submission.json").read_text())["job_id"] == "123"
+
+
+def test_final_test_does_not_resume_training_state(tmp_path, monkeypatch):
+    from mmengine.config import Config
+
+    from hydrostate.experiments.manual_cover_launch import finish_test
+
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "best_manual_joint_score_epoch_6.pth").touch()
+    config = tmp_path / "config.py"
+    Config(dict(work_dir=str(work), resume=True)).dump(str(config))
+    commands = []
+    monkeypatch.setattr("subprocess.run", lambda command, **kw: commands.append(command))
+    finish_test(str(config))
+    assert "resume=False" in commands[0]

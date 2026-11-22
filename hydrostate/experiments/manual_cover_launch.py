@@ -119,6 +119,7 @@ def finish_test(config):
             config,
             str(files[0]),
             "--cfg-options",
+            "resume=False",
             "work_dir=" + str(Path(cfg.work_dir).parent / "final_test"),
         ],
         check=True,
