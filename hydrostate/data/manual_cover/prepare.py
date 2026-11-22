@@ -33,7 +33,8 @@ def flood_catalog(source, root):
     rows = []
     for p in sorted((source / "data/flood_events/HandLabeled/LabelHand").glob("*_LabelHand.tif")):
         event = p.name.split("_")[0]
-        e = events[event]
+        # The released chip prefix is Mekong; event metadata names it Cambodia.
+        e = events[{"Mekong": "Cambodia"}.get(event, event)]
         day = e["s2_date"].replace("/", "-")
         with rasterio.open(p) as src:
             values = src.read(1)
