@@ -5,3 +5,6 @@ from .model import CoSAHydroStateModel
 from .state import CoSAStateFusion
 
 __all__ = ["CoSAHydroStateModel", "CoSASharedLoRAEncoder", "CoSAStateFusion"]
+
+from . import foundation as foundation
+from .anysat import AnySatEncoder as AnySatEncoder

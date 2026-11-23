@@ -22,7 +22,7 @@ from hydrostate.models.olmoearth_encoder import _broadcast_sdpa
 from hydrostate.registry import DATASETS, MODELS
 
 
-def benchmark(config, output, *, batch_size, steps=8, workers=2):
+def benchmark(config, output, *, batch_size, steps=8, workers=2, validation_batch=None):
     """Measure one candidate in its own process; OOM never leaves a training checkpoint."""
     if batch_size < 1 or steps < 3 or workers < 0:
         raise ValueError("Require positive batch, at least three steps and nonnegative workers")
@@ -63,8 +63,9 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2):
                   "not model accuracy or a reusable checkpoint", train_samples=len(dataset),
                   sample_ids=[dataset.product.table.iloc[i].sample_id if i < len(dataset.product)
                               else f"joint_index:{i}" for i in indices])
-    attention = [block.attn for block in model.encoder.backbone.model.blocks]
-    report["gradient_checkpointing"] = cfg.model.encoder.gradient_checkpointing
+    core = getattr(model.encoder.backbone, "model", None)
+    attention = [getattr(block, "block", block).attn for block in core.blocks] if core else []
+    report["gradient_checkpointing"] = cfg.model.encoder.get("gradient_checkpointing", None)
     report["broadcast_attention_blocks"] = sum(
         isinstance(layer.sdpa, partial) and layer.sdpa.func is _broadcast_sdpa
         for layer in attention)
@@ -94,8 +95,9 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2):
         val = DATASETS.build(dict(cfg.val_dataloader.dataset))
         report["validation_samples"] = len(val)
         chosen = representative_indices(val)
-        chosen = [chosen[i % len(chosen)] for i in range(batch_size * 3)]
-        validation = DataLoader(val, batch_size=batch_size, sampler=chosen, num_workers=workers,
+        val_batch = validation_batch or batch_size
+        chosen = [chosen[i % len(chosen)] for i in range(val_batch * 3)]
+        validation = DataLoader(val, batch_size=val_batch, sampler=chosen, num_workers=workers,
                                 pin_memory=True, collate_fn=hydro_collate)
         iterator = iter(validation)
         times = []
@@ -106,7 +108,7 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2):
                 model.val_step(next(iterator))
                 memory.sample()
                 times.append(time.monotonic() - began)
-        report["validation_seconds_per_sample"] = sum(times[1:]) / 2 / batch_size
+        report["validation_seconds_per_sample"] = sum(times[1:]) / 2 / val_batch
         report["status"] = "passed"
     except torch.cuda.OutOfMemoryError as error:
         report.update(status="oom", error=str(error))
@@ -124,6 +126,7 @@ def main():
     parser.add_argument("--batch-size", required=True, type=int)
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--validation-batch", type=int)
     args = parser.parse_args()
     benchmark(args.config, args.output, batch_size=args.batch_size, steps=args.steps,
-              workers=args.workers)
+              workers=args.workers, validation_batch=args.validation_batch)

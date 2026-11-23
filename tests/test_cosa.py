@@ -50,9 +50,13 @@ def test_configs_only_switch_interaction_and_keep_supervision_budget():
     assert original.model.encoder.get("use_landsat_toa_adapter", True)
 
 
-@pytest.mark.parametrize("enabled", [False, True, "cgc", "et_only", "recurrent_cgc", "background", "mlore", "ple", "mlore_complete"])
+@pytest.mark.parametrize("enabled", [False, True, "ditask", "d2moe", "cgc", "et_only", "recurrent_cgc", "background", "mlore", "ple", "mlore_complete"])
 def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path, enabled):
     cfg = config(tmp_path, enabled, checkpoint=True)
+    if enabled in ("ditask", "d2moe"):
+        cfg.model.type = "FoundationStageModel"
+        cfg.model.encoder.update(type="FoundationStageEncoder", method=enabled)
+        cfg.model.router.enabled = False
     if enabled == "et_only":
         cfg.model.type = "ETOnlyCGC"
     if enabled in ("cgc", "et_only"):
