@@ -50,12 +50,26 @@ def test_configs_only_switch_interaction_and_keep_supervision_budget():
     assert original.model.encoder.get("use_landsat_toa_adapter", True)
 
 
-@pytest.mark.parametrize("enabled", [False, True, "ditask", "d2moe", "cgc", "et_only", "recurrent_cgc", "background", "mlore", "ple", "mlore_complete"])
+@pytest.mark.parametrize("enabled", [False, True, "ditask_v1", "d2moe_v1", "ditask", "d2moe",
+                                     "cgc", "et_only", "recurrent_cgc", "background", "mlore",
+                                     "ple", "mlore_complete"])
 def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path, enabled):
     cfg = config(tmp_path, enabled, checkpoint=True)
-    if enabled in ("ditask", "d2moe"):
+    if enabled in ("ditask_v1", "d2moe_v1"):
         cfg.model.type = "FoundationStageModel"
-        cfg.model.encoder.update(type="FoundationStageEncoder", method=enabled)
+        cfg.model.encoder.update(type="FoundationStageEncoder", method=enabled.removesuffix("_v1"))
+        cfg.model.router.enabled = False
+    if enabled in ("ditask", "d2moe"):
+        cfg.model.type = "FoundationStageModelV2"
+        if enabled == "d2moe":
+            cfg.model.decoder.type = "D2MoEStateFusion"
+        else:
+            pytest.importorskip("difw")
+            cfg.model.decoder.type = "DiTASKStateFusion"
+        cfg.model.encoder.update(type="FoundationStageEncoderV2", method=enabled,
+                                 num_levels=4, out_indices=[0, 1, 3, 5])
+        cfg.model.decoder.num_levels = 4
+        cfg.model.manual_cover_weight = 2.0
         cfg.model.router.enabled = False
     if enabled == "et_only":
         cfg.model.type = "ETOnlyCGC"
@@ -95,6 +109,13 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
     cfg.dump(str(config_file))
     cfg = Config.fromfile(str(config_file))
     model = MODELS.build(cfg.model).train()
+    if enabled in ("ditask", "d2moe"):
+        from hydrostate.models.cosa.ditask import AdapterDropout
+        drops = [mod for mod in model.encoder.backbone.modules() if isinstance(mod, AdapterDropout)]
+        model.eval()
+        assert drops and not any(d.training for d in drops)
+        model.train()
+        assert all(d.training for d in drops) and not model.encoder.backbone.training
     raw = batch()
     for name, value in raw["data_samples"].items():
         if name.endswith("valid") and torch.is_tensor(value):
@@ -105,6 +126,13 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
         weights = torch.zeros(2, 1, 4, 4)
         weights[1, 0, 2, 2] = 1
         raw["data_samples"][f"{name}_native_weights"] = weights
+    if enabled in ("ditask", "d2moe"):
+        samples = raw["data_samples"]
+        for task in ("water", "snow_ice", "land"):
+            samples["manual_" + task] = torch.full_like(samples["water"], float(task == "water"))
+            mask = torch.zeros_like(samples["water"], dtype=torch.bool)
+            mask[0, :, 2, 2] = True
+            samples["manual_" + task + "_valid"] = mask
     data = model.data_preprocessor(raw, training=True)
     losses = model(**data, mode="loss")
     if enabled == "et_only":
@@ -116,8 +144,14 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
         return
     assert losses["valid_count_site_sm"] == losses["valid_count_site_et"] == 1
     assert losses["valid_count_soil_moisture"] == 1
-    (losses["loss_site_sm"] + losses["loss_site_et"]).backward()
-    for task in (("sm", "et") if enabled == "mlore_complete" else
+    site_loss = losses["loss_site_sm"] + losses["loss_site_et"]
+    if enabled in ("ditask", "d2moe"):
+        assert losses["loss_manual_cover"] > 0
+        (site_loss + losses["loss_manual_cover"]).backward()
+        assert model.heads["coverage"].weight.grad.abs().sum() > 0
+    else:
+        site_loss.backward()
+    for task in (("sm", "et") if enabled in ("mlore_complete", "d2moe", "ditask") else
                  ("soil_moisture", "et_water", "et_ice", "et_land")):
         assert any(p.grad is not None and p.grad.abs().sum() > 0
                    for p in model.heads[task].parameters())

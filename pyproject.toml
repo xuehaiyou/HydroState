@@ -25,6 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ditask = ["difw==0.0.29", "scipy", "ninja"]
 geo = [
   "rasterio>=1.4",
   "shapely>=2",

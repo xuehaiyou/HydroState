@@ -47,14 +47,14 @@ class MTLoRALinear(nn.Module):
         return self.base(x) + update(x)
 
 
-class MTLoRAExitBlock(nn.Module):
+class TaskExitBlock(nn.Module):
     """Compute attention once; branch only its output projection and the MLP."""
 
-    def __init__(self, block, tasks, shared_rank, private_rank, scale):
+    def __init__(self, block, tasks, private_rank, projection):
         super().__init__()
         self.tasks = tuple(tasks)
         self.private_rank = private_rank
-        self.projection = MTLoRALinear(block.attn.proj, shared_rank, private_rank, tasks, scale)
+        self.projection = projection(block.attn.proj)
         # Preserve upstream QKV, RoPE, masking and SDPA; extract unprojected attention.
         block.attn.proj = nn.Identity()
         self.proj_drop = block.attn.proj_drop
@@ -62,8 +62,8 @@ class MTLoRAExitBlock(nn.Module):
         self.attn = block.attn
         self.norm1, self.norm2 = block.norm1, block.norm2
         self.ls1, self.ls2, self.drop_path = block.ls1, block.ls2, block.drop_path
-        self.fc1 = MTLoRALinear(block.mlp.fc1, shared_rank, private_rank, tasks, scale)
-        self.fc2 = MTLoRALinear(block.mlp.fc2, shared_rank, private_rank, tasks, scale)
+        self.fc1 = projection(block.mlp.fc1)
+        self.fc2 = projection(block.mlp.fc2)
         self.act, self.drop1, self.drop2 = block.mlp.act, block.mlp.drop1, block.mlp.drop2
 
     def branch(self, x, attended, task=None):
@@ -80,6 +80,13 @@ class MTLoRAExitBlock(nn.Module):
             else (shared,) * len(self.tasks)
         )
         return (shared, *branches)
+
+
+class MTLoRAExitBlock(TaskExitBlock):
+    def __init__(self, block, tasks, shared_rank, private_rank, scale):
+        projection = partial(MTLoRALinear, shared_rank=shared_rank, private_rank=private_rank,
+                             tasks=tasks, scale=scale)
+        super().__init__(block, tasks, private_rank, projection)
 
 
 @MODELS.register_module()

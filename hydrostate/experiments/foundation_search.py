@@ -33,7 +33,7 @@ def probe(directory):
 def launch(args):
     sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     for arm in args.arms:
-        directory = args.output / arm
+        directory = args.output / (arm if arm == "anysat" else f"{arm}_v2")
         directory.mkdir(parents=True, exist_ok=True)
         cfg = Config.fromfile(args.reference)
         assert (cfg.model.type == "CoSAHydroStateModel" and not cfg.model.router.enabled
@@ -44,7 +44,12 @@ def launch(args):
         if arm == "anysat":
             cfg.model.encoder = variant.encoder
         else:
+            cfg.model.decoder.update(type=variant.decoder.type,
+                                     num_levels=variant.decoder.num_levels,
+                                     channels=variant.decoder.channels)
             cfg.model.encoder.update(type=variant.encoder.type, method=arm,
+                                     out_indices=variant.encoder.out_indices,
+                                     num_levels=variant.encoder.num_levels,
                                      gradient_checkpointing=True)
         cfg.work_dir = str(directory / "work")
         if args.phase == "prepare":

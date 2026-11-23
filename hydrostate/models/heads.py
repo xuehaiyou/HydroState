@@ -9,6 +9,16 @@ from torch.nn import functional as F
 from hydrostate.registry import MODELS
 
 
+def activate_prediction(output, activation):
+    if activation == "sigmoid":
+        return torch.sigmoid(output)
+    if activation == "softplus":
+        return F.softplus(output)
+    if activation != "identity":
+        raise ValueError(f"unsupported activation {activation!r}")
+    return output
+
+
 @MODELS.register_module()
 class RegressionHead(nn.Module):
     def __init__(
@@ -28,11 +38,4 @@ class RegressionHead(nn.Module):
         self.activation = activation
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:
-        output = self.layers(features)
-        if self.activation == "sigmoid":
-            return torch.sigmoid(output)
-        if self.activation == "softplus":
-            return F.softplus(output)
-        if self.activation != "identity":
-            raise ValueError(f"unsupported activation {self.activation!r}")
-        return output
+        return activate_prediction(self.layers(features), self.activation)
