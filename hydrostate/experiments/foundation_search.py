@@ -1,4 +1,4 @@
-"""Prepare matched B arms and submit independent GPU probes or measured training chunks."""
+"""Prepare matched B arms and submit independent GPU probes or six-epoch training jobs."""
 
 import argparse
 import json
@@ -61,30 +61,22 @@ def launch(args):
         cfg.train_dataloader.batch_size = batch
         cfg.optim_wrapper.accumulative_counts = 10 // batch
         cfg.param_scheduler[0].end = 100 * (10 // batch)
-        # Include the cold-I/O allowance used for the manual baseline experiments.
-        seconds = 2 * (stats["train_samples"] * stats["train_seconds_per_sample"]
-                       + stats["validation_samples"] * stats["validation_seconds_per_sample"])
-        init = stats["elapsed_seconds"]
-        per_chunk = math.floor((86400 / 1.1 - init) / seconds)
-        if per_chunk < 1:
-            raise ValueError("Measured epoch exceeds one allocation")
-        previous = None
-        for start in range(0, 6, per_chunk):
-            end = min(6, start + per_chunk)
-            stage = directory / f"epochs_{start + 1}_{end}"
-            stage.mkdir(exist_ok=True)
-            cfg.train_cfg.max_epochs = end
-            if start:
-                cfg.resume = True
-                cfg.load_from = str(Path(cfg.work_dir) / f"epoch_{start}.pth")
+        epoch_seconds = (stats["train_samples"] * stats["train_seconds_per_sample"]
+                         + stats["validation_samples"] * stats["validation_seconds_per_sample"])
+        epochs = cfg.train_cfg.max_epochs
+        minutes = math.ceil(1.1 * (stats["elapsed_seconds"] + epochs * epoch_seconds) / 60)
+        stage = directory / "single_job"
+        stage.mkdir(exist_ok=True)
+        cfg.work_dir = str(stage / "work")
+        path = stage / "train.sh"
+        if not (stage / "submission.json").exists():
             cfg.dump(str(stage / "config.py"))
-            path = stage / "train.sh"
             script(path, [[sys.executable, "tools/train.py", str(stage / "config.py")]])
-            minutes = math.ceil(1.1 * (init + seconds * (end - start)) / 60)
-            cmd = slurm(stage, "hs_" + arm, minutes, dependency=previous)
-            record = dict(commit=sha, batch=batch, epochs=[start + 1, end])
-            previous = submit(stage, [*cmd, str(path)], record)
-            print(arm, start + 1, end, previous, flush=True)
+        cmd = slurm(stage, "hs_" + arm, minutes)
+        if args.hold:
+            cmd.append("--hold")
+        record = dict(commit=sha, batch=batch, epochs=[1, epochs], budget_minutes=minutes)
+        print(arm, submit(stage, [*cmd, str(path)], record), flush=True)
 
 
 if __name__ == "__main__":
@@ -93,6 +85,7 @@ if __name__ == "__main__":
     parser.add_argument("output", type=Path)
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--arms", nargs="+", choices=ARMS, default=ARMS)
+    parser.add_argument("--hold", action="store_true", help="Hold replacement jobs until released")
     options = parser.parse_args()
     if options.phase == "probe":
         probe(options.output)
