@@ -177,6 +177,7 @@ class FoundationStageModel(CoSAHydroStateModel):
                         torch._assert_async((inputs["target_time"][task] == bounds).all(),
                                             "Mismatched query interval")
                     state, valid = self.decoder(prepared, bounds)
-                    decoded = self.readouts[name](self.experts[name](state, valid), valid, output_size)
+                    feature = self.experts[name](state, valid)
+                    decoded = self.readouts[name](feature, valid, output_size)
                     outputs.update({task: self.heads[task](decoded) for task in selected})
         return self._constrain_outputs(outputs)
