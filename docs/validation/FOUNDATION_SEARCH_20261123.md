@@ -75,6 +75,6 @@ Cover、SM、ET 三组分别输出 3、1、3 个通道，对应覆盖比例闭�
 | 模型 | 平台和运行标识 | 输出目录 |
 |---|---|---|
 | DiTASK | A100 80 GB，物理卡 0，正式训练 PID `2713654`。真实数据预检通过，训练 micro-batch 5、累积 2 次。 | `/mnt/storage/xiaozhen/HydroState/experiments/foundation_fourstage_c6caa6d/ditask_v2` |
-| D2MoE | HPC2021，L40S，Slurm 作业 `4495177`，单次分配 20 小时 43 分。在同一次分配内检查批量后直接进入训练。 | `/scr/u/xiaoz/HydroState/experiments/foundation_fourstage_c6caa6d/d2moe_v2` |
+| D2MoE | A100 80 GB，与 DiTASK 共用物理卡 0，正式训练 PID `2743899`。训练 micro-batch 5、累积 2 次。 | `/mnt/storage/xiaozhen/HydroState/experiments/foundation_fourstage_c6caa6d/d2moe_v2` |
 
-两次正式运行互相独立。DiTASK 使用实验目录中的 difw 0.0.29，谱变形由 PyTorch 在 GPU 上执行。A100 已通过新版 D2MoE 的四批真实训练和三批验证短测，用于估计 Slurm 时限。两平台的短测均独立于正式训练，正式进度与逐轮验证结果以各自的 `work/` 日志为准。
+两项实验使用独立的训练进程、优化器和输出目录。DiTASK 使用实验目录中的 difw 0.0.29，谱变形由 PyTorch 在 GPU 上执行。D2MoE 与 DiTASK 同卡时通过四批真实训练和三批验证短测，随后从同一基础模型初始化启动六轮训练。此前 L40S 作业 `4495177` 已在排队时撤销，Slurm 记录耗时为零。正式进度与逐轮验证结果见各自的 `work/` 日志。
