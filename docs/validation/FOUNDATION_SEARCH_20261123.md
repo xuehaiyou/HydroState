@@ -75,6 +75,12 @@ Cover、SM、ET 三组分别输出 3、1、3 个通道，对应覆盖比例闭�
 | 模型 | 平台和运行标识 | 输出目录 |
 |---|---|---|
 | DiTASK | A100 80 GB，物理卡 0，正式训练 PID `2713654`。真实数据预检通过，训练 micro-batch 5、累积 2 次。 | `/mnt/storage/xiaozhen/HydroState/experiments/foundation_fourstage_c6caa6d/ditask_v2` |
-| D2MoE | A100 80 GB，与 DiTASK 共用物理卡 0，正式训练 PID `2743899`。训练 micro-batch 5、累积 2 次。 | `/mnt/storage/xiaozhen/HydroState/experiments/foundation_fourstage_c6caa6d/d2moe_v2` |
+| D2MoE | 地理系 HPC，`GEOG-HPC-GPU`，单张 H100 PCIe，正式作业 `40029`。训练 micro-batch 5、累积 2 次。 | `/geogfs1/groups/geog_geors/xiaozhen/HydroState/experiments/foundation_fourstage_c6caa6d/d2moe_v2_dedicated` |
 
-两项实验使用独立的训练进程、优化器和输出目录。DiTASK 使用实验目录中的 difw 0.0.29，谱变形由 PyTorch 在 GPU 上执行。D2MoE 与 DiTASK 同卡时通过四批真实训练和三批验证短测，随后从同一基础模型初始化启动六轮训练。此前 L40S 作业 `4495177` 已在排队时撤销，Slurm 记录耗时为零。正式进度与逐轮验证结果见各自的 `work/` 日志。
+DiTASK 使用实验目录中的 difw 0.0.29，谱变形由 PyTorch 在 GPU 上执行。D2MoE 最初在 A100 物理卡 0 与 DiTASK 同卡，进程 `2743899` 最后记录到第 1 轮第 400/2,183 批，尚无 checkpoint。挂起 D2MoE 后，DiTASK 第 281–300 批平均用时 10.28 秒，紧邻的第 261–280 批平均为 88.88 秒。两段的平均数据等待均低于 0.004 秒。
+
+2026-11-24 迁移时，HKU HPC2021 的 L40 作业 `4496672` 在模型载入显存时遇到不可纠正的 ECC 错误，未进入正式训练。更早的 L40S 作业 `4495177` 在排队时撤销。地理系使用既有样本和统计量，三个划分的数据集配置与该平台已验收的人工 Cover 联合监督配置逐项核对，沿用原始种子和六轮训练预算。
+
+地理系作业 `40020` 在 H100 PCIe 上通过 4 批训练和 3 批验证的预检，峰值预留显存 19.2 GiB。根据实测调整时限后，该作业再次调用预检，因已有 `bench_5.json` 触发防覆盖检查而退出。正式作业 `40029` 复用该预检结果，从原始 OlmoEarth 预训练权重开始，在同一次分配内计划训练六轮，时限 26 小时 53 分。两次启动的记录分别见实验目录中的 `submission.json` 和 `formal_submission.json`。
+
+香港时间 01:32，H100 正式训练日志记录第 1 轮第 20/2,183 批，损失 15.4081。随后关闭 A100 上原 D2MoE 进程组，核实物理卡 0 只剩 DiTASK。01:33 核查时 DiTASK 已到第 480 批。此处为启动验收，验证指标见后续逐轮日志。
