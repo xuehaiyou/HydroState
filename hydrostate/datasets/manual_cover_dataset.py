@@ -20,7 +20,7 @@ from .retrieval_dataset import as_tensors, read_shard_arrays
 
 @DATASETS.register_module()
 class ManualCoverDataset(Dataset):
-    def __init__(self, root, split=None, *, require_published=True):
+    def __init__(self, root, split=None, *, require_published=True, glacier_input_root=None):
         self.root = Path(root)
         if require_published:
             pub = json.loads((self.root / "_PUBLISHED.json").read_text())
@@ -43,6 +43,12 @@ class ManualCoverDataset(Dataset):
             if split not in {"train", "val", "test"}:
                 raise ValueError("Unknown split")
             self.table = self.table[self.table.split.eq(split)].reset_index(drop=True)
+        if glacier_input_root is not None:
+            original = Path(self.config["glacier_root"])
+            glacier = self.table.source.eq("glacier")
+            self.table.loc[glacier, "input_path"] = self.table.loc[glacier, "input_path"].map(
+                lambda path: str(Path(glacier_input_root) / Path(path).relative_to(original))
+            )
         self.cache, self.schema = ShardCache(), ManualCoverSchema()
 
     def __len__(self):

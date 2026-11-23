@@ -19,12 +19,12 @@ from .retrieval_dataset import as_tensors
 
 @DATASETS.register_module()
 class ManualJointDataset(JointRetrievalDataset):
-    def __init__(self, manual_root, manual_selection, **kwargs):
+    def __init__(self, manual_root, manual_selection, glacier_input_root=None, **kwargs):
         super().__init__(**kwargs)
         self.training = kwargs.get("training", False)
         self.base_length = len(self)
         split = "val" if self.split == "validation" else self.split
-        self.manual = ManualCoverDataset(manual_root, split)
+        self.manual = ManualCoverDataset(manual_root, split, glacier_input_root=glacier_input_root)
         selection = Path(manual_selection)
         binding = json.loads(selection.with_suffix(".json").read_text())
         if binding["sha256"] != file_hash(selection):
