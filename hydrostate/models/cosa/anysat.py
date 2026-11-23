@@ -27,7 +27,8 @@ class AnySatEncoder(nn.Module):
         from hubconf import AnySat
 
         model = AnySat(flash_attn=False).model
-        model.load_state_dict(torch.load(weights, map_location="cpu", weights_only=True)["state_dict"])
+        state = torch.load(weights, map_location="cpu", weights_only=True)
+        model.load_state_dict(state["state_dict"])
         self.backbone = model.requires_grad_(False)
         self.backbone.blocks[-1].requires_grad_(True)
         # Preserve the eleven calibrated Landsat inputs. For S2 initialize

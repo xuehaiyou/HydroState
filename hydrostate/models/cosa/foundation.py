@@ -99,7 +99,8 @@ class StageExit(nn.Module):
             weights = None
             if self.mixture:
                 scores, indices = self.gates[task](summary).topk(2)
-                weights = scores.new_zeros(len(x), 4).scatter(1, indices, scores.softmax(-1))
+                probabilities = scores.float().softmax(-1)
+                weights = probabilities.new_zeros(len(x), 4).scatter(1, indices, probabilities)
             token = _ROUTE.set((task, weights))
             try:
                 branches.append(self.block(x=x, **kwargs))

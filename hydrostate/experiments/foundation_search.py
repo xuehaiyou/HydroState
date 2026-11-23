@@ -44,12 +44,13 @@ def launch(args):
         if arm == "anysat":
             cfg.model.encoder = variant.encoder
         else:
-            cfg.model.encoder.update(type=variant.encoder.type, method=arm, gradient_checkpointing=True)
+            cfg.model.encoder.update(type=variant.encoder.type, method=arm,
+                                     gradient_checkpointing=True)
         cfg.work_dir = str(directory / "work")
         if args.phase == "prepare":
             cfg.dump(str(directory / "config.py"))
             path = directory / "probe.sh"
-            script(path, [[sys.executable, "-m", __name__ if __name__ != "__main__" else
+            script(path, [[sys.executable, "-m",
                            "hydrostate.experiments.foundation_search", "probe", str(directory)]])
             cmd = slurm(directory, "hs_probe_" + arm, 25, debug=True)
             print(arm, submit(directory, [*cmd, str(path)], dict(commit=sha)), flush=True)
@@ -81,7 +82,8 @@ def launch(args):
             script(path, [[sys.executable, "tools/train.py", str(stage / "config.py")]])
             minutes = math.ceil(1.1 * (init + seconds * (end - start)) / 60)
             cmd = slurm(stage, "hs_" + arm, minutes, dependency=previous)
-            previous = submit(stage, [*cmd, str(path)], dict(commit=sha, batch=batch, epochs=[start+1,end]))
+            record = dict(commit=sha, batch=batch, epochs=[start + 1, end])
+            previous = submit(stage, [*cmd, str(path)], record)
             print(arm, start + 1, end, previous, flush=True)
 
 
