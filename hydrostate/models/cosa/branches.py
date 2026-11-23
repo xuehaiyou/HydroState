@@ -42,10 +42,14 @@ class SpatialReadout(nn.Module):
 class BackgroundResidual(nn.Module):
     """Separate a masked tile background from spatial deviations in latent space."""
 
-    def __init__(self, groups, state_channels, channels, center, retain_scene_context=False):
+    def __init__(self, groups, state_channels, channels, center, retain_scene_context=False,
+                 scene_mean_response=False):
         super().__init__()
         self.center = center
         self.retain_scene_context = retain_scene_context
+        self.scene_mean_response = scene_mean_response
+        if scene_mean_response and (retain_scene_context or not center):
+            raise ValueError("The scene mean response requires centered, scene-relative detail")
         self.local = StateExpert(state_channels, channels)
         self.background = nn.ModuleDict({
             name: nn.Conv2d(state_channels, channels, 1) for name in groups})
@@ -62,5 +66,9 @@ class BackgroundResidual(nn.Module):
         if self.center:
             mean_local = local.float().sum((-2, -1), keepdim=True) / count
             local = local - mean_local.to(local.dtype)
+            if self.scene_mean_response:
+                contextual = self.local(state.masked_fill(~valid, 0), valid)
+                shift = contextual.float().sum((-2, -1), keepdim=True) / count - mean_local
+                local = local + shift.to(local.dtype)
         return {name: (self.background[name](mean_state.to(state.dtype)) + project(local))
                 .masked_fill(~valid, 0) for name, project in self.detail.items()}

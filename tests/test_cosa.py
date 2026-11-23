@@ -417,3 +417,11 @@ def test_centering_changes_only_valid_spatial_mean():
         difference = raw[name][1, :, valid[1, 0]] - output[1, :, valid[1, 0]]
         torch.testing.assert_close(difference, difference.mean(-1, keepdim=True).expand_as(difference))
         torch.testing.assert_close(output[1, :, valid[1, 0]].mean(-1), background.flatten())
+
+    model.scene_mean_response = True
+    adjusted = model(x, valid)
+    for name in centered:
+        shift = (adjusted[name] - centered[name])[1, :, valid[1, 0]]
+        assert shift.abs().max() > 0
+        torch.testing.assert_close(shift, shift.mean(-1, keepdim=True).expand_as(shift))
+        assert not adjusted[name][0].any()
