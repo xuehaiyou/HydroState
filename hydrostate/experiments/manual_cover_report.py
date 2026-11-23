@@ -87,7 +87,7 @@ def metric_rows(work):
 
 def metrics(row):
     return {
-        key: value if math.isfinite(value) else None
+        key: value if value is not None and math.isfinite(value) else None
         for key, value in row.items()
         if key.startswith(("cover/", "site/", "product/"))
         or key in {"manual_cover_error", "manual_joint_score"}

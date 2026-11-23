@@ -33,12 +33,15 @@ def test_reports_same_selected_epoch_and_separate_test(tmp_path):
     checkpoint = tmp_path / "CGC/work/best_manual_joint_score_epoch_2.pth"
     checkpoint.touch()
     write_rows(
-        tmp_path, "final_test", [dict(manual_joint_score=-0.6, **{"site/site_sm_rmse": 0.3})]
+        tmp_path,
+        "final_test",
+        [dict(manual_joint_score=-0.6, **{"site/site_sm_rmse": 0.3, "site/empty_r2": None})],
     )
     report = summarize(tmp_path)["models"]
     assert report["CGC"]["selected_epoch"] == 2
     assert report["CGC"]["validation"]["site/site_sm_rmse"] == 0.2
     assert report["CGC"]["test"]["site/site_sm_rmse"] == 0.3
+    assert report["CGC"]["test"]["site/empty_r2"] is None
     assert report["CGC"]["status"] == "metrics_available"
     assert report["B"]["status"] == "no_validation_result"
 
