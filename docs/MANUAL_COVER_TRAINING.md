@@ -103,7 +103,7 @@ python tools/experiments/summarize_manual_cover.py TRAINING_ROOT --output REPORT
 
 | 观测来源 | 主要误差（越低越好） | 同时检查 |
 |---|---|---|
-| 冰川人工点 | 水、冰雪、陆地三个比例 MAE 的算术平均 | 各比例 MAE、三分类 OA、各类支持数和混淆矩阵 |
+| 冰川人工点 | 主表分别列冰雪、陆地、水体比例 MAE；三类算术平均用于既定选模分数 | 三分类 OA、各类支持数和混淆矩阵 |
 | 洪水 LabelHand | 水体比例 MAE | 水体 IoU、F1、二分类混淆矩阵，按事件列出 |
 | 站点 SM | 原单位 RMSE（m³/m³） | Pearson R、站点等权 RMSE、站内去均值 R |
 | 站点 ET | 原单位 RMSE（mm/day） | Pearson R、站点等权 RMSE、站内去均值 R |
