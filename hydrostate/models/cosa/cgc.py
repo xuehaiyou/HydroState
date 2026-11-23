@@ -21,7 +21,7 @@ def split_gate_weights(shared_logits, private_logits):
 
 class CGCRouter(nn.Module):
     def __init__(self, experts, state_channels=256, channels=64, num_shared=2,
-                 spatial_gates=(), private_only=(), split_gates=None):
+                 spatial_gates=(), private_only=(), split_gates=None, separate_detail=False):
         super().__init__()
         self.experts = tuple(experts)
         self.spatial_gates = frozenset(spatial_gates)
@@ -42,6 +42,11 @@ class CGCRouter(nn.Module):
             StateExpert(state_channels, channels) for _ in range(num_shared)])
         self.gates = nn.ModuleDict({
             name: nn.Linear(state_channels, num_shared + 1) for name in self.experts})
+        if separate_detail and (spatial_gates or private_only or split_gates):
+            raise ValueError("Separate detail weights require tile gates")
+        self.detail_offsets = nn.ParameterDict({
+            name: nn.Parameter(torch.zeros(num_shared + 1)) for name in self.experts
+        }) if separate_detail else None
         # Consume identical initialization draws for the paired training control.
         for name in self.private_only:
             del self.gates[name]
@@ -90,9 +95,15 @@ class CGCRouter(nn.Module):
                     ~valid, 0)
                 continue
             pooled = pooled_state if selectors is None else selector.sum((-2, -1)) / count
-            weights = self.gates[task](pooled).float().softmax(-1).to(candidates.dtype)
-            outputs[task] = torch.einsum("bk,bkchw->bchw", weights, candidates).masked_fill(
-                ~valid, 0)
+            logits = self.gates[task](pooled).float()
+            weights = logits.softmax(-1)
+            mixed = torch.einsum("bk,bkchw->bchw", weights.to(candidates.dtype), candidates)
+            if self.detail_offsets is not None:
+                change = (logits + self.detail_offsets[task]).softmax(-1) - weights
+                correction = torch.einsum("bk,bkchw->bchw", change.to(candidates.dtype), candidates)
+                mean = correction.masked_fill(~valid, 0).float().sum((-2, -1)) / count
+                mixed = mixed + (correction - mean.to(correction.dtype)[:, :, None, None])
+            outputs[task] = mixed.masked_fill(~valid, 0)
         return outputs, shared
 
 

@@ -93,6 +93,17 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
 
 
 @MODELS.register_module()
+class ETOnlyCGC(CoSAHydroStateModel):
+    """Matched CGC control using only product ET and native station ET supervision."""
+
+    def _loss_from_outputs(self, outputs, data_samples, auxiliary=None, auxiliary_weights=None):
+        terms = super()._loss_from_outputs(outputs, data_samples, auxiliary, auxiliary_weights)
+        tasks = ("et_water", "et_ice", "et_land", "site_et")
+        return {prefix + task: terms[prefix + task] for task in tasks
+                for prefix in ("loss_", "valid_count_")}
+
+
+@MODELS.register_module()
 class BackgroundResidualModel(CoSAHydroStateModel):
     """Retrieval with a common local spatial block and one background per task group."""
 

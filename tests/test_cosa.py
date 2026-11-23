@@ -50,10 +50,12 @@ def test_configs_only_switch_interaction_and_keep_supervision_budget():
     assert original.model.encoder.get("use_landsat_toa_adapter", True)
 
 
-@pytest.mark.parametrize("enabled", [False, True, "cgc", "recurrent_cgc", "background", "mlore", "ple", "mlore_complete"])
+@pytest.mark.parametrize("enabled", [False, True, "cgc", "et_only", "recurrent_cgc", "background", "mlore", "ple", "mlore_complete"])
 def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path, enabled):
     cfg = config(tmp_path, enabled, checkpoint=True)
-    if enabled == "cgc":
+    if enabled == "et_only":
+        cfg.model.type = "ETOnlyCGC"
+    if enabled in ("cgc", "et_only"):
         cfg.model.router = dict(type="CGCRouter", num_shared=2)
     if enabled == "background":
         cfg.model.type = "BackgroundResidualModel"
@@ -101,6 +103,13 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
         raw["data_samples"][f"{name}_native_weights"] = weights
     data = model.data_preprocessor(raw, training=True)
     losses = model(**data, mode="loss")
+    if enabled == "et_only":
+        assert {k for k in losses if k.startswith("loss_")} == {
+            "loss_et_water", "loss_et_ice", "loss_et_land", "loss_site_et"}
+        losses["loss_site_et"].backward()
+        assert all(p.grad is None for p in model.heads["soil_moisture"].parameters())
+        assert any(p.grad.abs().sum() > 0 for p in model.heads["et_land"].parameters())
+        return
     assert losses["valid_count_site_sm"] == losses["valid_count_site_et"] == 1
     assert losses["valid_count_soil_moisture"] == 1
     (losses["loss_site_sm"] + losses["loss_site_et"]).backward()
@@ -425,3 +434,24 @@ def test_centering_changes_only_valid_spatial_mean():
         assert shift.abs().max() > 0
         torch.testing.assert_close(shift, shift.mean(-1, keepdim=True).expand_as(shift))
         assert not adjusted[name][0].any()
+
+
+def test_detail_offsets_preserve_base_and_masked_mean():
+    from hydrostate.models.cosa.cgc import CGCRouter
+
+    base = CGCRouter(["et"], 8, 4)
+    new = CGCRouter(["et"], 8, 4, separate_detail=True)
+    assert new.load_state_dict(base.state_dict(), strict=False).missing_keys == ["detail_offsets.et"]
+    x = torch.randn(2, 8, 5, 5)
+    valid = torch.rand(2, 1, 5, 5) > .3
+    features = {"et": torch.randn(2, 4, 5, 5)}
+    ref = base(x, features, valid)["et"]
+    y = new(x, features, valid)["et"]
+    torch.testing.assert_close(ref, y, atol=0, rtol=0)
+    y.square().sum().backward()
+    assert new.detail_offsets["et"].grad.abs().sum() > 0
+    with torch.no_grad():
+        new.detail_offsets["et"][0] = 1
+    diff = new(x, features, valid)["et"] - ref
+    assert diff.abs().max() > .01
+    torch.testing.assert_close(diff.sum((-2, -1)), torch.zeros(2, 4), atol=1e-5, rtol=0)
