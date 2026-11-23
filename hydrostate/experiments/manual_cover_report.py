@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 
 from hydrostate.data.gee.contracts import atomic_json
@@ -105,6 +106,27 @@ def test_rows(work):
         score = row.get("manual_joint_score")
         if score is None or not math.isfinite(score):
             raise ValueError(f"Invalid final-test metric record: {path}")
+        # MMEngine's test JSON drops numpy integer tags; the same run's text
+        # log retains their exact integer values. Never round-trip float errors.
+        missing_counts = [
+            key for key, value in row.items()
+            if value is None and key.startswith("cover/")
+            and (key.endswith(("_count", "_support")) or "/confusion_" in key)
+        ]
+        if missing_counts:
+            log_path = path.with_suffix(".log")
+            lines = [
+                line for line in log_path.read_text().splitlines()
+                if "Epoch(test)" in line and "manual_joint_score:" in line
+            ]
+            if len(lines) != 1:
+                raise ValueError(f"Expected one final-test metric log: {log_path}")
+            values = dict(re.findall(r"(cover/\S+): (\d+)(?=\s|$)", lines[0]))
+            for key in missing_counts:
+                if key not in values:
+                    raise ValueError(f"Missing exact integer {key} in {log_path}")
+                row[key] = int(values[key])
+            row["count_log"] = str(log_path)
         rows.append(dict(row, log=str(path)))
     return rows
 
@@ -136,6 +158,7 @@ def summarize(root, validation_only=False):
             validation=metrics(best),
             test=metrics(tests[0]) if tests else None,
             test_log=tests[0]["log"] if tests else None,
+            test_count_log=tests[0].get("count_log") if tests else None,
         )
         result["status"] = "incomplete"
         if result["completed_validation_epoch"] >= 6 and result["checkpoint_present"]:

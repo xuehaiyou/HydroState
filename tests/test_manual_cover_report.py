@@ -62,6 +62,21 @@ def test_rejects_invalid_standalone_test_score(tmp_path):
         summarize(tmp_path)
 
 
+def test_recovers_exact_test_counts_from_same_run_log(tmp_path):
+    write_rows(tmp_path, "work", [dict(step=6, manual_joint_score=-0.5)])
+    key = "cover/glacier/all/water_support"
+    path = write_rows(tmp_path, "final_test", [dict(manual_joint_score=-0.6, **{key: None})])
+    path.with_suffix(".log").write_text(
+        f"Epoch(test) [10/10]    {key}: 145  manual_joint_score: -0.6000\n"
+    )
+    report = summarize(tmp_path)["models"]["CGC"]
+    assert report["test"][key] == 145
+    assert report["test_count_log"] == str(path.with_suffix(".log"))
+    path.with_suffix(".log").write_text("Epoch(test) [10/10] manual_joint_score: -0.6\n")
+    with pytest.raises(ValueError, match="Missing exact integer"):
+        summarize(tmp_path)
+
+
 def test_joint_lead_requires_each_source_and_shared_support():
     row = {
         "cover/glacier/all/accuracy": 0.8,
