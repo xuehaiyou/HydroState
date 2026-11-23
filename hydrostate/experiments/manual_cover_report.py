@@ -94,6 +94,21 @@ def metrics(row):
     }
 
 
+def test_rows(work):
+    """Read the metric JSON dumped by MMEngine's standalone test loop."""
+    rows = []
+    for directory in sorted(Path(work).glob("*")):
+        path = directory / f"{directory.name}.json"
+        if not path.is_file():
+            continue
+        row = json.loads(path.read_text())
+        score = row.get("manual_joint_score")
+        if score is None or not math.isfinite(score):
+            raise ValueError(f"Invalid final-test metric record: {path}")
+        rows.append(dict(row, log=str(path)))
+    return rows
+
+
 def summarize(root, validation_only=False):
     root = Path(root)
     prepared_file = root / "prepared.json"
@@ -109,7 +124,7 @@ def summarize(root, validation_only=False):
         best = max(rows, key=lambda row: row["manual_joint_score"])
         epoch = int(best["step"])
         checkpoint = directory / "work" / f"best_manual_joint_score_epoch_{epoch}.pth"
-        tests = [] if validation_only else metric_rows(directory / "final_test")
+        tests = [] if validation_only else test_rows(directory / "final_test")
         if len(tests) > 1:
             raise ValueError(f"Multiple final-test results for {name}; inspect provenance")
         result = dict(

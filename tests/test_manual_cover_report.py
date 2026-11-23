@@ -8,6 +8,13 @@ from hydrostate.experiments.manual_cover_report import compare_validation, summa
 
 
 def write_rows(root, part, rows):
+    if part == "final_test":
+        for i, row in enumerate(rows):
+            timestamp = f"20261123_07000{i}"
+            path = root / "CGC" / part / timestamp / f"{timestamp}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(row))
+        return path
     path = root / "CGC" / part / "20261122" / "vis_data" / "scalars.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -43,6 +50,13 @@ def test_refuses_ambiguous_test_results(tmp_path):
     with pytest.raises(ValueError, match="Multiple final-test"):
         summarize(tmp_path)
     assert summarize(tmp_path, validation_only=True)["models"]["CGC"]["test"] is None
+
+
+def test_rejects_invalid_standalone_test_score(tmp_path):
+    write_rows(tmp_path, "work", [dict(step=6, manual_joint_score=-0.5)])
+    write_rows(tmp_path, "final_test", [dict(manual_joint_score=float("nan"))])
+    with pytest.raises(ValueError, match="Invalid final-test metric"):
+        summarize(tmp_path)
 
 
 def test_joint_lead_requires_each_source_and_shared_support():
