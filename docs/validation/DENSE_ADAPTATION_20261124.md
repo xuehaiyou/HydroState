@@ -17,3 +17,19 @@ NexusFlow 三任务主文和附录报告的耦合层数不同。此实验取附�
 NexusFlow 的直接对照为已有的原版四阶段 D2MoE。FAAR 与 RUTaL 按完整方法比较。对每个验证选中的检查点分别报告冰川水体、冰雪、陆地三类指标，洪水比例误差及水体分类指标，站点 SM、ET 的 RMSE 和 Pearson R。产品一致性单列。六轮单种子比较可用于筛选候选，机制归因需进一步消融或重复实验。
 
 复现入口是 `python -m hydrostate.experiments.dense_adaptation ARM REFERENCE RUN_DIR`，REFERENCE 为平台上已核验的 D2MoE v2 六轮配置。运行目录中的 `submission.json` 保存作业号和代码提交，`train_config.py` 保存实际 batch 与训练设置，`work/` 保存训练和验证结果，`final_test/` 保存测试结果。
+
+## 2026-11-24 提交与验收
+
+训练代码提交为 `0b31de9`。地理系 HPC 与 HKU HPC2021 均使用该版本的独立工作树。两台 A100 设备已有计算任务。
+
+| 实验 | Slurm 作业 | 运行目录 |
+|---|---:|---|
+| D2MoE v2 + NexusFlow | 40385，地理系 H100 分区 | `/geogfs1/groups/geog_geors/xiaozhen/HydroState/experiments/dense_adaptation_0b31de9/nexus_d2moe` |
+| FAAR | 4500848，HKU L40S 分区 | `/scr/u/xiaoz/HydroState/experiments/dense_adaptation_0b31de9/faar_l40s` |
+| RUTaL | 4500806，HKU L40 | `/scr/u/xiaoz/HydroState/experiments/dense_adaptation_0b31de9/rutal` |
+
+38 项相关测试通过。三个正式架构均在本地 12 层预训练主干、36×36 合成输入上通过 BF16 前向、反向和有限值检查。FAAR 缩秩 hook 还在一次独立的 CUDA 检查中，经实际 AdamW 更新后将三个初始 rank-32 适配器缩为 21、22、26。这些小图块用于验证计算路径，精度由正式作业评估。
+
+FAAR 首次作业 4500805 在 L40 上传输模型参数时触发不可纠正的硬件 ECC 错误，未进入训练。替代作业 4500848 限定 L40S。RUTaL 已完成 GPU 上的真实样本试跑，采用 micro-batch 5、梯度累积 2。
+
+香港时间 17:40，RUTaL 第一轮第 20/2,183 批的损失为 15.6665，正式迭代平均 7.15 秒/批，据此六轮训练迭代约需 26 小时，另需六次验证和一次完整测试。作业原申请的 16 小时 45 分来自 L40S 参考数据和本地比值，低估了实际 L40 耗时。按实际卡上带完整输入的试跑估算，含 10% 余量的申请为 39 小时 39 分。Slurm 拒绝给运行中的作业延时，已告知用户，当前保留运行。
