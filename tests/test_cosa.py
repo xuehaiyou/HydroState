@@ -51,24 +51,33 @@ def test_configs_only_switch_interaction_and_keep_supervision_budget():
 
 
 @pytest.mark.parametrize("enabled", [False, True, "ditask_v1", "d2moe_v1", "ditask", "d2moe",
+                                     "nexus_d2moe", "faar", "rutal",
                                      "cgc", "et_only", "recurrent_cgc", "background", "mlore",
                                      "ple", "mlore_complete"])
 def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path, enabled):
+    stage_methods = ("ditask", "d2moe", "nexus_d2moe", "faar", "rutal")
     cfg = config(tmp_path, enabled, checkpoint=True)
     if enabled in ("ditask_v1", "d2moe_v1"):
         cfg.model.type = "FoundationStageModel"
         cfg.model.encoder.update(type="FoundationStageEncoder", method=enabled.removesuffix("_v1"))
         cfg.model.router.enabled = False
-    if enabled in ("ditask", "d2moe"):
+    if enabled in stage_methods:
         cfg.model.type = "FoundationStageModelV2"
-        if enabled == "d2moe":
+        if enabled == "nexus_d2moe":
+            cfg.model.type = "NexusD2MoE"
+        if enabled in ("d2moe", "nexus_d2moe"):
             cfg.model.decoder.type = "D2MoEStateFusion"
+        elif enabled in ("rutal", "faar"):
+            cfg.model.decoder.type = {"rutal": "RUTaLDecoder", "faar": "FAARDecoder"}[enabled]
         else:
             pytest.importorskip("difw")
             cfg.model.decoder.type = "DiTASKStateFusion"
-        cfg.model.encoder.update(type="FoundationStageEncoderV2", method=enabled,
+        cfg.model.encoder.update(type="FoundationStageEncoderV2",
+                                 method=enabled.removeprefix("nexus_"),
                                  num_levels=4, out_indices=[0, 1, 3, 5])
         cfg.model.decoder.num_levels = 4
+        if enabled == "rutal":
+            cfg.model.decoder.update(num_levels=5, ladder_heads=2)
         cfg.model.manual_cover_weight = 2.0
         cfg.model.router.enabled = False
     if enabled == "et_only":
@@ -109,7 +118,7 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
     cfg.dump(str(config_file))
     cfg = Config.fromfile(str(config_file))
     model = MODELS.build(cfg.model).train()
-    if enabled in ("ditask", "d2moe"):
+    if enabled in ("ditask", "d2moe", "nexus_d2moe"):
         from hydrostate.models.cosa.ditask import AdapterDropout
         drops = [mod for mod in model.encoder.backbone.modules() if isinstance(mod, AdapterDropout)]
         model.eval()
@@ -126,7 +135,7 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
         weights = torch.zeros(2, 1, 4, 4)
         weights[1, 0, 2, 2] = 1
         raw["data_samples"][f"{name}_native_weights"] = weights
-    if enabled in ("ditask", "d2moe"):
+    if enabled in stage_methods:
         samples = raw["data_samples"]
         for task in ("water", "snow_ice", "land"):
             samples["manual_" + task] = torch.full_like(samples["water"], float(task == "water"))
@@ -145,13 +154,17 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
     assert losses["valid_count_site_sm"] == losses["valid_count_site_et"] == 1
     assert losses["valid_count_soil_moisture"] == 1
     site_loss = losses["loss_site_sm"] + losses["loss_site_et"]
-    if enabled in ("ditask", "d2moe"):
+    if enabled in stage_methods:
         assert losses["loss_manual_cover"] > 0
-        (site_loss + losses["loss_manual_cover"]).backward()
+        (site_loss + losses["loss_manual_cover"] + losses.get("loss_nexus_alignment", 0)).backward()
+        if enabled == "nexus_d2moe":
+            assert losses["loss_nexus_alignment"] > 0
+            assert all(next(m.parameters()).grad.abs().sum() > 0
+                       for m in model.alignment.surrogates.values())
         assert model.heads["coverage"].weight.grad.abs().sum() > 0
     else:
         site_loss.backward()
-    for task in (("sm", "et") if enabled in ("mlore_complete", "d2moe", "ditask") else
+    for task in (("sm", "et") if enabled in ("mlore_complete", *stage_methods) else
                  ("soil_moisture", "et_water", "et_ice", "et_land")):
         assert any(p.grad is not None and p.grad.abs().sum() > 0
                    for p in model.heads[task].parameters())

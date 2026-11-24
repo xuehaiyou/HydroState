@@ -32,7 +32,7 @@ def pool_modalities(tokens, masks):
 
 
 def multilevel_features(core, sample, patch_size, out_indices, input_res=10,
-                        retain_tokens=False, branch_tasks=None):
+                        retain_tokens=False, branch_tasks=None, include_patch=False):
     """Return normalized BCHW features, ordered shallow to deep.
 
     Always retain a key-validity mask, also in eval, so padded observations
@@ -66,6 +66,10 @@ def multilevel_features(core, sample, patch_size, out_indices, input_res=10,
         if positions is not None:
             positions = core.add_register_positions(positions)
     features = [] if branch_tasks is None else {task: [] for task in branch_tasks}
+    if include_patch:
+        if not retain_tokens or branch_tasks is not None:
+            raise ValueError("Patch capture expects a shared temporal stream")
+        features.append((values.copy(), masks))
     for index, block in enumerate(core.blocks):
         result = block(
             x=tokens, cu_seqlens=None, max_seqlen=None,
