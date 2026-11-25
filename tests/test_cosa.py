@@ -51,11 +51,11 @@ def test_configs_only_switch_interaction_and_keep_supervision_budget():
 
 
 @pytest.mark.parametrize("enabled", [False, True, "ditask_v1", "d2moe_v1", "ditask", "d2moe",
-                                     "nexus_d2moe", "faar", "rutal",
+                                     "nexus_d2moe", "faar", "rutal", "bdta",
                                      "cgc", "et_only", "recurrent_cgc", "background", "mlore",
                                      "ple", "mlore_complete"])
 def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path, enabled):
-    stage_methods = ("ditask", "d2moe", "nexus_d2moe", "faar", "rutal")
+    stage_methods = ("ditask", "d2moe", "nexus_d2moe", "faar", "rutal", "bdta")
     cfg = config(tmp_path, enabled, checkpoint=True)
     if enabled in ("ditask_v1", "d2moe_v1"):
         cfg.model.type = "FoundationStageModel"
@@ -67,6 +67,8 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
             cfg.model.type = "NexusD2MoE"
         if enabled in ("d2moe", "nexus_d2moe"):
             cfg.model.decoder.type = "D2MoEStateFusion"
+        elif enabled == "bdta":
+            cfg.model.decoder.type = "BDTAMoTEDecoder"
         elif enabled in ("rutal", "faar"):
             cfg.model.decoder.type = {"rutal": "RUTaLDecoder", "faar": "FAARDecoder"}[enabled]
         else:
@@ -78,6 +80,8 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
         cfg.model.decoder.num_levels = 4
         if enabled == "rutal":
             cfg.model.decoder.update(num_levels=5, ladder_heads=2)
+        if enabled == "bdta":
+            cfg.model.decoder.update(num_levels=5, bypass_heads=2)
         cfg.model.manual_cover_weight = 2.0
         cfg.model.router.enabled = False
     if enabled == "et_only":
@@ -157,6 +161,13 @@ def test_cosa_mixed_product_station_supervision_reaches_existing_heads(tmp_path,
     if enabled in stage_methods:
         assert losses["loss_manual_cover"] > 0
         (site_loss + losses["loss_manual_cover"] + losses.get("loss_nexus_alignment", 0)).backward()
+        if enabled == "bdta":
+            assert not model.encoder.backbone.training
+            assert all(not p.requires_grad and p.grad is None for p in model.encoder.parameters())
+            for stage, mix in zip(model.decoder.stages, model.decoder.mixtures, strict=True):
+                for direction in (stage.g2t, stage.t2g):
+                    assert direction.attention.value.weight.grad.abs().sum() > 0
+                assert all(r.gamma.grad.abs().sum() > 0 for r in mix.routers.values())
         if enabled == "nexus_d2moe":
             assert losses["loss_nexus_alignment"] > 0
             assert all(next(m.parameters()).grad.abs().sum() > 0

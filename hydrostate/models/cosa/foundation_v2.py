@@ -13,6 +13,7 @@ from hydrostate.registry import MODELS
 from ..heads import activate_prediction
 from ..multilevel_encoder import multilevel_features
 from ..multilevel_temporal_model import MultiLevelTemporalOlmoEarthEncoder
+from .bdta import BDTAMoTEDecoder
 from .d2moe import D2MoEStateFusion, adapt_mixture_block
 from .ditask import AdapterDropout, DiTASKStateFusion, adapt_spectral_block
 from .encoder import CoSASharedLoRAEncoder
@@ -38,11 +39,15 @@ class FoundationStageEncoderV2(CoSASharedLoRAEncoder):
         MultiLevelTemporalOlmoEarthEncoder.__init__(self, gradient_checkpointing=False, **kwargs)
         self.finetuning = "lora"  # Reuse MTLoRA's grouped depth restoration.
         self.method = method
-        if method not in ("ditask", "d2moe", "faar", "rutal"):
+        if method not in ("ditask", "d2moe", "faar", "rutal", "bdta"):
             raise ValueError(method)
         self.mixture = method == "d2moe"
         self.tasks = (*GROUPS, "prior") if self.mixture else GROUPS
         core = self.backbone.model.requires_grad_(False)
+        if method == "bdta":
+            self.requires_grad_(False)
+            self.train(self.training)
+            return
         if method in ("ditask", "faar"):
             for module in core.modules():
                 if isinstance(module, nn.LayerNorm):
@@ -67,7 +72,7 @@ class FoundationStageEncoderV2(CoSASharedLoRAEncoder):
         self.train(self.training)
 
     def _extract_levels(self, sample, out_indices):
-        if self.method == "rutal":
+        if self.method in ("rutal", "bdta"):
             return {
                 "shared": multilevel_features(
                     self.backbone.model,
@@ -88,6 +93,9 @@ class FoundationStageEncoderV2(CoSASharedLoRAEncoder):
         return self
 
     def forward(self, inputs):
+        if self.method == "bdta":
+            with torch.no_grad():
+                return self.forward_levels(inputs, self.out_indices)
         return self.forward_levels(inputs, self.out_indices)
 
 
@@ -95,7 +103,11 @@ class FoundationStageEncoderV2(CoSASharedLoRAEncoder):
 class FoundationStageModelV2(CoSAHydroStateModel):
     def _build_spatial_modules(self, channels, routing):
         expected = dict(
-            d2moe=D2MoEStateFusion, ditask=DiTASKStateFusion, faar=FAARDecoder, rutal=RUTaLDecoder
+            bdta=BDTAMoTEDecoder,
+            d2moe=D2MoEStateFusion,
+            ditask=DiTASKStateFusion,
+            faar=FAARDecoder,
+            rutal=RUTaLDecoder,
         )[self.encoder.method]
         if not isinstance(self.decoder, expected) or routing.get("enabled", False):
             raise ValueError("Stage adapters require their own decoder with CoSA routing disabled")
@@ -137,7 +149,7 @@ class FoundationStageModelV2(CoSAHydroStateModel):
                 groups = tuple(self.expert_groups)
             if self.encoder.mixture:
                 prior = self.decoder.prior_map(prepared["prior"], bounds)
-            if self.encoder.method in ("faar", "rutal"):
+            if self.encoder.method in ("faar", "rutal", "bdta"):
                 states, valid = self.decoder.states(prepared, bounds, groups)
             else:
                 states = {}

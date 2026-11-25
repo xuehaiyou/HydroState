@@ -51,3 +51,37 @@ def test_rutal_upcycling_starts_at_pretrained_function():
     upcycled = ResidualExpertFFN(copy.deepcopy(base)).eval()
     x = torch.randn(2, 11, 32)
     torch.testing.assert_close(base(x), upcycled(x))
+
+
+def test_mote_preserves_own_expert_then_transfers_at_the_recipient_interval():
+    from hydrostate.models.cosa.bdta import MixtureOfTaskExperts
+
+    tasks = ("coverage", "sm", "et")
+    layer = MixtureOfTaskExperts(8, tasks).eval()
+    features = torch.randn(2, 3, 4, 8)
+    valid = torch.ones(2, 1, 3, 4, dtype=torch.bool)
+    valid[0, :, 0] = False
+    valid[1] = False
+    states = {g: torch.randn_like(features, requires_grad=True) for g in tasks}
+    own = layer.project["et"](states["et"])
+    router = layer.routers["et"]
+    result = layer(states, features, valid, ("et",))["et"]
+    torch.testing.assert_close(result, own)
+    # Altering unobserved pixels must not change a scene's task mixture.
+    weights = router(features, valid)
+    torch.testing.assert_close(weights, router(features.masked_fill(~valid.permute(0, 2, 3, 1),
+                                                                   1234), valid))
+    torch.testing.assert_close(weights.sum(1), torch.ones(2))
+    router.gamma.data.fill_(0.5)
+    expected = own + 0.5 * sum(weights[:, i, None, None, None] * layer.project[g](states[g])
+                               for i, g in enumerate(tasks))
+    transferred = layer(states, features, valid, ("et",))["et"]
+    torch.testing.assert_close(transferred, expected)
+    layer.train()
+    torch.manual_seed(42)
+    noisy = router(features, valid)
+    assert not torch.allclose(noisy, weights)
+    loss = layer(states, features, valid, ("et",))["et"][0, 1:].square().mean()
+    loss.backward()
+    assert all(v.grad.abs().sum() > 0 for v in states.values())
+    assert router.noise[0].weight.grad.abs().sum() > 0
