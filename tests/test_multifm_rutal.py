@@ -1,5 +1,6 @@
 import pytest
 import torch
+from test_mtlora import tiny  # noqa: F401 -- shared tiny OlmoEarth fixture
 
 from hydrostate.models.cosa.multifm_rutal import MultiFMRUTaLDecoder, source_weights
 from hydrostate.models.cosa.rutal import RUTaLDecoder
@@ -89,3 +90,42 @@ def test_learned_starts_at_fixed_and_updates_both_sources_and_score():
     for seq in data.values():
         for features, _, _ in seq[0]:
             assert torch.isfinite(features.grad).all() and features.grad.abs().sum() > 0
+
+
+@pytest.mark.usefixtures("tiny")
+def test_all_seven_physical_outputs_match_original_with_anysat_masked(tmp_path, monkeypatch):
+    from retrieval.test_model import batch
+    from test_cosa import config
+
+    from hydrostate.models.cosa.anysat import AnySatEncoder
+    from hydrostate.registry import MODELS
+
+    # Exercise the real model entry, time queries, task heads and physical constraints.
+    def inactive_anysat(self, **kwargs):
+        torch.nn.Module.__init__(self)
+        self.backbone = torch.nn.Identity()
+        self.ladder_features = True
+
+    monkeypatch.setattr(AnySatEncoder, "__init__", inactive_anysat)
+    cfg = config(tmp_path, False)
+    cfg.model.type = "FoundationStageModelV2"
+    cfg.model.encoder.update(
+        type="FoundationStageEncoderV2", method="rutal", num_levels=4, out_indices=[0, 1, 3, 5]
+    )
+    cfg.model.decoder.update(type="RUTaLDecoder", num_levels=5, ladder_heads=2)
+    reference = MODELS.build(cfg.model).eval()
+    cfg.model.type = "MultiFMRUTaL"
+    cfg.model.decoder.type = "MultiFMRUTaLDecoder"
+    cfg.model.anysat = dict(type="AnySatEncoder")
+    cfg.model.sources = ("olmoearth",)
+    dual = MODELS.build(cfg.model).eval()
+    missing, unexpected = dual.load_state_dict(reference.state_dict(), strict=False)
+    assert not unexpected and all(
+        k == "decoder.source_scale" or k.startswith("decoder.anysat_projections.") for k in missing
+    )
+    with torch.no_grad():
+        samples = reference.data_preprocessor(batch(), training=False)
+        a, b = (m(**samples, mode="tensor") for m in (reference, dual))
+    assert a.keys() == b.keys() and len(a) == 7
+    for k in a:
+        torch.testing.assert_close(a[k], b[k], atol=2e-5, rtol=2e-5)
