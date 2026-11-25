@@ -69,15 +69,16 @@ class CoSAStateFusion(nn.Module):
         self.compress = nn.Conv2d(num_levels * channels, channels, 1)
         self.spatial = SpatialResidual(channels)
 
-    def prepare(self, levels, inputs):
+    def prepare(self, levels, inputs, *, projections=None):
         """Project each sequence once; cache only within the current model forward."""
-        if len(levels) != len(self.projections):
+        projections = self.projections if projections is None else projections
+        if len(levels) != len(projections):
             raise ValueError("CoSA state fusion received the wrong number of depths")
         shape = levels[0]["features"].shape
         if len(shape) != 5 or shape[2] != self.in_channels:
             raise ValueError("Expected B,T,C,H,W encoder features")
         prepared = []
-        for projection, level in zip(self.projections, levels):
+        for projection, level in zip(projections, levels):
             features, valid, times = level["features"], level["valid"], level["time"]
             if (features.shape != shape or valid.shape != (shape[0], shape[1], *shape[-2:])
                     or times.shape != shape[:2] or valid.dtype != torch.bool):

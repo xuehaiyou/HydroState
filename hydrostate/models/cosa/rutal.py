@@ -60,7 +60,7 @@ class DeformableCrossAttention(nn.Module):
         nn.init.zeros_(self.weight.weight)
         nn.init.zeros_(self.weight.bias)
 
-    def forward(self, q, kv, valid):
+    def sampling_grid(self, q):
         b, h, w, c = q.shape
         heads, points = self.heads, self.points
         y, x = torch.meshgrid(
@@ -69,7 +69,12 @@ class DeformableCrossAttention(nn.Module):
         centers = torch.stack((x, y), -1).float()[None, :, :, None, None] + 0.5
         offsets = self.offset(q).reshape(b, h, w, heads, points, 2).float()
         grid = (centers + offsets) * q.new_tensor([2 / w, 2 / h]).float() - 1
-        grid = grid.permute(0, 3, 1, 2, 4, 5).reshape(b * heads, h, w * points, 2)
+        return grid.permute(0, 3, 1, 2, 4, 5).reshape(b * heads, h, w * points, 2)
+
+    def forward(self, q, kv, valid):
+        b, h, w, c = q.shape
+        heads, points = self.heads, self.points
+        grid = self.sampling_grid(q)
         values = self.value(kv).masked_fill(~valid.permute(0, 2, 3, 1), 0)
         values = values.reshape(b, h, w, heads, c // heads).permute(0, 3, 4, 1, 2)
         sampled = F.grid_sample(
@@ -92,16 +97,22 @@ class LadderStage(nn.Module):
         self.up, self.down = nn.Linear(d, d), nn.Linear(d, d)
         self.restore = nn.Linear(d, channels)
 
+    def update_state(self, group, q, context, feature):
+        gamma, beta = self.modulate[group](feature).chunk(2, -1)
+        h = q + context
+        return self.restore(self.down(gamma * F.gelu(self.up(self.ffn_norm(h))) + beta))
+
     def forward(self, group, previous, feature, valid):
         q = self.reduce(previous)
         z = self.project[group](feature)
-        gamma, beta = self.modulate[group](feature).chunk(2, -1)
-        h = q + self.attention(self.query_norm(q), self.key_norm(z), valid)
-        return self.restore(self.down(gamma * F.gelu(self.up(self.ffn_norm(h))) + beta))
+        context = self.attention(self.query_norm(q), self.key_norm(z), valid)
+        return self.update_state(group, q, context, feature)
 
 
 @MODELS.register_module()
 class RUTaLDecoder(CoSAStateFusion):
+    stage_type = LadderStage
+
     def __init__(self, ladder_heads=6, **kwargs):
         self.ladder_heads = ladder_heads
         super().__init__(**kwargs)
@@ -111,7 +122,7 @@ class RUTaLDecoder(CoSAStateFusion):
             raise ValueError("RUTaL takes the initial patch map and four stage features")
         groups = ("coverage", "sm", "et")
         self.stages = nn.ModuleList(
-            LadderStage(channels, groups, self.ladder_heads) for _ in range(4)
+            self.stage_type(channels, groups, self.ladder_heads) for _ in range(4)
         )
         self.level_readouts = nn.ModuleDict(
             {

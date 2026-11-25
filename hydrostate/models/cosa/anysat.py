@@ -19,9 +19,10 @@ class AnySatEncoder(nn.Module):
     input_keys = CoSASharedLoRAEncoder.input_keys
     out_channels = 768
 
-    def __init__(self, source, weights, input_profile):
+    def __init__(self, source, weights, input_profile, ladder_features=False):
         super().__init__()
         self.input_profile = input_profile
+        self.ladder_features = ladder_features
         source = Path(source).resolve()
         sys.path.insert(0, str(source))
         from hubconf import AnySat
@@ -66,12 +67,18 @@ class AnySatEncoder(nn.Module):
         h, w = mask.shape[-2:]
         intermediate = []
 
-        def collect(module, args, output):
-            tokens = output[:, 1:].reshape(1, len(sensors), h, w, -1)
+        def collect_tokens(tokens):
+            tokens = tokens[:, 1:].reshape(1, len(sensors), h, w, -1)
             pooled = (tokens * mask[..., None]).sum(1) / mask.sum(1).clamp_min(1)[..., None]
             intermediate.append(pooled.permute(0, 3, 1, 2))
 
-        handles = [self.backbone.blocks[i].register_forward_hook(collect) for i in (1, 3)]
+        indices = (1, 3, 5) if self.ladder_features else (1, 3)
+        handles = [self.backbone.blocks[i].register_forward_hook(
+            lambda module, args, output: collect_tokens(output)) for i in indices]
+        if self.ladder_features:
+            # Initial patch state before the six main blocks and final CrossBlockMulti.
+            handles.append(self.backbone.blocks[0].register_forward_pre_hook(
+                lambda module, args: collect_tokens(args[0])))
         try:
             final = self.backbone.forward_release(data, scale=4, output="patch")
         finally:
@@ -83,7 +90,7 @@ class AnySatEncoder(nn.Module):
         b, steps, _, height, width = inputs["s1"].shape
         times = inputs["observation_time"].detach().cpu().tolist()
         present = inputs["sensor_valid"].detach().cpu().tolist()
-        levels = [[], [], []]
+        levels = [[] for _ in range(5 if self.ladder_features else 3)]
         masks, stamps = [], []
         for i in range(b):
             for t in range(steps):
@@ -108,7 +115,7 @@ class AnySatEncoder(nn.Module):
                     valid = F.max_pool2d(torch.stack(pixels).any(0).float(), 4).bool()
                 else:
                     empty = inputs["s1"].new_zeros((1, self.out_channels, height // 4, width // 4))
-                    values, valid = (empty,) * 3, empty[:, :1].bool()
+                    values, valid = (empty,) * len(levels), empty[:, :1].bool()
                 masks.append(valid)
                 for output, value in zip(levels, values):
                     output.append(value.masked_fill(~valid, 0))

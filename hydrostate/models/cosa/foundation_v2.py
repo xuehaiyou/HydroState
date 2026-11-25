@@ -110,11 +110,15 @@ class FoundationStageModelV2(CoSAHydroStateModel):
     def _forward(self, inputs):
         return self._run_stages(inputs)[0]
 
+    def _prepare_features(self, inputs):
+        return {
+            name: self.decoder.prepare(seq, inputs) for name, seq in self.encoder(inputs).items()
+        }
+
     def _run_stages(self, inputs, alignment=None):
         if set(inputs.get("target_time", {})) != set(self.tasks):
             raise ValueError("Every output requires an explicit target interval")
-        levels = self.encoder(inputs)
-        prepared = {name: self.decoder.prepare(seq, inputs) for name, seq in levels.items()}
+        prepared = self._prepare_features(inputs)
         size = inputs[self.encoder.input_keys[0]].shape[-2:]
         if any(length % self.output_scale for length in size):
             raise ValueError("Input grid must divide by output_scale")
