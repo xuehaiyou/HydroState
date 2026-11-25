@@ -23,4 +23,4 @@ OlmoEarth 和 AnySat 完全冻结，包括 AnySat 的输入波段映射与最后
 
 A100 产物目录为 `/mnt/storage/xiaozhen/HydroState/experiments/multifm_bdta_6df6b4c/multifm_bdta/`。地理系产物目录为 `/geogfs1/groups/geog_geors/xiaozhen/HydroState/experiments/multifm_bdta_6df6b4c/multifm_bdta_equal/`。各自的 `accepted.json` 记录输入预检，`run.json` 记录实际训练设置，`work/` 保存迭代、开发验证和检查点。
 
-A100 学习版已通过真实 Zarr 输入预检并进入第 1 轮，正式记录到第 80 批。实际 micro-batch 为 5，累积 2 次。其两个 Slurm 备用候选已撤销。H100 等权版已开始读取同一批样本并执行预检的反向传播。
+11 月 26 日 01:07（香港时间），两组均已通过真实 Zarr 输入与训练、验证预检，实际 micro-batch 均为 5，累积 2 次。A100 学习版的正式日志已记录第 1 轮第 160 批，其两个 Slurm 备用候选已撤销。H100 等权版已写出正式训练配置并启动训练进程，尚待首条正式迭代指标。两组均无完整开发轮结果。
