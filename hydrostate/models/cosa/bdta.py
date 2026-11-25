@@ -17,11 +17,11 @@ def mlp(channels, hidden, out):
 class CrossUpdate(nn.Module):
     """Equations 5 and 7 use a residual for both attention and the subsequent FFN."""
 
-    def __init__(self, width, heads):
+    def __init__(self, width, heads, attention_type=DeformableCrossAttention):
         super().__init__()
         self.query_norm = nn.LayerNorm(width)
         self.key_norm = nn.LayerNorm(width)
-        self.attention = DeformableCrossAttention(width, heads=heads, points=4)
+        self.attention = attention_type(width, heads=heads, points=4)
         self.ffn = nn.Sequential(nn.LayerNorm(width), mlp(width, width, width))
 
     def forward(self, query, source, valid):
@@ -30,6 +30,8 @@ class CrossUpdate(nn.Module):
 
 
 class BidirectionalTaskAdaptation(nn.Module):
+    g2t_attention_type = DeformableCrossAttention
+
     def __init__(self, channels, groups, heads):
         super().__init__()
         width = channels // 4
@@ -39,7 +41,7 @@ class BidirectionalTaskAdaptation(nn.Module):
         self.restore = nn.Linear(width, channels)
         self.g2t_adapter = nn.ModuleDict({g: mlp(width, bottleneck, width) for g in groups})
         self.t2g_adapter = nn.ModuleDict({g: mlp(width, bottleneck, width) for g in groups})
-        self.g2t = CrossUpdate(width, heads)
+        self.g2t = CrossUpdate(width, heads, self.g2t_attention_type)
         self.t2g = CrossUpdate(width, heads)
 
     def forward(self, previous, feature, valid):
@@ -103,6 +105,8 @@ class MixtureOfTaskExperts(nn.Module):
 
 @MODELS.register_module()
 class BDTAMoTEDecoder(CoSAStateFusion):
+    stage_type = BidirectionalTaskAdaptation
+
     def __init__(self, bypass_heads=6, **kwargs):
         self.bypass_heads = bypass_heads
         super().__init__(**kwargs)
@@ -112,7 +116,7 @@ class BDTAMoTEDecoder(CoSAStateFusion):
             raise ValueError("BDTA needs initial patches, four stages and a quarter-width bypass")
         self.groups = ("coverage", "sm", "et")
         self.stages = nn.ModuleList(
-            BidirectionalTaskAdaptation(channels, self.groups, self.bypass_heads) for _ in range(4)
+            self.stage_type(channels, self.groups, self.bypass_heads) for _ in range(4)
         )
         self.mixtures = nn.ModuleList(MixtureOfTaskExperts(channels, self.groups) for _ in range(4))
         # Equation 9 projects to the first stage's width and spatial grid.
@@ -132,12 +136,15 @@ class BDTAMoTEDecoder(CoSAStateFusion):
         states = dict.fromkeys(self.groups, patch)
         readouts = {g: [] for g in groups}
         for stage, mixture, feature in zip(self.stages, self.mixtures, features, strict=True):
-            if source_context is not None:
-                feature = source_context(states, feature)
-            states = stage(states, feature, valid)
+            states, feature = self.adapt_level(stage, states, feature, valid, source_context)
             for g, value in mixture(states, feature, valid, groups).items():
                 readouts[g].append(value)
         return {
             g: self.fuse[g](torch.cat(values, -1)).permute(0, 3, 1, 2).masked_fill(~valid, 0)
             for g, values in readouts.items()
         }, valid
+
+    def adapt_level(self, stage, states, feature, valid, source_context):
+        if source_context is not None:
+            feature = source_context(states, feature)
+        return stage(states, feature, valid), feature

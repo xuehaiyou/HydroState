@@ -28,7 +28,7 @@ class MultiFMBDTADecoder(BDTAMoTEDecoder):
             contexts[task] = (features * weights[..., None].to(features.dtype)).sum(0)
         return contexts
 
-    def states(self, prepared, bounds, groups):
+    def pooled_sources(self, prepared, bounds):
         # Each FM first pools its own observations against the recipient's time interval.
         maps = torch.stack([
             (self.pool_levels(seq, bounds) + seq[1][None]).permute(0, 1, 3, 4, 2)
@@ -36,6 +36,10 @@ class MultiFMBDTADecoder(BDTAMoTEDecoder):
         ], dim=1)  # level, source, B, H, W, C
         available = torch.stack([seq[2][:, 0] for seq in prepared.values()])
         maps = maps.masked_fill(~available[None, ..., None], 0)
+        return maps, available
+
+    def states(self, prepared, bounds, groups):
+        maps, available = self.pooled_sources(prepared, bounds)
         patch = maps[0].sum(0) / available.sum(0).clamp_min(1)[..., None].to(maps.dtype)
         valid = available.any(0)[:, None]
         return self.decode_levels(

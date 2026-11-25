@@ -93,8 +93,14 @@ def test_learned_starts_at_fixed_and_updates_both_sources_and_score():
 
 
 @pytest.mark.usefixtures("tiny")
-@pytest.mark.parametrize("method", ["rutal", "bdta"])
-def test_seven_physical_outputs_match_original_with_anysat_masked(tmp_path, monkeypatch, method):
+@pytest.mark.parametrize(("method", "dual_type", "decoder_type"), [
+    ("rutal", "MultiFMRUTaL", "MultiFMRUTaLDecoder"),
+    ("bdta", "MultiFMBDTA", "MultiFMBDTADecoder"),
+    ("bdta", "DirectMultiFMBDTA", "DirectBDTADecoder"),
+])
+def test_seven_physical_outputs_match_original_with_anysat_masked(
+    tmp_path, monkeypatch, method, dual_type, decoder_type,
+):
     from retrieval.test_model import batch
     from test_cosa import config
 
@@ -119,14 +125,15 @@ def test_seven_physical_outputs_match_original_with_anysat_masked(tmp_path, monk
     else:
         cfg.model.decoder.update(type="RUTaLDecoder", num_levels=5, ladder_heads=2)
     reference = MODELS.build(cfg.model).eval()
-    cfg.model.type = "MultiFMBDTA" if method == "bdta" else "MultiFMRUTaL"
-    cfg.model.decoder.type = "MultiFMBDTADecoder" if method == "bdta" else "MultiFMRUTaLDecoder"
+    cfg.model.type = dual_type
+    cfg.model.decoder.type = decoder_type
     cfg.model.anysat = dict(type="AnySatEncoder")
     cfg.model.sources = ("olmoearth",)
     dual = MODELS.build(cfg.model).eval()
     missing, unexpected = dual.load_state_dict(reference.state_dict(), strict=False)
     assert not unexpected and all(
-        k == "decoder.source_scale" or k.startswith("decoder.anysat_projections.") for k in missing
+        k == "decoder.source_scale" or k.startswith("decoder.anysat_projections.")
+        or (dual_type == "DirectMultiFMBDTA" and "g2t.attention.extra_" in k) for k in missing
     )
     with torch.no_grad():
         samples = reference.data_preprocessor(batch(), training=False)

@@ -60,14 +60,16 @@ class DeformableCrossAttention(nn.Module):
         nn.init.zeros_(self.weight.weight)
         nn.init.zeros_(self.weight.bias)
 
-    def sampling_grid(self, q):
+    def sampling_grid(self, q, offsets=None):
         b, h, w, c = q.shape
         heads, points = self.heads, self.points
         y, x = torch.meshgrid(
             torch.arange(h, device=q.device), torch.arange(w, device=q.device), indexing="ij"
         )
         centers = torch.stack((x, y), -1).float()[None, :, :, None, None] + 0.5
-        offsets = self.offset(q).reshape(b, h, w, heads, points, 2).float()
+        if offsets is None:
+            offsets = self.offset(q)
+        offsets = offsets.reshape(b, h, w, heads, points, 2).float()
         grid = (centers + offsets) * q.new_tensor([2 / w, 2 / h]).float() - 1
         return grid.permute(0, 3, 1, 2, 4, 5).reshape(b * heads, h, w * points, 2)
 

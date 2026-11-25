@@ -6,6 +6,7 @@ from .state import CoSAStateFusion
 
 __all__ = ["CoSAHydroStateModel", "CoSASharedLoRAEncoder", "CoSAStateFusion"]
 
+from . import direct_bdta as direct_bdta
 from . import foundation as foundation
 from . import foundation_v2 as foundation_v2
 from . import multifm_bdta as multifm_bdta
