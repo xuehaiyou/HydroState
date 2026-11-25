@@ -19,10 +19,11 @@ class AnySatEncoder(nn.Module):
     input_keys = CoSASharedLoRAEncoder.input_keys
     out_channels = 768
 
-    def __init__(self, source, weights, input_profile, ladder_features=False):
+    def __init__(self, source, weights, input_profile, ladder_features=False, frozen=False):
         super().__init__()
         self.input_profile = input_profile
         self.ladder_features = ladder_features
+        self.frozen = frozen
         source = Path(source).resolve()
         sys.path.insert(0, str(source))
         from hubconf import AnySat
@@ -46,6 +47,9 @@ class AnySatEncoder(nn.Module):
                     layer.weight[out, index] = 1
             # Initial radar contrast in normalized log-power coordinates.
             self.align["s1"].weight[2, :, 0, 0] = torch.tensor([1., -1.])
+
+        if frozen:
+            self.requires_grad_(False)
 
     def train(self, mode=True):
         super().train(mode)
@@ -111,7 +115,11 @@ class AnySatEncoder(nn.Module):
                     raise ValueError("AnySat joint composites require aligned slot timestamps")
                 stamps.append(next(iter(slot_times), 0))
                 if keys:
-                    values = checkpoint(self._slot, keys, dates, *arrays, use_reentrant=False)
+                    if self.frozen:
+                        with torch.no_grad():
+                            values = self._slot(keys, dates, *arrays)
+                    else:
+                        values = checkpoint(self._slot, keys, dates, *arrays, use_reentrant=False)
                     valid = F.max_pool2d(torch.stack(pixels).any(0).float(), 4).bool()
                 else:
                     empty = inputs["s1"].new_zeros((1, self.out_channels, height // 4, width // 4))

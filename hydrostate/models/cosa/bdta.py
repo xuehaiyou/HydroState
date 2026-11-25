@@ -43,10 +43,14 @@ class BidirectionalTaskAdaptation(nn.Module):
         self.t2g = CrossUpdate(width, heads)
 
     def forward(self, previous, feature, valid):
-        general = self.general_down(feature)
+        if isinstance(feature, dict):
+            contexts = {g: self.general_down(value) for g, value in feature.items()}
+        else:
+            contexts = dict.fromkeys(previous, self.general_down(feature))
         missing = ~valid.permute(0, 2, 3, 1)
         states = {}
         for task, state in previous.items():
+            general = contexts[task]
             adapted = general + self.g2t_adapter[task](general)
             task_state = self.g2t(self.task_down(state), adapted, valid)
             adapted = task_state + self.t2g_adapter[task](task_state)
@@ -90,7 +94,8 @@ class MixtureOfTaskExperts(nn.Module):
         mixed = {}
         for g in recipients:
             router = self.routers[g]
-            weights = router(feature, valid).to(experts.dtype)
+            context = feature[g] if isinstance(feature, dict) else feature
+            weights = router(context, valid).to(experts.dtype)
             transfer = (experts * weights[:, :, None, None, None]).sum(1)
             mixed[g] = experts[:, self.groups.index(g)] + router.gamma.to(transfer.dtype) * transfer
         return mixed
@@ -120,10 +125,15 @@ class BDTAMoTEDecoder(CoSAStateFusion):
         valid = seq[2]
         levels = self.pool_levels(seq, bounds) + seq[1][None]
         patch, *features = levels.permute(0, 1, 3, 4, 2).unbind()
+        return self.decode_levels(patch, features, valid, groups)
+
+    def decode_levels(self, patch, features, valid, groups, source_context=None):
         # All source experts use the recipient interval, even for a single requested task.
         states = dict.fromkeys(self.groups, patch)
         readouts = {g: [] for g in groups}
         for stage, mixture, feature in zip(self.stages, self.mixtures, features, strict=True):
+            if source_context is not None:
+                feature = source_context(states, feature)
             states = stage(states, feature, valid)
             for g, value in mixture(states, feature, valid, groups).items():
                 readouts[g].append(value)

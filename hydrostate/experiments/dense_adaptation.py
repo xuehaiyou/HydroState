@@ -13,7 +13,8 @@ from hydrostate.experiments.foundation_search import probe
 from hydrostate.experiments.manual_cover_launch import finish_test
 
 MULTIFM = ("multifm_rutal", "multifm_rutal_equal")
-ARMS = ("nexus_d2moe", "faar", "rutal", "bdta", *MULTIFM)
+MULTIFM_BDTA = ("multifm_bdta", "multifm_bdta_equal")
+ARMS = ("nexus_d2moe", "faar", "rutal", "bdta", *MULTIFM, *MULTIFM_BDTA)
 
 
 def configure(reference, directory, arm):
@@ -45,9 +46,9 @@ def configure(reference, directory, arm):
             channels=variant.model.decoder.channels,
             num_levels=variant.model.decoder.num_levels,
         )
-    if arm == "bdta":
+    if arm == "bdta" or arm in MULTIFM_BDTA:
         cfg.model.encoder.gradient_checkpointing = False
-    if arm in MULTIFM:
+    if arm in (*MULTIFM, *MULTIFM_BDTA):
         cfg.model.anysat = variant.model.anysat
         cfg.model.decoder.learn_source_weights = variant.model.decoder.learn_source_weights
         if not (cfg.val_dataloader.batch_size == cfg.test_dataloader.batch_size == 8):

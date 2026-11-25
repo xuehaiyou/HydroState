@@ -8,5 +8,6 @@ __all__ = ["CoSAHydroStateModel", "CoSASharedLoRAEncoder", "CoSAStateFusion"]
 
 from . import foundation as foundation
 from . import foundation_v2 as foundation_v2
+from . import multifm_bdta as multifm_bdta
 from . import multifm_rutal as multifm_rutal
 from .anysat import AnySatEncoder as AnySatEncoder

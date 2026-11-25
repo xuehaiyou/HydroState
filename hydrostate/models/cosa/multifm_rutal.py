@@ -9,18 +9,8 @@ from torch.utils.checkpoint import checkpoint
 
 from hydrostate.registry import MODELS
 
-from .foundation_v2 import FoundationStageModelV2
+from .multifm import MultiFMStageModel, source_weights
 from .rutal import LadderStage, RUTaLDecoder
-
-
-def source_weights(query, keys, available, scale):
-    """Source-first tensors with feature channels last. Empty support contributes zero."""
-    if scale is None:
-        weights = available.float()
-        return weights / weights.sum(0, keepdim=True).clamp_min(1)
-    scores = F.cosine_similarity(keys.float(), query.float().unsqueeze(0), dim=-1) * scale
-    scores = scores.masked_fill(~available, torch.finfo(scores.dtype).min)
-    return scores.softmax(0).masked_fill(~available, 0)
 
 
 class MultiSourceStage(LadderStage):
@@ -103,24 +93,5 @@ class MultiFMRUTaLDecoder(RUTaLDecoder):
 
 
 @MODELS.register_module()
-class MultiFMRUTaL(FoundationStageModelV2):
-    def __init__(self, anysat, sources=("olmoearth", "anysat"), **kwargs):
-        super().__init__(**kwargs)
-        if not isinstance(self.decoder, MultiFMRUTaLDecoder):
-            raise ValueError("MultiFMRUTaL requires its multi-source decoder")
-        self.sources = tuple(sources)
-        if self.sources not in (("olmoearth",), ("anysat",), ("olmoearth", "anysat")):
-            raise ValueError("Unexpected active RUTaL sources")
-        self.anysat = MODELS.build(anysat)
-        if not self.anysat.ladder_features:
-            raise ValueError("AnySat must emit initial patches and four stage exits")
-
-    def _prepare_features(self, inputs):
-        prepared = {}
-        if "olmoearth" in self.sources:
-            prepared.update(super()._prepare_features(inputs))
-        if "anysat" in self.sources:
-            prepared["anysat"] = self.decoder.prepare(
-                self.anysat(inputs), inputs, projections=self.decoder.anysat_projections
-            )
-        return prepared
+class MultiFMRUTaL(MultiFMStageModel):
+    decoder_class = MultiFMRUTaLDecoder
