@@ -1,4 +1,4 @@
-"""Shared reciprocal attention for time-aligned, frozen foundation-model features."""
+"""Stage-specific reciprocal attention for time-aligned, frozen foundation-model features."""
 
 import copy
 
@@ -92,7 +92,9 @@ class TerraWeaveDecoder(CoSAStateFusion):
         self.position = nn.Embedding(self.window_size**2, channels)
         for embedding in (self.source_id, self.variable_id, self.position):
             nn.init.normal_(embedding.weight, std=0.02)
-        self.ura = UnifiedReciprocalAttention(channels, self.attention_heads)
+        self.stages = nn.ModuleList(
+            UnifiedReciprocalAttention(channels, self.attention_heads) for _ in range(num_levels)
+        )
         self.readout = nn.Linear(num_levels * channels, channels)
 
     def states(self, prepared, bounds, groups):
@@ -116,12 +118,12 @@ class TerraWeaveDecoder(CoSAStateFusion):
         readouts = []
         state = seed.flatten(0, 1)[None]
         requested = [self.groups.index(name) for name in groups]
-        for features, valid in zip(maps, support, strict=True):
+        for stage, features, valid in zip(self.stages, maps, support, strict=True):
             evidence = partition(features.permute(0, 1, 3, 4, 2), side)
             evidence = (evidence + source_tags).flatten(1, 2)
             evidence_valid = partition(valid[..., None], side).squeeze(-1)
             variable_valid = evidence_valid.any(1)[:, None].expand(-1, len(self.groups), -1)
-            state = self.ura(
+            state = stage(
                 state.expand(evidence.shape[0], -1, -1),
                 evidence,
                 variable_valid.flatten(1, 2),

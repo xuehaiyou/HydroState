@@ -9,6 +9,7 @@ model = dict(
         type="TerraWeaveDecoder",
         in_channels=768,
         channels=128,
+        # Each depth instantiates its own URA; attention projections are shared within a depth.
         num_levels=4,
         num_heads=4,
         window_size=4,

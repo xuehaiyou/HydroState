@@ -44,7 +44,7 @@ def test_reciprocal_formula_and_missing_keys():
     assert result[1].count_nonzero() == 0 and result.isfinite().all()
 
 
-def test_four_tied_calls_masks_target_time_and_backward():
+def test_four_independent_stages_masks_target_time_and_backward():
     torch.manual_seed(105)
     net = TerraWeaveDecoder(in_channels=24, channels=24, num_heads=2)
     valid = torch.ones(2, 2, 5, 7, dtype=torch.bool)
@@ -56,13 +56,20 @@ def test_four_tied_calls_masks_target_time_and_backward():
         data[name] = (levels[:4], quality, mask)
     bounds = torch.tensor([[1600000000, 1600086400], [1600000300, 1600023000]])
     calls = []
-    handle = net.ura.register_forward_pre_hook(lambda module, args: calls.append(args[0].detach()))
+
+    def record_input(module, args):
+        calls.append((module, args[0].detach()))
+
+    handles = [stage.register_forward_pre_hook(record_input) for stage in net.stages]
     states, mask = net.states(data, bounds, net.groups)
-    handle.remove()
-    assert len(calls) == 4
+    for handle in handles:
+        handle.remove()
+    assert len(net.stages) == 4 and [stage for stage, _ in calls] == list(net.stages)
+    pointers = [p.data_ptr() for stage in net.stages for p in stage.parameters()]
+    assert len(pointers) == len(set(pointers))
     # The initial state is independent of the image, even for all-missing windows.
-    torch.testing.assert_close(calls[0][0], calls[0][-1])
-    assert not torch.equal(calls[1][0], calls[1][-1])
+    torch.testing.assert_close(calls[0][1][0], calls[0][1][-1])
+    assert not torch.equal(calls[1][1][0], calls[1][1][-1])
     for state in states.values():
         assert state.shape == (2, 24, 5, 7)
         assert not state.masked_select(~mask.expand_as(state)).any()
@@ -70,12 +77,7 @@ def test_four_tied_calls_masks_target_time_and_backward():
     assert not torch.allclose(changed["et"][1], states["et"][1])
     states["et"].square().mean().backward()
     for p in (
-        net.ura.q.weight,
-        net.ura.k.weight,
-        net.ura.v.weight,
-        net.ura.out.weight,
-        net.ura.gamma_return,
-        net.ura.gamma_variable,
+        *net.stages.parameters(),
         net.pooler.time_query[0].weight,
         net.source_id.weight,
         net.variable_id.weight,
@@ -121,4 +123,4 @@ def test_real_olmo_entry_seven_outputs_and_frozen_encoder(tmp_path, monkeypatch)
     torch.testing.assert_close(frac, torch.ones_like(frac))
     assert all(result[t].min() >= 0 for t in ("et_water", "et_ice", "et_land"))
     sum(x.square().mean() for x in result.values()).backward()
-    assert model.decoder.ura.gamma_return.grad.isfinite()
+    assert all(stage.gamma_return.grad.isfinite() for stage in model.decoder.stages)
