@@ -21,6 +21,7 @@ from .faar import FAARDecoder, RankedDirection, adapt_rank_block
 from .model import CoSAHydroStateModel
 from .nexusflow import NexusFlow
 from .rutal import ResidualExpertFFN, RUTaLDecoder
+from .terraweave import TerraWeaveDecoder
 
 GROUPS = ("coverage", "sm", "et")
 
@@ -39,12 +40,12 @@ class FoundationStageEncoderV2(CoSASharedLoRAEncoder):
         MultiLevelTemporalOlmoEarthEncoder.__init__(self, gradient_checkpointing=False, **kwargs)
         self.finetuning = "lora"  # Reuse MTLoRA's grouped depth restoration.
         self.method = method
-        if method not in ("ditask", "d2moe", "faar", "rutal", "bdta"):
+        if method not in ("ditask", "d2moe", "faar", "rutal", "bdta", "terraweave"):
             raise ValueError(method)
         self.mixture = method == "d2moe"
         self.tasks = (*GROUPS, "prior") if self.mixture else GROUPS
         core = self.backbone.model.requires_grad_(False)
-        if method == "bdta":
+        if method in ("bdta", "terraweave"):
             self.requires_grad_(False)
             self.train(self.training)
             return
@@ -72,7 +73,7 @@ class FoundationStageEncoderV2(CoSASharedLoRAEncoder):
         self.train(self.training)
 
     def _extract_levels(self, sample, out_indices):
-        if self.method in ("rutal", "bdta"):
+        if self.method in ("rutal", "bdta", "terraweave"):
             return {
                 "shared": multilevel_features(
                     self.backbone.model,
@@ -80,7 +81,7 @@ class FoundationStageEncoderV2(CoSASharedLoRAEncoder):
                     self.patch_size,
                     out_indices,
                     retain_tokens=True,
-                    include_patch=True,
+                    include_patch=self.method != "terraweave",
                 )
             }
         return super()._extract_levels(sample, out_indices)
@@ -93,7 +94,7 @@ class FoundationStageEncoderV2(CoSASharedLoRAEncoder):
         return self
 
     def forward(self, inputs):
-        if self.method == "bdta":
+        if self.method in ("bdta", "terraweave"):
             with torch.no_grad():
                 return self.forward_levels(inputs, self.out_indices)
         return self.forward_levels(inputs, self.out_indices)
@@ -104,6 +105,7 @@ class FoundationStageModelV2(CoSAHydroStateModel):
     def _build_spatial_modules(self, channels, routing):
         expected = dict(
             bdta=BDTAMoTEDecoder,
+            terraweave=TerraWeaveDecoder,
             d2moe=D2MoEStateFusion,
             ditask=DiTASKStateFusion,
             faar=FAARDecoder,
@@ -149,7 +151,7 @@ class FoundationStageModelV2(CoSAHydroStateModel):
                 groups = tuple(self.expert_groups)
             if self.encoder.mixture:
                 prior = self.decoder.prior_map(prepared["prior"], bounds)
-            if self.encoder.method in ("faar", "rutal", "bdta"):
+            if self.encoder.method in ("faar", "rutal", "bdta", "terraweave"):
                 states, valid = self.decoder.states(prepared, bounds, groups)
             else:
                 states = {}

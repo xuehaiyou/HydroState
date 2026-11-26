@@ -6,6 +6,7 @@ from torch.nn import functional as F
 from hydrostate.registry import MODELS
 
 from .foundation_v2 import FoundationStageModelV2
+from .terraweave import TerraWeaveDecoder
 
 
 def source_weights(query, keys, available, scale):
@@ -28,7 +29,7 @@ class MultiFMStageModel(FoundationStageModelV2):
             raise ValueError("Unexpected active foundation models")
         self.anysat = MODELS.build(anysat)
         if not self.anysat.ladder_features:
-            raise ValueError("AnySat must emit initial patches and four stage exits")
+            raise ValueError("AnySat must emit four stage exits")
 
     def _prepare_features(self, inputs):
         prepared = {}
@@ -39,3 +40,14 @@ class MultiFMStageModel(FoundationStageModelV2):
                 self.anysat(inputs), inputs, projections=self.decoder.anysat_projections
             )
         return prepared
+
+
+@MODELS.register_module()
+class TerraWeave(MultiFMStageModel):
+    decoder_class = TerraWeaveDecoder
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if (self.encoder.method != "terraweave" or not self.anysat.frozen
+                or self.anysat.include_patch):
+            raise ValueError("TerraWeave requires four exits from each frozen encoder")

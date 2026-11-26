@@ -15,7 +15,7 @@ from hydrostate.experiments.manual_cover_launch import finish_test
 MULTIFM = ("multifm_rutal", "multifm_rutal_equal")
 MULTIFM_BDTA = ("multifm_bdta", "multifm_bdta_equal")
 DIRECT_BDTA = ("direct_bdta", "direct_bdta_equal")
-ARMS = ("nexus_d2moe", "faar", "rutal", "bdta", *MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA)
+ARMS = ("nexus_d2moe", "faar", "rutal", "bdta", *MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA, "terraweave")
 
 
 def configure(reference, directory, arm):
@@ -47,11 +47,14 @@ def configure(reference, directory, arm):
             channels=variant.model.decoder.channels,
             num_levels=variant.model.decoder.num_levels,
         )
-    if arm == "bdta" or arm in (*MULTIFM_BDTA, *DIRECT_BDTA):
+    if arm in ("bdta", "terraweave", *MULTIFM_BDTA, *DIRECT_BDTA):
         cfg.model.encoder.gradient_checkpointing = False
-    if arm in (*MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA):
+    if arm in ("terraweave", *MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA):
         cfg.model.anysat = variant.model.anysat
-        cfg.model.decoder.learn_source_weights = variant.model.decoder.learn_source_weights
+        if arm == "terraweave":
+            cfg.model.decoder = variant.model.decoder
+        else:
+            cfg.model.decoder.learn_source_weights = variant.model.decoder.learn_source_weights
         if not (cfg.val_dataloader.batch_size == cfg.test_dataloader.batch_size == 8):
             raise ValueError("Expected the baseline validation and test batch of eight")
     if arm == "faar":
