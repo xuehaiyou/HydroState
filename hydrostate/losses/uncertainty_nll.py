@@ -74,7 +74,8 @@ class UncertaintyWeightedNLL(nn.Module):
     local gradients by world size compensates for DDP's gradient averaging.
     """
 
-    def __init__(self, target_statistics: str | dict, min_variance: float = 1e-6, tasks=LEGACY_TASKS):
+    def __init__(self, target_statistics: str | dict, min_variance: float = 1e-6,
+                 tasks=LEGACY_TASKS, learn_variance: bool = True):
         super().__init__()
         if not math.isfinite(min_variance) or not 0 < min_variance < 1:
             raise ValueError("min_variance must be finite and in (0, 1)")
@@ -91,11 +92,17 @@ class UncertaintyWeightedNLL(nn.Module):
                 dtype=torch.uint8,
             ),
         )
-        self.log_variances = nn.ParameterDict(
-            {task: nn.Parameter(torch.zeros(())) for task in self.tasks}
-        )
+        if learn_variance:
+            self.log_variances = nn.ParameterDict(
+                {task: nn.Parameter(torch.zeros(())) for task in self.tasks}
+            )
+        else:
+            self.log_variances = None
+            self.register_buffer("unit_variance", torch.ones(()), persistent=False)
 
     def variance(self, task):
+        if self.log_variances is None:
+            return self.unit_variance
         # The floor avoids a singular likelihood for nearly perfect predictions.
         return self.log_variances[task].float().clamp(min=math.log(self.min_variance)).exp()
 

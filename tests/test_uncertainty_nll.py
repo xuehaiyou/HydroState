@@ -10,6 +10,29 @@ from torch.nn.parallel import DistributedDataParallel
 from hydrostate.losses import UncertaintyWeightedNLL
 
 
+def test_fixed_unit_variance_preserves_weighted_nll_and_prediction_gradient(target_statistics):
+    fixed = UncertaintyWeightedNLL(target_statistics, learn_variance=False)
+    learned = UncertaintyWeightedNLL(target_statistics)
+    assert not list(fixed.parameters())
+    assert all(fixed.variance(t).item() == 1 for t in fixed.tasks)
+    prediction = torch.tensor([0.1, 0.8, float("nan")], requires_grad=True)
+    target = torch.tensor([0.2, 0.3, float("nan")])
+    valid = torch.tensor([True, True, False])
+    weight = torch.tensor([0.25, 1.0, float("nan")])
+    loss = fixed.local_sum("water", prediction, target, valid, weight) / valid.sum()
+    baseline = learned.local_sum("water", prediction, target, valid, weight) / valid.sum()
+    reference = weight[:2] * (0.5 * ((prediction[:2] - target[:2]) / 0.4).square()
+                              + 0.5 * math.log(2 * math.pi))
+    torch.testing.assert_close(loss, reference.mean())
+    torch.testing.assert_close(loss, baseline)
+    grad = torch.autograd.grad(loss, prediction)[0]
+    torch.testing.assert_close(grad, torch.autograd.grad(baseline, prediction)[0])
+    assert grad[-1] == 0
+    restored = UncertaintyWeightedNLL(target_statistics, learn_variance=False)
+    restored.load_state_dict(fixed.state_dict())
+    assert all(restored.variance(t).item() == 1 for t in restored.tasks)
+
+
 def test_gaussian_nll_matches_reference_and_masks_nan(target_statistics):
     module = UncertaintyWeightedNLL(target_statistics)
     module.log_variances["water"].data.fill_(math.log(2.2))
