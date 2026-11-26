@@ -6,6 +6,8 @@
 
 2026-11-26 的[双 FM TerraWeave 六轮架构比较](validation/TERRAWEAVE_20261126.md)采用既有人工 Cover、站点 SM/ET 联合监督协议。正式架构的四级 URA 结构相同，各自学习参数；跨级共享参数版单独记录。
 
+单 OlmoEarth BDTA + MoTE 增加一组[七个产品 NLL 方差固定为 1 的六轮对照](validation/BDTA_UNIT_VARIANCE_20261126.md)，与已完成的可学习方差组按相同协议评估。
+
 ## 评价依据：用户最新决定
 
 - 以站点 **SM、ET** 的验证精度为主要依据，分别报告 Pearson R、RMSE 和 Bias。
