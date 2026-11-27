@@ -69,7 +69,7 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2, validation_batc
                   "not model accuracy or a reusable checkpoint", train_samples=len(dataset),
                   sample_ids=[dataset.product.table.iloc[i].sample_id if i < len(dataset.product)
                               else f"joint_index:{i}" for i in indices])
-    core = getattr(model.encoder.backbone, "model", None)
+    core = getattr(getattr(model.encoder, "backbone", None), "model", None)
     attention = [getattr(block, "block", block).attn for block in core.blocks] if core else []
     report["gradient_checkpointing"] = cfg.model.encoder.get("gradient_checkpointing", None)
     report["broadcast_attention_blocks"] = sum(
