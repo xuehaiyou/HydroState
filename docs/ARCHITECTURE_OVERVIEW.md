@@ -55,6 +55,7 @@
 | 双 FM BDTA + MoTE，学习来源权重 / 固定有效来源等权 | 在单 FM BDTA 的每个深度引入第二个冻结的 FM，学习版权重随任务和位置变化。两组均按用户决定取消。[结构、协议与作业](validation/MULTIFM_BDTA_20261126.md) |
 | 双 FM BDTA + MoTE，直接读取 | 双向适配分别处理两路 FM。学习和等权版本只改变 G2T 中有效来源的总注意力分配。[架构与实验](validation/DIRECT_MULTIFM_BDTA_20261126.md) |
 | 单 FM BDTA + MoTE 产品方差固定为 1 | 第 5 轮入选。相同结构的学习方差组第 6 轮入选，逐项取舍见上文及完整测试表。[配置核验](validation/BDTA_UNIT_VARIANCE_20261126.md) |
+| 单 FM BDTA + MoTE，可信观测指导产品权重 | 单卡每批 10 窗。可信监督与产品组内均方误差的基础系数为 2∶1；同输出头的梯度内积调整有效产品观测的相对权重。原短训子集、六轮开发选模和独立测试协议。此次只运行动态版，与既有基线还同时存在损失和组批差异。[协议及运行证据](validation/TRUSTED_PRODUCT_GRADIENTS.md) |
 | 双 FM TerraWeave 共享参数原型、四级独立参数、单 OlmoEarth 四级对照 | 三者分开归档。阶段成绩只用于了解训练进展。双 FM 前 3 轮最佳开发分数 −0.4865；单 FM 前 4 轮中第 3 轮最佳 −0.4867。相近的早期成绩尚不能判断第二个 FM 的最终收益。[双 FM](validation/TERRAWEAVE_20261126.md) · [单 FM](validation/TERRAWEAVE_OLMO_20261127.md) |
 | 专用 FM TerraWeave：SoftCon（S1）、Prithvi（S2）、双路融合 | SoftCon 在第 5 轮入选，完成完整测试。其余两组仅有真实窗口前反向验收；旧 HLS 作业未产生精度。[输入及运行记录](validation/TERRAWEAVE_SPECIALISTS.md) |
 

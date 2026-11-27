@@ -40,16 +40,22 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2, validation_batc
     torch.set_num_threads(1)
     torch.backends.cudnn.benchmark = cfg.env_cfg.cudnn_benchmark
     dataset = DATASETS.build(dict(cfg.train_dataloader.dataset))
-    representative = representative_indices(dataset)
-    generator = torch.Generator().manual_seed(cfg.randomness.seed)
-    required = batch_size * steps
-    if required > len(dataset):
-        raise ValueError("Probe exceeds the unique training windows")
-    chosen = list(dict.fromkeys(representative))
-    selected = set(chosen)
-    chosen.extend(i for i in torch.randperm(len(dataset), generator=generator).tolist()
-                  if i not in selected)
-    indices = chosen[:required]
+    if cfg.train_dataloader.sampler.type == "TrustedSourceSampler":
+        from hydrostate.datasets.trusted_sampler import TrustedSourceSampler
+
+        sampler = TrustedSourceSampler(dataset, seed=cfg.randomness.seed, batch_size=batch_size)
+        indices = sampler.probe_indices(steps)
+    else:
+        representative = representative_indices(dataset)
+        generator = torch.Generator().manual_seed(cfg.randomness.seed)
+        required = batch_size * steps
+        if required > len(dataset):
+            raise ValueError("Probe exceeds the unique training windows")
+        chosen = list(dict.fromkeys(representative))
+        selected = set(chosen)
+        chosen.extend(i for i in torch.randperm(len(dataset), generator=generator).tolist()
+                      if i not in selected)
+        indices = chosen[:required]
     loader = DataLoader(dataset, batch_size=batch_size, sampler=indices, num_workers=workers,
                         pin_memory=True, collate_fn=hydro_collate)
     model = MODELS.build(cfg.model).cuda().train()
@@ -83,6 +89,10 @@ def benchmark(config, output, *, batch_size, steps=8, workers=2, validation_batc
                    if torch.is_tensor(value)):
                 raise RuntimeError("Nonfinite joint training loss")
             measured = memory.sample()
+            if cfg.train_dataloader.sampler.type == "TrustedSourceSampler":
+                measured["product_observations"] = {
+                    key: int(value.item()) for key, value in losses.items()
+                    if key.startswith(("guided_count_", "valid_count_"))}
             report["steps"].append(dict(
                 seconds=time.monotonic() - began,
                 data_wait_seconds=loaded - began,
