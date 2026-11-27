@@ -41,6 +41,7 @@ def test_mixed_manual_and_product_collation(monkeypatch):
 
     monkeypatch.setattr(JointRetrievalDataset, "__getitem__", base_item)
     data = ManualJointDataset.__new__(ManualJointDataset)
+    data.specialist_sources = None
     data.base_length, data.manual, data.training, data.split = 1, Manual(), False, "train"
     raw = hydro_collate([data[0], data[1]])
     targets = raw["data_samples"]
