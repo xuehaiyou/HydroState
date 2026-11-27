@@ -24,7 +24,7 @@ from hydrostate.experiments.manual_cover import separated
 from hydrostate.experiments.manual_cover_launch import finish_test
 from hydrostate.storage.packs import file_hash
 
-EPOCHS = 20
+EPOCHS = 50
 BATCH = 10
 
 
