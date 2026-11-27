@@ -76,7 +76,8 @@ class UnifiedReciprocalAttention(nn.Module):
 class TerraWeaveDecoder(CoSAStateFusion):
     groups = ("coverage", "sm", "et")
 
-    def __init__(self, channels=128, num_levels=4, num_heads=4, window_size=4, sources=("shared", "anysat"), **kwargs):
+    def __init__(self, channels=128, num_levels=4, num_heads=4, window_size=4,
+                 sources=("shared", "anysat"), **kwargs):
         if num_levels != 4 or window_size <= 0:
             raise ValueError("TerraWeave requires four stage exits and a positive window size")
         self.sources = tuple(sources)
