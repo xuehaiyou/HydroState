@@ -31,24 +31,33 @@ def collect(ee, root, row):
         return
     affine = json.loads(row.transform)
     region = ee.Geometry.Rectangle(
-        [affine[2], affine[5] - 1200, affine[2] + 1200, affine[5]], row.crs, False)
+        [affine[2], affine[5] - 1200, affine[2] + 1200, affine[5]], row.crs, False
+    )
     slots = intervals(str(row.target_time)[:10])
     collections = []
-    for source, names in (("HLSL30", ["B2","B3","B4","B5","B6","B7"]),
-                          ("HLSS30", ["B2","B3","B4","B8A","B11","B12"])):
+    for source, names in (
+        ("HLSL30", ["B2", "B3", "B4", "B5", "B6", "B7"]),
+        ("HLSS30", ["B2", "B3", "B4", "B8A", "B11", "B12"]),
+    ):
+
         def prepare(im, names=names):
             x = im.select(names, BANDS)
             ok = im.select("Fmask").bitwiseAnd(15).eq(0).And(x.mask().reduce(ee.Reducer.min()))
             return x.updateMask(ok).copyProperties(im, ["system:time_start"])
-        collections.append(ee.ImageCollection(f"NASA/HLS/{source}/v002").filterBounds(region)
-                           .filterDate(slots[0][0], slots[-1][1]).map(prepare))
+
+        collections.append(
+            ee.ImageCollection(f"NASA/HLS/{source}/v002")
+            .filterBounds(region)
+            .filterDate(slots[0][0], slots[-1][1])
+            .map(prepare)
+        )
     scenes = collections[0].merge(collections[1])
     images, keys = [], []
     for i, (start, end) in enumerate(slots):
         names = [f"t{i}_{name}" for name in BANDS + QUALITY]
         images.append(mean_composite(ee, scenes.filterDate(start, end), BANDS, start).rename(names))
         keys.extend(names)
-    grid = [v * 3 if i in (0,1,3,4) else v for i,v in enumerate(affine)]
+    grid = [v * 3 if i in (0, 1, 3, 4) else v for i, v in enumerate(affine)]
     raw = compute_pixels(ee, ee.Image.cat(images), keys, row.crs, grid, 40, 40)
     values = np.stack([np.stack([raw[f"t{i}_{b}"] for b in BANDS]) for i in range(5)])
     quality = np.stack([np.stack([raw[f"t{i}_{b}"] for b in QUALITY]) for i in range(5)])
@@ -57,14 +66,20 @@ def collect(ee, root, row):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(f".{os.getpid()}.tmp")
     with tmp.open("wb") as stream:
-        np.savez_compressed(stream, hls=values.astype("float16"), quality=quality.astype("float16"),
-                            location=np.float32([row.lat, row.lon]))
+        np.savez_compressed(
+            stream,
+            hls=values.astype("float16"),
+            quality=quality.astype("float16"),
+            location=np.float32([row.lat, row.lon]),
+        )
     tmp.replace(path)
 
 
 def main():
     from mmengine.config import Config
+
     from hydrostate.registry import DATASETS
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("reference", type=Path)
     parser.add_argument("root", type=Path)
@@ -73,7 +88,7 @@ def main():
     args = parser.parse_args()
     cfg = Config.fromfile(args.reference)
     tables = []
-    for split, expected in (("train",10912),("val",3681),("test",11168)):
+    for split, expected in (("train", 10912), ("val", 3681), ("test", 11168)):
         ds = DATASETS.build(cfg[split + "_dataloader"].dataset)
         if len(ds) != expected:
             raise ValueError(f"Changed {split} selection")
@@ -87,8 +102,9 @@ def main():
     if args.pilot:
         table = table.iloc[:2]
     with ThreadPoolExecutor(4) as pool:
-        for i, _ in enumerate(pool.map(lambda row: collect(ee, args.root, row),
-                                        table.itertuples(index=False)), 1):
+        for i, _ in enumerate(
+            pool.map(lambda row: collect(ee, args.root, row), table.itertuples(index=False)), 1
+        ):
             if i % 100 == 0:
                 print(f"{i}/{len(table)}", flush=True)
     if not args.pilot:

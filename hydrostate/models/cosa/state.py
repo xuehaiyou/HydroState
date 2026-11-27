@@ -75,7 +75,7 @@ class CoSAStateFusion(nn.Module):
         if len(levels) != len(projections):
             raise ValueError("CoSA state fusion received the wrong number of depths")
         shape = levels[0]["features"].shape
-        if len(shape) != 5 or shape[2] != self.in_channels:
+        if len(shape) != 5 or shape[2] != projections[0][1].in_features:
             raise ValueError("Expected B,T,C,H,W encoder features")
         prepared = []
         for projection, level in zip(projections, levels):

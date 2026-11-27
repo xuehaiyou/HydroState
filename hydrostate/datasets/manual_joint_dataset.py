@@ -19,9 +19,14 @@ from .retrieval_dataset import as_tensors
 
 @DATASETS.register_module()
 class ManualJointDataset(JointRetrievalDataset):
-    def __init__(self, manual_root, manual_selection, glacier_input_root=None, **kwargs):
+    def __init__(self, manual_root, manual_selection, glacier_input_root=None, specialist_sources=None, hls_root=None, **kwargs):
         super().__init__(**kwargs)
         self.training = kwargs.get("training", False)
+        self.specialist_sources = specialist_sources
+        self.hls_root = hls_root
+        if specialist_sources:
+            for component in self.components:
+                component.training = False
         self.base_length = len(self)
         split = "val" if self.split == "validation" else self.split
         self.manual = ManualCoverDataset(manual_root, split, glacier_input_root=glacier_input_root)
@@ -66,7 +71,7 @@ class ManualJointDataset(JointRetrievalDataset):
                 target_time=row.target_time,
             )
             item["data_samples"] = targets
-            if self.training:
+            if self.training and not self.specialist_sources:
                 for axis in (-1, -2):
                     if torch.rand(()) < 0.5:
                         for arrays in (item["inputs"], targets):
@@ -84,6 +89,19 @@ class ManualJointDataset(JointRetrievalDataset):
             for name in ("water", "snow_ice", "land"):
                 targets["manual_" + name] = torch.zeros((1, 40, 40))
                 targets["manual_" + name + "_valid"] = torch.zeros((1, 40, 40), dtype=torch.bool)
+        if self.specialist_sources:
+            from .specialists import specialist_inputs
+            inputs = specialist_inputs(item["inputs"], info["sample_id"], self.specialist_sources,
+                                       self.hls_root)
+            item["inputs"] = inputs
+            if self.training:
+                for axis in (-1, -2):
+                    if torch.rand(()) < 0.5:
+                        for arrays in (inputs, targets):
+                            for key, value in arrays.items():
+                                if (torch.is_tensor(value) and value.ndim >= 3 and
+                                        value.shape[-2:] in ((40, 40), (120, 120))):
+                                    arrays[key] = value.flip(axis)
         # Identical metainfo keys are required by default_collate across source types.
         targets["metainfo"] = {
             key: info.get(key, default)

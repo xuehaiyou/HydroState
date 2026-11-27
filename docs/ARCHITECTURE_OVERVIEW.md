@@ -78,3 +78,7 @@ CoSA 为项目自研架构；Shared-LoRA A 为项目对照，不能直接赋予 
 
 本轮完整实现和提交进度见[运行记录](validation/EXPERT_SEARCH_20261118.md)。
 旧运行、checkpoint、数据和历史指标保持不变。
+
+## 光学与雷达专用基础模型
+
+Prithvi、SoftCon 及两者联合的 TerraWeave 对照沿用原六轮训练与选模协议，检验双路互补性。[实验定义](validation/TERRAWEAVE_SPECIALISTS.md)

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,8 @@ MULTIFM = ("multifm_rutal", "multifm_rutal_equal")
 MULTIFM_BDTA = ("multifm_bdta", "multifm_bdta_equal")
 DIRECT_BDTA = ("direct_bdta", "direct_bdta_equal")
 TERRAWEAVE = ("terraweave", "terraweave_olmo")
-ARMS = ("nexus_d2moe", "faar", "rutal", "bdta", "bdta_unit_variance",
+SPECIALISTS = {"prithvi": ("hls",), "softcon": ("s1",), "prithvi_softcon": ("hls","s1")}
+ARMS = (*SPECIALISTS, "nexus_d2moe", "faar", "rutal", "bdta", "bdta_unit_variance",
         *MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA, *TERRAWEAVE)
 
 
@@ -38,6 +40,23 @@ def configure(reference, directory, arm):
         and cfg.default_hooks.checkpoint.save_best == "manual_joint_score"
     ):
         raise ValueError("Expected the matched six-epoch D2MoE v2 experiment")
+    if arm in SPECIALISTS:
+        sources = SPECIALISTS[arm]
+        variant = Config.fromfile("configs/hydrostate_joint_terraweave.py")
+        cfg.model.type = "SpecialistTerraWeave"
+        cfg.model.encoder = dict(type="SpecialistEncoder", sources=sources,
+                                 input_profile=cfg.input_profile,
+                                 weights_root=os.environ["SPECIALIST_WEIGHTS"])
+        cfg.model.decoder = variant.model.decoder
+        cfg.model.decoder.update(sources=sources, in_channels=768 if "hls" in sources else 384)
+        cfg.model.data_preprocessor.update(type="SpecialistHydroDataPreprocessor", sources=sources)
+        for split in ("train", "val", "test"):
+            ds = cfg[split + "_dataloader"].dataset
+            ds.specialist_sources = sources
+            if "hls" in sources:
+                ds.hls_root = os.environ["SPECIALIST_HLS"]
+        cfg.work_dir = str(directory / "work")
+        return cfg
     variant = Config.fromfile(f"configs/hydrostate_joint_{arm}.py")
     cfg.model.type = variant.model.type
     if arm == "nexus_d2moe":
