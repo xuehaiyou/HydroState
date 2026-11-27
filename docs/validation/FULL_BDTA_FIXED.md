@@ -18,3 +18,5 @@ Cover、SM、ET 等权。每组人工或站点损失占 2/3，产品损失占 1/
 单 GPU，训练 batch 10、每批一次参数更新，验证和测试 batch 8。种子 3407，AdamW、初始目标学习率 1e-4，500 步预热，余弦退火，最多 20 轮。每轮在完整开发集选模，连续五轮未取得 0.0001 的联合分数改善时早停。保存最近和开发最优检查点，最后以开发分数最高的一轮运行完整测试。分别报告冰川水体、冰雪、陆地，洪水水体比例和分类，站点 SM 和 ET，单列产品一致性。全量训练的标准差会变化，与短训比较时主要比较相同测试集的物理量误差和分类指标。
 
 入口为 `python -m hydrostate.experiments.full_bdta {prepare,train} REFERENCE RUN_DIR`。CPU 准备产物位于 `selection/`、`prepared.json`、`product_statistics.json`、`site_statistics.json`。训练配置、真实输入显存预检、训练与最终测试分别位于 `train_config.py`、`benchmark.json`、`work/` 和 `final_test/`。
+
+11 月 28 日提交的训练代码为 `ccb2da8`。港大 CPU 准备作业 4522971、L40S 训练作业 4522972，地理系 CPU 准备作业 40939、训练作业 40940。两个 GPU 候选择一放行，各申请单 GPU、4 CPU、16 GiB 主机内存。港大 CPU 作业已写出全部划分清单，核对总数为 50,822 / 10,171 / 11,168。训练结果位于获选平台的 `experiments/full_bdta_ccb2da8/fixed/`。
