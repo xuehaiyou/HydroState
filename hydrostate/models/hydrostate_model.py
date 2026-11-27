@@ -329,9 +329,10 @@ class HydroStateModel(BaseModel):
             weight = getattr(self, "task_loss_weights", {}).get(task, 1.)
             losses[f"loss_{task}"] = weight * objectives[f"loss_{task}"]
             losses[f"valid_count_{task}"] = counts[index]
-            variance = self.loss_module.variance(task).detach()
-            losses[f"variance_{task}"] = variance
-            losses[f"precision_{task}"] = variance.reciprocal()
+            if hasattr(self.loss_module, "variance"):
+                variance = self.loss_module.variance(task).detach()
+                losses[f"variance_{task}"] = variance
+                losses[f"precision_{task}"] = variance.reciprocal()
         for task in auxiliary or {}:
             losses[f"loss_aux_{task}"] = auxiliary_weights[task] * objectives[f"loss_aux_{task}"]
         return losses
