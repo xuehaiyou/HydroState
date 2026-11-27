@@ -20,8 +20,11 @@ class CoSAHydroStateModel(RetrievalModelMixin, HydroStateModel):
     def __init__(self, expert_groups, branches=None, router=None, query_groups=None, **kwargs):
         super().__init__(**kwargs)
         from .anysat import AnySatEncoder
+        from .landsat_terrafm import LandsatTerraEncoder
         from .specialists import SpecialistEncoder
-        if not isinstance(self.encoder, (CoSASharedLoRAEncoder, AnySatEncoder, SpecialistEncoder)):
+
+        encoders = (CoSASharedLoRAEncoder, AnySatEncoder, SpecialistEncoder, LandsatTerraEncoder)
+        if not isinstance(self.encoder, encoders):
             raise TypeError("CoSA requires CoSASharedLoRAEncoder")
         if not isinstance(self.decoder, CoSAStateFusion) or self.input_fusion is not None:
             raise ValueError("CoSA uses CoSAStateFusion with its own observation quality encoding")

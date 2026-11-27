@@ -80,7 +80,8 @@ class CoSAStateFusion(nn.Module):
         prepared = []
         for projection, level in zip(projections, levels):
             features, valid, times = level["features"], level["valid"], level["time"]
-            if (features.shape != shape or valid.shape != (shape[0], shape[1], *shape[-2:])
+            if (features.shape != (*shape[:2], projection[1].in_features, *shape[-2:])
+                    or valid.shape != (shape[0], shape[1], *shape[-2:])
                     or times.shape != shape[:2] or valid.dtype != torch.bool):
                 raise ValueError("CoSA depths must share a grid and explicit observation support")
             features = features.masked_fill(~valid[:, :, None], 0).permute(0, 1, 3, 4, 2)

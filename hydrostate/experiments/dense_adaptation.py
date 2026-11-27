@@ -18,7 +18,8 @@ MULTIFM_BDTA = ("multifm_bdta", "multifm_bdta_equal")
 DIRECT_BDTA = ("direct_bdta", "direct_bdta_equal")
 TERRAWEAVE = ("terraweave", "terraweave_olmo")
 SPECIALISTS = {"prithvi": ("s2",), "softcon": ("s1",), "prithvi_softcon": ("s2","s1")}
-ARMS = (*SPECIALISTS, "nexus_d2moe", "faar", "rutal", "bdta", "bdta_unit_variance",
+ARMS = ("landsat_terrafm_bdta", *SPECIALISTS,
+        "nexus_d2moe", "faar", "rutal", "bdta", "bdta_unit_variance",
         *MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA, *TERRAWEAVE)
 
 
@@ -40,6 +41,13 @@ def configure(reference, directory, arm):
         and cfg.default_hooks.checkpoint.save_best == "manual_joint_score"
     ):
         raise ValueError("Expected the matched six-epoch D2MoE v2 experiment")
+    if arm == "landsat_terrafm_bdta":
+        model = Config.fromfile("configs/hydrostate_joint_landsat_terrafm_bdta.py").model
+        cfg.model.type = model.type
+        cfg.model.encoder = model.encoder
+        cfg.model.decoder.update(model.decoder)
+        cfg.work_dir = str(directory / "work")
+        return cfg
     if arm in SPECIALISTS:
         sources = SPECIALISTS[arm]
         variant = Config.fromfile("configs/hydrostate_joint_terraweave.py")

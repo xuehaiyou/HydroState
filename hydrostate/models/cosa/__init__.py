@@ -14,3 +14,5 @@ from . import multifm_rutal as multifm_rutal
 from .anysat import AnySatEncoder as AnySatEncoder
 
 from . import specialists as specialists
+
+from . import landsat_terrafm as landsat_terrafm

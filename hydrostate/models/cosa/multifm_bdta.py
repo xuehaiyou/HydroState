@@ -14,9 +14,14 @@ from .multifm import MultiFMStageModel, source_weights
 
 @MODELS.register_module()
 class MultiFMBDTADecoder(BDTAMoTEDecoder):
-    def __init__(self, learn_source_weights=True, **kwargs):
+    def __init__(self, learn_source_weights=True, secondary_widths=None, **kwargs):
         super().__init__(**kwargs)
-        self.anysat_projections = copy.deepcopy(self.projections)
+        self.anysat_projections = (
+            copy.deepcopy(self.projections) if secondary_widths is None else nn.ModuleList(
+                nn.Sequential(nn.LayerNorm(width), nn.Linear(width, self.out_channels))
+                for width in secondary_widths
+            )
+        )
         self.source_scale = nn.Parameter(torch.zeros(())) if learn_source_weights else None
 
     def source_context(self, states, features, available):
