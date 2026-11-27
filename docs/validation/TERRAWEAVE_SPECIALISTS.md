@@ -15,3 +15,5 @@ All three models completed a CPU forward, loss and backward pass on a real selec
 ## Replacement using the published S2 samples
 
 The current optical arms read Sentinel-2 L2A from the original Zarr, in the order B2, B3, B4, B8A, B11 and B12. The reader inverts the published per-band encoding to reflectance DN, aggregates complete 30 m cells on the existing aligned grid, and applies the frozen Prithvi checkpoint normalization in the encoder. Masked cells remain invalid. Time and location come from the original window. Both arms use the same S2 observations and original six-epoch protocol. The completed SoftCon control remains the SAR reference. The HLS download has been stopped and removed. Counts of valid observations can differ across sensors, so direct comparisons should also use common valid support.
+
+HKU L40S accepted jobs 4520958 (S2) and 4520959 (S2 + S1), running code bfb65d2 in separate directories under terraweave_specialists_s2. Both passed CPU forward and backward checks on one real product, one station and one manual Cover window. The superseded HLS jobs 4520289 and 4520290 were cancelled. SoftCon completed as job 4520288 with epoch 5 selected.
