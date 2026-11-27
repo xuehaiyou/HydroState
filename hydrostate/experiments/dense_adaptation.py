@@ -15,8 +15,9 @@ from hydrostate.experiments.manual_cover_launch import finish_test
 MULTIFM = ("multifm_rutal", "multifm_rutal_equal")
 MULTIFM_BDTA = ("multifm_bdta", "multifm_bdta_equal")
 DIRECT_BDTA = ("direct_bdta", "direct_bdta_equal")
+TERRAWEAVE = ("terraweave", "terraweave_olmo")
 ARMS = ("nexus_d2moe", "faar", "rutal", "bdta", "bdta_unit_variance",
-        *MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA, "terraweave")
+        *MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA, *TERRAWEAVE)
 
 
 def configure(reference, directory, arm):
@@ -50,11 +51,13 @@ def configure(reference, directory, arm):
         )
     if arm == "bdta_unit_variance":
         cfg.model.loss.learn_variance = variant.model.loss.learn_variance
-    if arm in ("bdta", "bdta_unit_variance", "terraweave", *MULTIFM_BDTA, *DIRECT_BDTA):
+    if arm in ("bdta", "bdta_unit_variance", *TERRAWEAVE, *MULTIFM_BDTA, *DIRECT_BDTA):
         cfg.model.encoder.gradient_checkpointing = False
-    if arm in ("terraweave", *MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA):
+    if arm in (*TERRAWEAVE, *MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA):
         cfg.model.anysat = variant.model.anysat
-        if arm == "terraweave":
+        if arm == "terraweave_olmo":
+            cfg.model.sources = variant.model.sources
+        if arm in TERRAWEAVE:
             cfg.model.decoder = variant.model.decoder
         else:
             cfg.model.decoder.learn_source_weights = variant.model.decoder.learn_source_weights

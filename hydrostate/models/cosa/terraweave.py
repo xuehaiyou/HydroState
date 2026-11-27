@@ -75,18 +75,19 @@ class UnifiedReciprocalAttention(nn.Module):
 @MODELS.register_module()
 class TerraWeaveDecoder(CoSAStateFusion):
     groups = ("coverage", "sm", "et")
-    sources = ("shared", "anysat")
 
-    def __init__(self, channels=128, num_levels=4, num_heads=4, window_size=4, **kwargs):
+    def __init__(self, channels=128, num_levels=4, num_heads=4, window_size=4, sources=("shared", "anysat"), **kwargs):
         if num_levels != 4 or window_size <= 0:
             raise ValueError("TerraWeave requires four stage exits and a positive window size")
+        self.sources = tuple(sources)
         self.window_size = window_size
         self.attention_heads = num_heads
         super().__init__(channels=channels, num_levels=num_levels, num_heads=num_heads, **kwargs)
 
     def _build_depth_fusion(self, num_levels, channels):
         self.head_channels = channels
-        self.anysat_projections = copy.deepcopy(self.projections)
+        if "anysat" in self.sources:
+            self.anysat_projections = copy.deepcopy(self.projections)
         self.source_id = nn.Embedding(len(self.sources), channels)
         self.variable_id = nn.Embedding(len(self.groups), channels)
         self.position = nn.Embedding(self.window_size**2, channels)

@@ -90,29 +90,24 @@ def test_four_independent_stages_masks_target_time_and_backward():
 
 
 @pytest.mark.usefixtures("tiny")
-def test_real_olmo_entry_seven_outputs_and_frozen_encoder(tmp_path, monkeypatch):
+def test_real_olmo_entry_seven_outputs_and_frozen_encoder(tmp_path):
     from retrieval.test_model import batch
     from test_cosa import config
 
-    from hydrostate.models.cosa.anysat import AnySatEncoder
     from hydrostate.registry import MODELS
 
-    def stub_anysat(self, **kwargs):
-        torch.nn.Module.__init__(self)
-        self.frozen, self.ladder_features, self.include_patch = True, True, False
-        self.backbone = torch.nn.Identity()
-
-    monkeypatch.setattr(AnySatEncoder, "__init__", stub_anysat)
     cfg = config(tmp_path, False)
-    variant = Config.fromfile("configs/hydrostate_joint_terraweave.py")
+    variant = Config.fromfile("configs/hydrostate_joint_terraweave_olmo.py")
     cfg.model.type = variant.model.type
     cfg.model.encoder.update(
         type="FoundationStageEncoderV2", method="terraweave", out_indices=[0, 1, 3, 5], num_levels=4
     )
     cfg.model.decoder.update(type="TerraWeaveDecoder", num_levels=4, num_heads=2)
-    cfg.model.anysat = dict(type="AnySatEncoder")
-    cfg.model.sources = ("olmoearth",)
+    cfg.model.decoder.sources = variant.model.decoder.sources
+    cfg.model.anysat = variant.model.anysat
+    cfg.model.sources = variant.model.sources
     model = MODELS.build(cfg.model).train()
+    assert model.anysat is None and not hasattr(model.decoder, "anysat_projections")
     assert not model.encoder.backbone.training and not any(
         p.requires_grad for p in model.encoder.parameters()
     )

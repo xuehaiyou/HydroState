@@ -8,6 +8,8 @@
 
 单 OlmoEarth BDTA + MoTE 增加一组[七个产品 NLL 方差固定为 1 的六轮对照](validation/BDTA_UNIT_VARIANCE_20261126.md)，与已完成的可学习方差组按相同协议评估。
 
+单 OlmoEarth TerraWeave 与双 FM 四级独立参数版比较 AnySat 的增益，与单 FM BDTA 比较适配模块。见[实验记录](validation/TERRAWEAVE_OLMO_20261127.md)。
+
 ## 评价依据：用户最新决定
 
 - 以站点 **SM、ET** 的验证精度为主要依据，分别报告 Pearson R、RMSE 和 Bias。

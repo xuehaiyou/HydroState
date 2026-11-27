@@ -27,8 +27,10 @@ class MultiFMStageModel(FoundationStageModelV2):
         self.sources = tuple(sources)
         if self.sources not in (("olmoearth",), ("anysat",), ("olmoearth", "anysat")):
             raise ValueError("Unexpected active foundation models")
-        self.anysat = MODELS.build(anysat)
-        if not self.anysat.ladder_features:
+        if anysat is None and "anysat" in self.sources:
+            raise ValueError("Active AnySat source requires an encoder configuration")
+        self.anysat = MODELS.build(anysat) if anysat is not None else None
+        if self.anysat is not None and not self.anysat.ladder_features:
             raise ValueError("AnySat must emit four stage exits")
 
     def _prepare_features(self, inputs):
@@ -48,6 +50,7 @@ class TerraWeave(MultiFMStageModel):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        if (self.encoder.method != "terraweave" or not self.anysat.frozen
-                or self.anysat.include_patch):
+        if self.encoder.method != "terraweave" or (
+            self.anysat is not None and (not self.anysat.frozen or self.anysat.include_patch)
+        ):
             raise ValueError("TerraWeave requires four exits from each frozen encoder")
