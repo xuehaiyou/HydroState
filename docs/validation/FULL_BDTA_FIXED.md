@@ -20,3 +20,5 @@ Cover、SM、ET 等权。每组人工或站点损失占 2/3，产品损失占 1/
 入口为 `python -m hydrostate.experiments.full_bdta {prepare,train} REFERENCE RUN_DIR`。CPU 准备产物位于 `selection/`、`prepared.json`、`product_statistics.json`、`site_statistics.json`。训练配置、真实输入显存预检、训练与最终测试分别位于 `train_config.py`、`benchmark.json`、`work/` 和 `final_test/`。
 
 11 月 28 日最初 20 轮配置的代码为 `ccb2da8`。港大 CPU 准备作业 4522971、L40S 训练作业 4522972，地理系 CPU 准备作业 40939、训练作业 40940。两个 GPU 候选择一放行，各申请单 GPU、4 CPU、16 GiB 主机内存。港大 CPU 作业已写出全部划分清单，核对总数为 50,822 / 10,171 / 11,168。原 20 轮工作目录位于 `experiments/full_bdta_ccb2da8/fixed/`。
+
+正式训练上限与余弦退火周期均已调整为 50 轮，代码提交为 `6ad395e`。港大 GPU 候选 4522977 复用既有 CPU 准备作业 4522971。地理系先前的准备作业因产品加载器收到冰川专用路径参数而中止，修复后的 CPU/GPU 作业分别为 40941 和 40942。两个新 GPU 候选均申请 5 天 8 小时 39 分钟，训练产物位于获选平台的 `experiments/full_bdta_6ad395e/fixed/`。原两份 20 轮 GPU 候选均在训练开始前撤销。
