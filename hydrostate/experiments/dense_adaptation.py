@@ -17,7 +17,7 @@ MULTIFM = ("multifm_rutal", "multifm_rutal_equal")
 MULTIFM_BDTA = ("multifm_bdta", "multifm_bdta_equal")
 DIRECT_BDTA = ("direct_bdta", "direct_bdta_equal")
 TERRAWEAVE = ("terraweave", "terraweave_olmo")
-SPECIALISTS = {"prithvi": ("hls",), "softcon": ("s1",), "prithvi_softcon": ("hls","s1")}
+SPECIALISTS = {"prithvi": ("s2",), "softcon": ("s1",), "prithvi_softcon": ("s2","s1")}
 ARMS = (*SPECIALISTS, "nexus_d2moe", "faar", "rutal", "bdta", "bdta_unit_variance",
         *MULTIFM, *MULTIFM_BDTA, *DIRECT_BDTA, *TERRAWEAVE)
 
@@ -48,13 +48,11 @@ def configure(reference, directory, arm):
                                  input_profile=cfg.input_profile,
                                  weights_root=os.environ["SPECIALIST_WEIGHTS"])
         cfg.model.decoder = variant.model.decoder
-        cfg.model.decoder.update(sources=sources, in_channels=768 if "hls" in sources else 384)
+        cfg.model.decoder.update(sources=sources, in_channels=768 if "s2" in sources else 384)
         cfg.model.data_preprocessor.update(type="SpecialistHydroDataPreprocessor", sources=sources)
         for split in ("train", "val", "test"):
             ds = cfg[split + "_dataloader"].dataset
             ds.specialist_sources = sources
-            if "hls" in sources:
-                ds.hls_root = os.environ["SPECIALIST_HLS"]
         cfg.work_dir = str(directory / "work")
         return cfg
     variant = Config.fromfile(f"configs/hydrostate_joint_{arm}.py")

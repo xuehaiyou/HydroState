@@ -119,3 +119,26 @@ def test_real_olmo_entry_seven_outputs_and_frozen_encoder(tmp_path):
     assert all(result[t].min() >= 0 for t in ("et_water", "et_ice", "et_land"))
     sum(x.square().mean() for x in result.values()).backward()
     assert all(stage.gamma_return.grad.isfinite() for stage in model.decoder.stages)
+
+
+def test_prithvi_s2_recovers_six_dn_bands_and_respects_30m_support():
+    from hydrostate.data.retrieval.contract import INPUT_GROUPS
+    from hydrostate.datasets.specialists import s2_encoding, specialist_inputs
+
+    indices, mean, std = s2_encoding()
+    assert indices == [0, 1, 2, 7, 8, 9]
+    dn = torch.arange(6).reshape(1, 6, 1, 1) * 200 + 500
+    values = torch.zeros(5, 12, 6, 6)
+    values[:, indices] = (dn - mean) / (4 * std) + 0.5
+    valid = torch.ones(5, 1, 6, 6, dtype=torch.bool)
+    valid[..., 0, 0] = False
+    inputs = dict(s2=values, s2_valid=valid, slot_bounds=torch.zeros(5, 2), target_time={},
+                  sensor_valid=torch.ones(5, 3), observation_time=torch.zeros(5, 3))
+    for group in INPUT_GROUPS:
+        inputs[group + "_quality"] = torch.ones(5, 4, 6, 6)
+        inputs[group + "_valid"] = valid
+    result = specialist_inputs(inputs, ("s2",), (35., 95.))
+    assert not result["s2_valid"][..., :3, :3].any()
+    assert result["s2_valid"][..., 3:, :].all()
+    torch.testing.assert_close(result["s2"][0, :, 3, 1], dn.flatten().float())
+    assert not result["s1_10m_valid"].any()

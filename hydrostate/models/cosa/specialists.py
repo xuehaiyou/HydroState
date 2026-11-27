@@ -32,7 +32,7 @@ class SpecialistHydroDataPreprocessor(HydroDataPreprocessor):
 class SpecialistEncoder(nn.Module):
     method = "terraweave"
     mixture = False
-    widths = {"hls": 768, "s1": 384}
+    widths = {"s2": 768, "s1": 384}
     exits = (2, 5, 8, 11)
 
     def __init__(self, sources, weights_root, input_profile):
@@ -41,7 +41,7 @@ class SpecialistEncoder(nn.Module):
         self.out_channels = self.widths[sources[0]]
         self.backbone = nn.ModuleDict()
         root = Path(weights_root)
-        if "hls" in sources:
+        if "s2" in sources:
             sys.path.insert(0, str(root))
             from prithvi_mae import PrithviViT
 
@@ -54,9 +54,9 @@ class SpecialistEncoder(nn.Module):
             core.pos_embed = pos
             core.patch_embed.grid_size = [1, 8, 8]
             core.num_frames = 1
-            self.backbone["hls"] = core
+            self.backbone["s2"] = core
             for key in ("mean", "std"):
-                self.register_buffer("hls_" + key, torch.tensor(cfg[key]).view(1, 6, 1, 1))
+                self.register_buffer("prithvi_" + key, torch.tensor(cfg[key]).view(1, 6, 1, 1))
         if "s1" in sources:
             sys.path.insert(0, str(root / "softcon"))
             from models.dinov2.vision_transformer import vit_small
@@ -89,8 +89,8 @@ class SpecialistEncoder(nn.Module):
             b, t = x.shape[:2]
             x = x.flatten(0, 1)
             valid = inputs[key + "_valid"].flatten(0, 1).all(1, keepdim=True)
-            if key == "hls":
-                x = (x * 10000 - self.hls_mean) / self.hls_std
+            if key == "s2":
+                x = (x - self.prithvi_mean) / self.prithvi_std
                 x = F.interpolate(x.masked_fill(~valid, 0), (128, 128), mode="nearest")
                 coords = inputs["location"].repeat_interleave(t, dim=0)
                 layers = core.forward_features(

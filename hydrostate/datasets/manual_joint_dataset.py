@@ -1,6 +1,7 @@
 """Uniform product/site/manual windows; only masks distinguish manual supervision."""
 
 import json
+from bisect import bisect_right
 from pathlib import Path
 
 import numpy as np
@@ -19,11 +20,10 @@ from .retrieval_dataset import as_tensors
 
 @DATASETS.register_module()
 class ManualJointDataset(JointRetrievalDataset):
-    def __init__(self, manual_root, manual_selection, glacier_input_root=None, specialist_sources=None, hls_root=None, **kwargs):
+    def __init__(self, manual_root, manual_selection, glacier_input_root=None, specialist_sources=None, **kwargs):
         super().__init__(**kwargs)
         self.training = kwargs.get("training", False)
         self.specialist_sources = specialist_sources
-        self.hls_root = hls_root
         if specialist_sources:
             for component in self.components:
                 component.training = False
@@ -91,8 +91,13 @@ class ManualJointDataset(JointRetrievalDataset):
                 targets["manual_" + name + "_valid"] = torch.zeros((1, 40, 40), dtype=torch.bool)
         if self.specialist_sources:
             from .specialists import specialist_inputs
-            inputs = specialist_inputs(item["inputs"], info["sample_id"], self.specialist_sources,
-                                       self.hls_root)
+            location = None
+            if "s2" in self.specialist_sources:
+                if not manual:
+                    component = bisect_right(self.offsets, index) - 1
+                    row = self.components[component].table.iloc[index - self.offsets[component]]
+                location = (row.lat, row.lon)
+            inputs = specialist_inputs(item["inputs"], self.specialist_sources, location)
             item["inputs"] = inputs
             if self.training:
                 for axis in (-1, -2):
