@@ -77,6 +77,7 @@ def prepare(reference, directory):
     source = dict(cfg.train_dataloader.dataset)
     root = Path(source.pop("manual_root"))
     manual = Path(source.pop("manual_selection"))
+    source.pop("glacier_input_root", None)  # Used by the manual loader only.
     source.pop("type")
     source.update(selection_root=None, training=False)
     # This manual selection was already isolated against the FULL legacy holdouts.
