@@ -11,3 +11,9 @@ Cover、SM、ET 各占三分之一。每组按可信均方误差的三分之二�
 使用同一开发集 3,681 窗逐轮选模，以最高 manual_joint_score 的检查点评估测试集 11,168 窗。验证和测试 batch 均为 8。分别报告冰川水体、冰雪及陆地，洪水比例与分类，以及站点 SM、ET 的 RMSE 与 Pearson R。产品一致性单列。
 
 训练入口为 `python -m hydrostate.experiments.trusted_bdta REFERENCE RUN_DIR`。每轮清单摘要在 `sampling.json`，真实窗口显存、速度与定权计数在 `benchmark.json`，开发和独立测试结果分别在 `work/` 与 `final_test/`。
+
+## 2026-11-27 提交
+
+训练代码为 `3578816`。港大 HPC 作业 `4521374`（同一作业候选分区 `c_foss_gpu,l40s`），地理系 HPC 作业 `40878`，A100 直连主机登记为候选。两份 Slurm 分配均申请 1 GPU、4 CPU 和 20 GiB CPU 内存。三个平台共用同一实验标识，调度器只放行一个候选，在确认正式训练后撤销备用。各平台结果位于对应 HydroState 数据根目录的 `experiments/trusted_3578816/guided/`。
+
+三个平台的子集清单与训练统计文件指纹均与基线匹配。按真实窗口 ID 核验，六轮均为 1,092 批，各轮顺序不同。CPU 用真实标签和掩膜、合成解码特征验证输出头反向，Cover、SM 和 ET 均观察到权重变化。另查首轮五个 SMAP 配对批，三个批各有两个产品观测实际改变权重，另两个批经输入支持筛选各剩一个有效观测。GPU 预检与正式训练会使用完整 FM；其速度与精度以运行产物为准。
